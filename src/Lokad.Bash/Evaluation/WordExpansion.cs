@@ -357,7 +357,7 @@ internal static partial class WordExpansion
     {
         if (part is BraceExpansionFailureWordPart failure)
         {
-            await ReportBraceExpansionFailureAsync(failure.Message, scope).ConfigureAwait(false);
+            await scope.Effects.ReportBraceExpansionFailureAsync(failure.Message, scope).ConfigureAwait(false);
             return;
         }
 
@@ -754,7 +754,7 @@ internal static partial class WordExpansion
                 {
                     var message = BraceExpansionFailureWordPart.FormatMissingDelimiter(content.Slice(index), (byte)'`',
                         scope.Effects.Memory.Workspace);
-                    await ReportBraceExpansionFailureAsync(message, scope).ConfigureAwait(false);
+                    await scope.Effects.ReportBraceExpansionFailureAsync(message, scope).ConfigureAwait(false);
                     return null;
                 }
             }
@@ -1089,9 +1089,6 @@ internal static partial class WordExpansion
         var operand = await PrepareArithmeticAsync(expression, scope, purpose).ConfigureAwait(false);
         return operand == null ? null : await EvaluateArithmeticAsync(operand, scope, ArithmeticFailureMode.Expansion).ConfigureAwait(false);
     }
-
-    private static Task ReportBraceExpansionFailureAsync(ShellValue message, ScopedEvaluation scope) =>
-        scope.Effects.ReportFatalExpansionAsync(ShellValue.FromText("bad substitution"), message, ExpansionFailureKind.WordSyntax);
 
     private static async Task ExpandCommandSubstitutionAsync(
         CommandSubstitutionSyntax script,

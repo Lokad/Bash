@@ -4360,6 +4360,10 @@ public sealed partial class Evaluation : IFileTester
         ExpansionFailureKind kind) =>
         ReportFatalExpansionAsync([subject], [message], kind, GetParameterExpansionDiagnosticPrefix(scope));
 
+    internal Task ReportBraceExpansionFailureAsync(ShellValue message, ScopedEvaluation scope) =>
+        ReportFatalExpansionAsync([ShellValue.FromText("bad substitution")], [message], ExpansionFailureKind.WordSyntax,
+            GetNamedSourceDiagnosticPrefix(scope.Context));
+
     private Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
         ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
     {

@@ -181,6 +181,38 @@ public sealed class EvaluationBraceExpansionTests
         Assert.Equal("bad substitution: no closing \"`\" in `" + suffix + "\n", result.StdErr);
     }
 
+    [Theory]
+    [InlineData("suffix")]
+    [InlineData("\"suffix\"")]
+    public async Task GeneratedBacktickKeepsTheSourceLineThroughRedirectedStderr(string suffix)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "printf before\nprintf '<%s>' {Z..a}" + suffix + "\nprintf '|after:%s|' \"$?\"\n");
+
+        var result = await host.RunAsync(". ./part 2>diagnostics\nprintf '|outer:%s|' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before|after:1||outer:0|", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("./part: line 2: bad substitution: no closing \"`\" in `" + suffix + "\n",
+            host.ReadFile("/diagnostics"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task GeneratedBacktickUsesTheRetainedFunctionSource()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/part", "f(){\n  printf before\n  printf '<%s>' {Z..a}\"suffix\"\n  printf skipped\n}\n");
+
+        var result = await host.RunAsync(". ./part\nf\nprintf '|outer:%s|' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before|outer:1|", host.StandardOutput.TextContent);
+        Assert.Equal("./part: line 3: bad substitution: no closing \"`\" in `\"suffix\"\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task GeneratedEscapeCanMakeAnAdjacentCommandSubstitutionLiteral()
     {
