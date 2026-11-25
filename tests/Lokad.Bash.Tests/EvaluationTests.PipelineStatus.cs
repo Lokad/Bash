@@ -10,6 +10,50 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
+    [InlineData("export item[0]=b | :", "<4|4 0|anchored>",
+        "line 2: export: `item[0]': not a valid identifier\n")]
+    [InlineData(": | command readonly item[0]+=b 2>&-", "<4|0 4|anchored>", "")]
+    [InlineData("readonly item=old; : anchored; export item=new | :", "<4|4 0|anchored>",
+        "line 2: item: readonly variable\n")]
+    [InlineData("declare -A item=([key]=old); : anchored; export -a item=new | :", "<4|4 0|anchored>",
+        "line 2: export: item: cannot convert associative to indexed array\n")]
+    [InlineData("declare -n item; : anchored; builtin export item=bad-name | :", "<4|4 0|anchored>",
+        "line 2: export: `bad-name': not a valid identifier\nline 2: export: `': not a valid identifier\n")]
+    [InlineData("readonly item[0]=b bad-name | :", "<4|4 0|anchored>",
+        "line 2: readonly: `item[0]': not a valid identifier\nline 2: readonly: `bad-name': not a valid identifier\n")]
+    [InlineData("{ export item[0]=b; } | :", "<1|1 0|anchored>",
+        "line 2: export: `item[0]': not a valid identifier\n")]
+    [InlineData("export 'bad-name=b' | :", "<1|1 0|anchored>",
+        "line 2: export: `bad-name=b': not a valid identifier\n")]
+    public async Task DirectPipelineDeclarationStagesExposeAssignmentFailureStatus(
+        string command, string expectedOutput, string expectedError)
+    {
+        var result = await EvaluationTestHelper.RunAsync(": anchored\n" + command
+            + "\nprintf '<%s|%s|%s>' \"$?\" \"${PIPESTATUS[*]}\" \"$_\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StdOut);
+        Assert.Equal(expectedError, result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task PipelineDeclarationAssignmentFailureReachesTheExitTrap()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            trap 'printf "EXIT:%s:%s" "$?" "${PIPESTATUS[*]}"' EXIT
+            set -e
+            export item[0]=b | :
+            printf skipped
+            """);
+
+        Assert.Equal(4, result.ExitCode);
+        Assert.Equal("EXIT:4:4 0", result.StdOut);
+        Assert.Equal("line 3: export: `item[0]': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("PIPESTATUS=manual; false", "<1|manual|>")]
     [InlineData("declare PIPESTATUS; false | true", "<1|unset|>")]
     [InlineData("declare -a PIPESTATUS; false | true", "<1|unset|a>")]

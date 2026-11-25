@@ -749,6 +749,11 @@ element name as the last argument.
 Subshell and pipeline commands keep their own updates. The binding preserves
 bytes and follows ordinary variable assignment rules, including readonly
 diagnostics and local bindings.
+
+An assignment rejected by `export` or `readonly` reports status 4 as a direct
+pipeline stage. The pipeline publishes that value in `PIPESTATUS`. The same
+rejection during ordinary command execution reports status 1.
+
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the
 pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.

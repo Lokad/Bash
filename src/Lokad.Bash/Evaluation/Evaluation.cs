@@ -2301,11 +2301,14 @@ public sealed partial class Evaluation : IFileTester
                 && options.AssociativeChange == DeclarationAttributeChange.Set;
             var globalBindings = options.Global ? bindings : null;
             const string NamerefArrayError = "reference variable cannot be an array";
+            const int PipelineAssignmentFailure = 4;
             var exitCode = 0;
+            var operandFailureStatus = 1;
             List<Variables.CommandBindings>? exposedPrefixes = null;
             for (var index = 0; index < operands.Count; index++)
             {
                 var operand = operands[index];
+                operandFailureStatus = 1;
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
                     continue;
                 if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference)
@@ -2317,6 +2320,9 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseQuotedAsync(invalidOperand, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
+                // A direct stage exposes the named-attribute builtin's assignment failure status.
+                if (directPipelineStage && setsNamedAttribute && operand.Value.HasValue)
+                    operandFailureStatus = PipelineAssignmentFailure;
                 if (reference.Kind != VariableReferenceKind.Name && setsNamedAttribute)
                 {
                     // A rejected assignment to an element leaves its name as the argument.
@@ -2329,7 +2335,7 @@ public sealed partial class Evaluation : IFileTester
                 var setsNameref = options.NamerefChange == DeclarationAttributeChange.Set;
                 if (element && !reference.Subscript.IsEmpty && setsNameref)
                 {
-                    exitCode = 1;
+                    RecordOperandFailure();
                     await ReportDeclarationOperandAsync(operand.Name, NamerefArrayError).ConfigureAwait(false);
                     continue;
                 }
@@ -2452,7 +2458,7 @@ public sealed partial class Evaluation : IFileTester
                                     .ConfigureAwait(false);
                             if ((global || clearIndexedElement) && binding.Reference.Kind != VariableReferenceKind.Name)
                             {
-                                exitCode = 1;
+                                RecordOperandFailure();
                                 await ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
                                     [ShellValue.FromText("`"), binding.Reference.ToValue(Memory),
                                         ShellValue.FromBytes(operand.Name.Bytes[sourceName.ByteLength..]),
@@ -2537,7 +2543,7 @@ public sealed partial class Evaluation : IFileTester
                         {
                             if (options.ExportChange != DeclarationAttributeChange.Clear)
                                 await ReportCircularNameReferenceAsync(name).ConfigureAwait(false); // Attribute target lookup.
-                            exitCode = 1;
+                            RecordOperandFailure();
                         }
                         continue;
                     }
@@ -2654,7 +2660,7 @@ public sealed partial class Evaluation : IFileTester
                     else if (operand.Value != null && setsNamedAttribute)
                     {
                         // These builtins apply attributes even when their assignment fails.
-                        exitCode = 1;
+                        RecordOperandFailure();
                         await ReportCommandDiagnosticAsync([GetDiagnosticName(targetVars.ResolveNamerefName(name))],
                             [ShellValue.FromText("readonly variable")], declarationScope).ConfigureAwait(false);
                         await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
@@ -2692,7 +2698,7 @@ public sealed partial class Evaluation : IFileTester
                         _ = targetVars.TryUnsetSelected(new VariableUnsetTarget(name, RequiresSelector: false, BindingName.Empty), UnsetFlags.None);
                     else if (targetVars.HasBinding(name))
                         await ApplyAttributesAsync(name, targetVars, global, local, assignmentExport).ConfigureAwait(false);
-                    exitCode = 1;
+                    RecordOperandFailure();
                     var initializer = operand.Value.GetValueOrDefault();
                     var integerScope = executionScope with { Variables = targetVars };
                     ShellValue? previous = null;
@@ -2738,7 +2744,7 @@ public sealed partial class Evaluation : IFileTester
                             if (!append || !TryParseDeclarationReference(ShellSource.FromBytes(initializer.Bytes), out _))
                                 await DiagnoseQuotedAsync(initializer, "not a valid identifier").ConfigureAwait(false);
                             else
-                                exitCode = 1;
+                                RecordOperandFailure();
                             continue;
                         }
                         operand = operand with { Value = value, Operator = AssignmentOperator.Replace };
@@ -2939,7 +2945,7 @@ public sealed partial class Evaluation : IFileTester
                             operand.Operator, items, AssignmentContext.Declaration, executionScope, sourceName, initializeReadonly))
                             .ConfigureAwait(false))
                     {
-                        exitCode = 1;
+                        RecordOperandFailure();
                         if (HasPendingExpansionError)
                             break;
                         if (arrayAttributeAssignment)
@@ -2974,7 +2980,7 @@ public sealed partial class Evaluation : IFileTester
                         targetVars.SetCaseAttributes(name, options.CaseChange);
                         if (!targetVars.TrySetNameref(name, target, Memory))
                         {
-                            exitCode = 1;
+                            RecordOperandFailure();
                             continue;
                         }
                     }
@@ -3049,7 +3055,7 @@ public sealed partial class Evaluation : IFileTester
                                 if (options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly)
                                 {
                                     // Attribute-setting also diagnoses the unresolved name; export -n only fails.
-                                    exitCode = 1;
+                                    RecordOperandFailure();
                                     if (options.ExportChange != DeclarationAttributeChange.Clear)
                                         await DiagnoseQuotedAsync(ShellValue.Empty, "not a valid identifier").ConfigureAwait(false);
                                 }
@@ -3083,7 +3089,7 @@ public sealed partial class Evaluation : IFileTester
                                 declarationWrite, local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName,
                                 applyAssignmentAttributes: true).ConfigureAwait(false))
                         {
-                            exitCode = 1;
+                            RecordOperandFailure();
                             if (HasPendingExpansionError) break;
                             if (arrayAttributeAssignment)
                                 await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
@@ -3102,7 +3108,7 @@ public sealed partial class Evaluation : IFileTester
                             else if (!targetVars.AssociativeArrays.ContainsKey(name)
                                 && !targetVars.TryDeclareResolvedArray(name, ArrayKind.Indexed, ScalarArrayPromotion.RetainValue))
                             {
-                                exitCode = 1;
+                                RecordOperandFailure();
                                 continue;
                             }
                         }
@@ -3110,7 +3116,7 @@ public sealed partial class Evaluation : IFileTester
                     else if (!local && !(options.Builtin == BuiltinKind.Export && options.ExportChange == DeclarationAttributeChange.Clear)
                         && !targetVars.TryDeclareName(resolvedName.IsEmpty ? name : resolvedName))
                     {
-                        exitCode = 1;
+                        RecordOperandFailure();
                         continue;
                     }
                 }
@@ -3228,7 +3234,7 @@ public sealed partial class Evaluation : IFileTester
                         await DiagnoseBadArraySubscriptAsync(operand.Name).ConfigureAwait(false);
                     else
                     {
-                        exitCode = 1;
+                        RecordOperandFailure();
                         var target = await AwaitWordExpansionAsync(WordExpansion.ResolveRejectedNamerefSelectorAsync(reference, executionScope))
                             .ConfigureAwait(false);
                         if (target != null && !HasPendingExpansionError)
@@ -3290,7 +3296,7 @@ public sealed partial class Evaluation : IFileTester
 
             Task DiagnoseBadArraySubscriptAsync(ShellValue spelling)
             {
-                exitCode = 1;
+                RecordOperandFailure();
                 return ReportBuiltinDiagnosticAsync([spelling], [ShellValue.FromText("bad array subscript")], declarationScope.Context);
             }
 
@@ -3353,7 +3359,7 @@ public sealed partial class Evaluation : IFileTester
 
                 await ApplyAttributesAsync(target.Name, target.Owner, options.Global, local: false, options.ExportChange)
                     .ConfigureAwait(false);
-                exitCode = 1;
+                RecordOperandFailure();
                 var message = ShellValue.FromText("bad array subscript");
                 if (missingReferent)
                     await ReportBuiltinDiagnosticAsync([GetDiagnosticName(target.Name),
@@ -3452,11 +3458,11 @@ public sealed partial class Evaluation : IFileTester
                     return true;
                 }
                 if (target == null)
-                    exitCode = 1;
+                    RecordOperandFailure();
                 else if (!await TryAssignDeclarationValueAsync(target, reference, declarationScope, variables,
                     value, operation, WordExpansion.DeclarationWrite.Ordinary, reference.Name,
                     applyAssignmentAttributes: !assignsGlobalElement).ConfigureAwait(false))
-                    exitCode = 1;
+                    RecordOperandFailure();
                 return true;
             }
 
@@ -3591,29 +3597,31 @@ public sealed partial class Evaluation : IFileTester
             Task ReportDeclarationOperandAsync(ShellValue subject, string message) =>
                 ReportDeclarationDiagnosticAsync([subject, ShellValue.FromText(": " + message)]);
 
+            void RecordOperandFailure() => exitCode = Math.Max(exitCode, operandFailureStatus);
+
             Task DiagnoseAsync(BindingName subject, string message)
             {
-                exitCode = 1;
+                RecordOperandFailure();
                 return ReportDeclarationOperandAsync(GetDiagnosticName(subject), message);
             }
 
             Task DiagnoseReadonlyAsync(BindingName subject)
             {
-                exitCode = 1;
+                RecordOperandFailure();
                 return ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
                     [GetDiagnosticName(subject), ShellValue.FromText(": readonly variable")], declarationScope);
             }
 
             Task DiagnoseQuotedAsync(ShellValue subject, string message)
             {
-                exitCode = 1;
+                RecordOperandFailure();
                 return WriteQuotedOperandDiagnosticAsync(ShellValue.FromText(commandName), subject, message,
                     _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(declarationScope.Context));
             }
 
             Task DiagnoseComposedElementAsync(VariableReference target, BindingName source, PreparedDeclarationOperand operand)
             {
-                exitCode = 1;
+                RecordOperandFailure();
                 return ReportDeclarationDiagnosticAsync([ShellValue.FromText("`"), target.ToValue(Memory),
                     ShellValue.FromBytes(operand.Name.Bytes[source.ByteLength..]), operand.AssignmentSeparator,
                     operand.Value.GetValueOrDefault(), ShellValue.FromText("': not a valid identifier")]);
