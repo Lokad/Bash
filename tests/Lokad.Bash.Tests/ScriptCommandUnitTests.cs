@@ -772,9 +772,9 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
-    [InlineData("set -e", ")", "earlier<2:0>", "syntax error near unexpected token `)'\n")]
-    [InlineData("set +e", ")", "earlier<2:2>", "syntax error near unexpected token `)'\n`)'\n")]
-    [InlineData("set -e", "[[ ( ( -z ]]", "earlier<2:0>", "unexpected argument `]]' to conditional unary operator\n")]
+    [InlineData("set -e", ")", "earlier<2:0>", "line 4: syntax error near unexpected token `)'\n")]
+    [InlineData("set +e", ")", "earlier<2:2>", "line 4: syntax error near unexpected token `)'\nline 4: `)'\n")]
+    [InlineData("set -e", "[[ ( ( -z ]]", "earlier<2:0>", "line 4: unexpected argument `]]' to conditional unary operator\n")]
     [InlineData("set -e", "printf prefix; value=\"$(for ((1;)); do :; done)\"", "earlier<2:0>",
         "line 4: syntax error: arithmetic expression required\n")]
     public async Task StreamedParserFailureUsesTheReachedErrexitState(
@@ -860,7 +860,7 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("before", host.StandardOutput.TextContent);
-        Assert.Equal($"syntax error near unexpected token `{token}'\n`{line}'\n", host.StandardError.TextContent);
+        Assert.Equal($"line 2: syntax error near unexpected token `{token}'\nline 2: `{line}'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -957,10 +957,10 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
-    [InlineData("v=plain; \\\n ) # comment\n", ")", " ) # comment")]
-    [InlineData("v=plain;\\\n;\n", ";;", ";")]
-    [InlineData("&& :\n", "&&", "&& :")]
-    public async Task UnexpectedTokenShowsThePhysicalLineOfTheReachedUnit(string unit, string token, string line)
+    [InlineData("v=plain; \\\n ) # comment\n", ")", " ) # comment", 3)]
+    [InlineData("v=plain;\\\n;\n", ";;", ";", 3)]
+    [InlineData("&& :\n", "&&", "&& :", 2)]
+    public async Task UnexpectedTokenShowsThePhysicalLineOfTheReachedUnit(string unit, string token, string line, int lineNumber)
     {
         var governor = new MemoryGovernor(256 * 1024);
         await using var host = new TestHost { MemoryBudget = governor };
@@ -969,18 +969,20 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("prior", host.StandardOutput.TextContent);
-        Assert.Equal($"syntax error near unexpected token `{token}'\n`{line}'\n", host.StandardError.TextContent);
+        Assert.Equal($"line {lineNumber}: syntax error near unexpected token `{token}'\nline {lineNumber}: `{line}'\n",
+            host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]
-    [InlineData("[[ -n\nx ]]\n", "unexpected argument `newline' to conditional unary operator\n", "-n", "[[ -n")]
-    [InlineData("[[ -n ]]; :\n", "unexpected argument `]]' to conditional unary operator\n", ";", "[[ -n ]]; :")]
-    [InlineData("[[ x\n ]]\n", "unexpected token `newline', conditional binary operator expected\n", "x", "[[ x")]
-    [InlineData("[[ x =~ ]]\n", "unexpected argument `]]' to conditional binary operator\n", "]]", "[[ x =~ ]]")]
+    [InlineData("[[ -n\nx ]]\n", "line 1: unexpected argument `newline' to conditional unary operator\n", "-n", "[[ -n")]
+    [InlineData("[[ -n ]]; :\n", "line 1: unexpected argument `]]' to conditional unary operator\n", ";", "[[ -n ]]; :")]
+    [InlineData("[[ x\n ]]\n", "line 1: unexpected token `newline', conditional binary operator expected\n", "x", "[[ x")]
+    [InlineData("[[ x =~ ]]\n", "line 1: unexpected argument `]]' to conditional binary operator\n", "]]", "[[ x =~ ]]")]
     [InlineData("[[ ( ( x == # note\ny ) ) ]]\n",
-        "unexpected argument `newline' to conditional binary operator\nexpected `)'\nexpected `)'\n", "note", "[[ ( ( x == # note")]
+        "line 1: unexpected argument `newline' to conditional binary operator\nline 1: expected `)'\nline 1: expected `)'\n",
+        "note", "[[ ( ( x == # note")]
     public async Task ConditionalDiagnosticRetainsTheFailedGrammarRole(string script, string reason, string token, string line)
     {
         await using var host = new TestHost();
@@ -989,7 +991,7 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
-        Assert.Equal(reason + $"syntax error near `{token}'\n`{line}'\n", host.StandardError.TextContent);
+        Assert.Equal(reason + $"line 1: syntax error near `{token}'\nline 1: `{line}'\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -1141,9 +1143,9 @@ public sealed class ScriptCommandUnitTests
     }
 
     [Theory]
-    [InlineData("x ==", "", "")]
-    [InlineData("$(cat <<ONE) ==", "first\nONE\n", "line 2: warning: command substitution: 1 unterminated here-document\n")]
-    public async Task ConditionalFailureLeavesLaterCaptureUnread(string before, string body, string warnings)
+    [InlineData("x ==", "", "", 2)]
+    [InlineData("$(cat <<ONE) ==", "first\nONE\n", "line 2: warning: command substitution: 1 unterminated here-document\n", 4)]
+    public async Task ConditionalFailureLeavesLaterCaptureUnread(string before, string body, string warnings, int line)
     {
         await using var host = new TestHost();
         var result = await host.RunAsync("printf prior\n[[ " + before + "\n" + body
@@ -1151,8 +1153,8 @@ public sealed class ScriptCommandUnitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("prior", host.StandardOutput.TextContent);
-        Assert.Equal(warnings + "unexpected argument `newline' to conditional binary operator\n"
-            + $"syntax error near `=='\n`[[ {before}'\n", host.StandardError.TextContent);
+        Assert.Equal(warnings + $"line {line}: unexpected argument `newline' to conditional binary operator\n"
+            + $"line {line}: syntax error near `=='\nline {line}: `[[ {before}'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -1174,7 +1176,7 @@ public sealed class ScriptCommandUnitTests
         try
         {
             var bytes = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal($"syntax error near unexpected token `)'\n`{line}'\n",
+            Assert.Equal($"line 1: syntax error near unexpected token `)'\nline 1: `{line}'\n",
                 System.Text.Encoding.UTF8.GetString(bytes.Span));
             cancellation.Cancel();
             Assert.False(running.IsCompleted);
@@ -1201,7 +1203,7 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal(2, result.ExitCode);
         Assert.Equal(new ShellPath("/work"), result.CurrentDirectory);
         Assert.Equal("firsttrap", host.ReadFile("/work/out"));
-        Assert.Equal("syntax error near unexpected token `)'\n`)'\n", host.StandardError.TextContent);
+        Assert.Equal("line 5: syntax error near unexpected token `)'\nline 5: `)'\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
     }
@@ -1212,5 +1214,39 @@ public sealed class ScriptCommandUnitTests
         Assert.False(Parser.TryParse("printf earlier\n)\n", out var script, out var error));
         Assert.Null(script);
         Assert.NotNull(error);
+    }
+
+    [Theory]
+    [InlineData("command declare -a slot=(value)", "command declare -a slot=(value)", 2)]
+    [InlineData("builtin declare -a slot=\\\n(value)", "(value)", 3)]
+    public async Task WrappedInitializerIsRejectedAtTheUnexpectedParenthesis(string command, string physicalLine, int lineNumber)
+    {
+        var script = "printf prior\n" + command + "\nprintf later\n";
+        Assert.False(Parser.TryParse(script, out var prepared, out _));
+        Assert.Null(prepared);
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("prior", host.StandardOutput.TextContent);
+        Assert.Equal($"line {lineNumber}: syntax error near unexpected token `('\nline {lineNumber}: `{physicalLine}'\n",
+            host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task LeadingHereDocumentEndsTheReachedInitializerRead()
+    {
+        const string script = "printf before\n<<END \\\n declare first=(\n value\n)\ntext\nEND\nprintf after\n";
+        Assert.False(Parser.TryParse(script, out var prepared, out var error));
+        Assert.Null(prepared);
+        Assert.Equal("Unexpected token in array assignment.", error?.Message);
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal("line 3: unexpected EOF while looking for matching `)'\n", host.StandardError.TextContent);
     }
 }

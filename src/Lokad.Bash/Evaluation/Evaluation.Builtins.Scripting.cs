@@ -405,7 +405,8 @@ public sealed partial class Evaluation
                         await ReportUnclosedDelimiterAsync(captureEnd, diagnosticLine, path, diagnosticOrigin, detail).ConfigureAwait(false);
                     }
                     else if (failure.UnexpectedToken is { } token)
-                        await ReportUnexpectedSyntaxAsync(token, path, diagnosticOrigin, diagnosticLine, detail)
+                        await ReportUnexpectedSyntaxAsync(token, path,
+                            streamedRoot ? SyntaxDiagnosticOrigin.ScriptLine : diagnosticOrigin, diagnosticLine, detail)
                             .ConfigureAwait(false);
                     else if (failure.ArithmeticForHeader is { } header)
                         await ReportArithmeticForHeaderAsync(header, path, diagnosticOrigin, diagnosticLine, detail).ConfigureAwait(false);

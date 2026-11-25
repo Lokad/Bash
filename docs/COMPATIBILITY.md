@@ -555,6 +555,9 @@ their reader coordinates. A pending here-document warning precedes the
 missing-closer diagnostic and uses its own warning line. A conditional reader
 also reports the unread token. Earlier complete command units can already
 have executed. Prepared parsing reports the syntax error before any evaluation.
+Unexpected-token diagnostics in streamed scripts include the parser's line
+coordinates, even for an unnamed script. They retain the separate locations
+of conditional reasons and the displayed physical line.
 If a pipeline operator or prefix still needs a command at a closing token,
 the streamed reader shows that token and its physical source line.
 When a pipe or list operator reaches EOF while waiting for its next command,
