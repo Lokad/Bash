@@ -94,11 +94,9 @@ public sealed class DelimitedRecordReader : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumContentBytes);
-        if (_keepBorrow && TryReadBufferedRecord(maximumContentBytes, out var record))
-            return ValueTask.FromResult<DelimitedRecord?>(record);
-        return ReadNextCoreAsync(maximumContentBytes);
+        return ReadNextCoreAsync(maximumContentBytes, overflow);
 
-        async ValueTask<DelimitedRecord?> ReadNextCoreAsync(int maximumContentBytes)
+        async ValueTask<DelimitedRecord?> ReadNextCoreAsync(int maximumContentBytes, DelimitedRecordOverflow overflow)
         {
             try
             {
@@ -126,8 +124,6 @@ public sealed class DelimitedRecordReader : IDisposable
                     var bytes = _borrow.Content[_borrowOffset..];
                     if (_borrow.Result.IsError && !_readFailure.IsError)
                         _readFailure = _borrow.Result;
-                    if (TryReadBufferedRecord(maximumContentBytes, out var buffered))
-                        return buffered;
                     var terminatorOffset = bytes.Span.IndexOf(_terminator);
                     var consumed = terminatorOffset < 0 ? bytes.Length : terminatorOffset + 1;
                     bytes[..consumed].CopyTo(destination);
@@ -210,28 +206,6 @@ public sealed class DelimitedRecordReader : IDisposable
         _borrow = default;
         _hasBorrow = false;
         _borrowOffset = 0;
-    }
-
-    private bool TryReadBufferedRecord(int maximumContentBytes, out DelimitedRecord record)
-    {
-        record = default;
-        if (!_hasBorrow || _splitRecord != null || _oversized || _readBuffer is not { } destination)
-            return false;
-        var bytes = _borrow.Content[_borrowOffset..];
-        var terminatorOffset = bytes.Span.IndexOf(_terminator);
-        if (terminatorOffset < 0)
-            return false;
-        var consumed = terminatorOffset + 1;
-        bytes[..consumed].CopyTo(destination.AsMemory(_bufferWriteOffset));
-        record = terminatorOffset > maximumContentBytes
-            ? new DelimitedRecord(ReadOnlyMemory<byte>.Empty, true) { ExceedsLimit = true }
-            : new DelimitedRecord(destination.AsMemory(_bufferWriteOffset, terminatorOffset), true);
-        if (_storage == DelimitedRecordStorage.Retained)
-            _bufferWriteOffset += consumed;
-        if (consumed == bytes.Length)
-            _reachedEnd = _borrow.Result.IsError || _borrow.Result.ReachedEoF;
-        Advance(consumed);
-        return true;
     }
 
     private void Advance(int count)
