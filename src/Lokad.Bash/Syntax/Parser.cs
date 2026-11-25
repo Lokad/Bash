@@ -51,12 +51,7 @@ public static class Parser
     private static readonly SimpleCommand EmptyCaseBody =
         new([], [], [], ReadOnlyDictionary<Word, AssignmentWord>.Empty);
 
-    private static readonly string[] SupportedKeywords =
-    [
-        KeywordIf, KeywordThen, KeywordElif, KeywordElse, KeywordFi,
-        KeywordWhile, KeywordUntil, KeywordDo, KeywordDone, KeywordFor,
-        KeywordIn, KeywordFunction, KeywordCase, KeywordEsac, "time", "!", "{", "}", "[[", "]]"
-    ];
+    private enum KeywordKind { None, If, While, Until, For, Function, Case, Conditional, Time, Reserved }
 
     private static class ImplicitForList
     {
@@ -72,12 +67,34 @@ public static class Parser
     }
 
     /// <summary>Returns true when a word is a reserved keyword supported by this parser.</summary>
-    internal static bool IsSupportedKeyword(ReadOnlySpan<byte> word)
+    internal static bool IsSupportedKeyword(ReadOnlySpan<byte> word) => ClassifyKeyword(word) != KeywordKind.None;
+
+    private static KeywordKind ClassifyKeyword(ReadOnlySpan<byte> word)
     {
-        foreach (var keyword in SupportedKeywords)
-            if (AsciiByte.EqualsAscii(word, keyword))
-                return true;
-        return false;
+        // "function" is the longest supported keyword.
+        if (word.IsEmpty || word.Length > KeywordFunction.Length)
+            return KeywordKind.None;
+
+        return word[0] switch
+        {
+            (byte)'i' when AsciiByte.EqualsAscii(word, KeywordIf) => KeywordKind.If,
+            (byte)'w' when AsciiByte.EqualsAscii(word, KeywordWhile) => KeywordKind.While,
+            (byte)'u' when AsciiByte.EqualsAscii(word, KeywordUntil) => KeywordKind.Until,
+            (byte)'f' when AsciiByte.EqualsAscii(word, KeywordFor) => KeywordKind.For,
+            (byte)'f' when AsciiByte.EqualsAscii(word, KeywordFunction) => KeywordKind.Function,
+            (byte)'c' when AsciiByte.EqualsAscii(word, KeywordCase) => KeywordKind.Case,
+            (byte)'[' when word.SequenceEqual("[["u8) => KeywordKind.Conditional,
+            (byte)'t' when word.SequenceEqual("time"u8) => KeywordKind.Time,
+            (byte)'d' when AsciiByte.EqualsAscii(word, KeywordDo) || AsciiByte.EqualsAscii(word, KeywordDone) => KeywordKind.Reserved,
+            (byte)'e' when AsciiByte.EqualsAscii(word, KeywordElif) || AsciiByte.EqualsAscii(word, KeywordElse)
+                || AsciiByte.EqualsAscii(word, KeywordEsac) => KeywordKind.Reserved,
+            (byte)'f' when AsciiByte.EqualsAscii(word, KeywordFi) => KeywordKind.Reserved,
+            (byte)'i' when AsciiByte.EqualsAscii(word, KeywordIn) => KeywordKind.Reserved,
+            (byte)'t' when AsciiByte.EqualsAscii(word, KeywordThen) => KeywordKind.Reserved,
+            (byte)']' when word.SequenceEqual("]]"u8) => KeywordKind.Reserved,
+            (byte)'!' or (byte)'{' or (byte)'}' when word.Length == 1 => KeywordKind.Reserved,
+            _ => KeywordKind.None
+        };
     }
 
     /// <summary>Measures text that fits the script limit before allocating its byte representation.</summary>
@@ -788,68 +805,49 @@ public static class Parser
                     command = groupBody == null ? null : new GroupCommand(groupBody);
                     break;
                 default:
-                    var text = GetUnquotedTokenText(token);
-                    if (text.SequenceEqual("[["u8))
+                    var keyword = ClassifyKeyword(GetUnquotedTokenText(token));
+                    switch (keyword)
                     {
-                        // Reserved words introduce syntax only at a command boundary.
-                        if (!tokenizer.TryReadConditionalCommand(tokenizer.NextTokenCore(), out var conditionalCommand))
-                            return null;
-                        command = conditionalCommand;
-                        break;
+                        case KeywordKind.Conditional:
+                            if (!tokenizer.TryReadConditionalCommand(tokenizer.NextTokenCore(), out var conditionalCommand))
+                                return null;
+                            command = conditionalCommand;
+                            break;
+                        case KeywordKind.Function:
+                            command = ParseFunctionDefinition(tokenizer);
+                            break;
+                        case KeywordKind.Case:
+                            command = ParseCase(tokenizer);
+                            break;
+                        case KeywordKind.If:
+                            command = ParseIf(tokenizer);
+                            break;
+                        case KeywordKind.While:
+                            command = ParseWhile(tokenizer);
+                            break;
+                        case KeywordKind.Until:
+                            command = ParseUntil(tokenizer);
+                            break;
+                        case KeywordKind.For:
+                            command = ParseFor(tokenizer, out var bindingLine);
+                            if (bindingLine != 0)
+                                commandLine = bindingLine;
+                            break;
+                        default:
+                            if (TryParseNameFunctionDefinition(tokenizer, token, out var functionDefinition))
+                            {
+                                command = functionDefinition;
+                                break;
+                            }
+                            if (keyword != KeywordKind.None && !(afterPipe && keyword == KeywordKind.Time))
+                            {
+                                tokenizer.RecordUnexpectedToken("Unexpected reserved word.", token, tokenizer.Position);
+                                return null;
+                            }
+                            var simple = ParseSimpleCommand(tokenizer, startLine);
+                            return tokenizer.RejectArithmeticCommandInWordPosition() ? null : simple;
                     }
-
-                    if (AsciiByte.EqualsAscii(text, KeywordFunction))
-                    {
-                        command = ParseFunctionDefinition(tokenizer);
-                        break;
-                    }
-
-                    if (AsciiByte.EqualsAscii(text, KeywordCase))
-                    {
-                        command = ParseCase(tokenizer);
-                        break;
-                    }
-
-                    if (AsciiByte.EqualsAscii(text, KeywordIf))
-                    {
-                        command = ParseIf(tokenizer);
-                        break;
-                    }
-
-                    if (AsciiByte.EqualsAscii(text, KeywordWhile))
-                    {
-                        command = ParseWhile(tokenizer);
-                        break;
-                    }
-
-                    if (AsciiByte.EqualsAscii(text, KeywordUntil))
-                    {
-                        command = ParseUntil(tokenizer);
-                        break;
-                    }
-
-                    if (AsciiByte.EqualsAscii(text, KeywordFor))
-                    {
-                        command = ParseFor(tokenizer, out var bindingLine);
-                        if (bindingLine != 0)
-                            commandLine = bindingLine;
-                        break;
-                    }
-
-                    if (TryParseNameFunctionDefinition(tokenizer, token, out var functionDefinition))
-                    {
-                        command = functionDefinition;
-                        break;
-                    }
-
-                    if (!text.IsEmpty && IsSupportedKeyword(text) && !(afterPipe && text.SequenceEqual("time"u8)))
-                    {
-                        tokenizer.RecordUnexpectedToken("Unexpected reserved word.", token, tokenizer.Position);
-                        return null;
-                    }
-
-                    var simple = ParseSimpleCommand(tokenizer, startLine);
-                    return tokenizer.RejectArithmeticCommandInWordPosition() ? null : simple;
+                    break;
             }
 
             if (command == null)
@@ -947,8 +945,7 @@ public static class Parser
     /// </summary>
     private static ICommand? ParseIf(Tokenizer tokenizer)
     {
-        if (!TryConsumeKeyword(tokenizer, KeywordIf, "if"))
-            return null;
+        tokenizer.NextTokenCore();
         var condition = ParseListUntilKeyword(tokenizer, KeywordThen);
         if (condition == null)
             return null;
@@ -1003,8 +1000,7 @@ public static class Parser
     /// </summary>
     private static ICommand? ParseWhile(Tokenizer tokenizer)
     {
-        if (!TryConsumeKeyword(tokenizer, KeywordWhile, "while"))
-            return null;
+        tokenizer.NextTokenCore();
         var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
         if (condition == null)
             return null;
@@ -1023,8 +1019,7 @@ public static class Parser
     /// </summary>
     private static ICommand? ParseUntil(Tokenizer tokenizer)
     {
-        if (!TryConsumeKeyword(tokenizer, KeywordUntil, "until"))
-            return null;
+        tokenizer.NextTokenCore();
         var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
         if (condition == null)
             return null;
@@ -1044,8 +1039,7 @@ public static class Parser
     private static ICommand? ParseFor(Tokenizer tokenizer, out int bindingLine)
     {
         bindingLine = 0;
-        if (!TryConsumeKeyword(tokenizer, KeywordFor, "for"))
-            return null;
+        tokenizer.NextTokenCore();
 
         var nameToken = tokenizer.ReadForHeader(out var separators);
         if (nameToken.Kind == TokenKind.ArithmeticCommand)
@@ -1145,8 +1139,7 @@ public static class Parser
     /// </summary>
     private static ICommand? ParseFunctionDefinition(Tokenizer tokenizer)
     {
-        if (!TryConsumeKeyword(tokenizer, KeywordFunction, "function"))
-            return null;
+        tokenizer.NextTokenCore();
 
         var nameToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(nameToken, out var nameTokenWord))
@@ -1178,8 +1171,7 @@ public static class Parser
     /// </summary>
     private static ICommand? ParseCase(Tokenizer tokenizer)
     {
-        if (!TryConsumeKeyword(tokenizer, KeywordCase, "case"))
-            return null;
+        tokenizer.NextTokenCore();
 
         var subjectToken = tokenizer.NextTokenCore();
         if (!tokenizer.TryGetOperandWord(subjectToken, out var subjectWord))

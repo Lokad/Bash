@@ -68,6 +68,7 @@ public sealed class QueryDiagnosticTests
     [InlineData("echo(){ :; }; type -aft echo", "builtin\nfile\n", "", 0)]
     [InlineData("f(){ :; }; type -ap f echo if", "/usr/bin/echo\n", "", 0)]
     [InlineData("function if { :; }; type -at if", "keyword\nfunction\n", "", 0)]
+    [InlineData("type -t if IF '[[' '[[x' ']]' ']]x'", "keyword\nkeyword\nkeyword\n", "", 1)]
     [InlineData("type -aPt echo if", "file\n", "", 1)]
     [InlineData("type -t -- -a shift", "builtin\n", "", 1)]
     [InlineData("type -- --help", "", "line 1: type: --help: not found\n", 1)]
