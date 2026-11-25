@@ -432,7 +432,7 @@ public sealed partial class Evaluation
                 if (selected.Reference.Kind == VariableReferenceKind.Name)
                 {
                     var resolution = SelectBuiltinReference(reference, commandVars, context,
-                        context.FunctionContext?.IsLocal(reference.Name) == true, out var binding);
+                        context.FunctionContext?.IsLocal(reference.Name) == true, selectElementAfterExpansion: false, out var binding);
                     if (resolution != BuiltinReferenceResolution.Write)
                         return resolution == BuiltinReferenceResolution.NoWrite;
                     return bindings != null && ReferenceEquals(binding.Owner, commandVars)
@@ -454,16 +454,18 @@ public sealed partial class Evaluation
 
     /// <summary>Local namerefs select caller bindings; indirect unset chains may create a local shadow.</summary>
     private BuiltinReferenceResolution SelectBuiltinReference(
-        VariableReference reference, Variables variables, EvaluationContext context, bool localName, out VariableBinding selected)
+        VariableReference reference, Variables variables, EvaluationContext context, bool localName,
+        bool selectElementAfterExpansion, out VariableBinding selected)
     {
         selected = new VariableBinding(reference, variables);
         if (!localName || !variables.TryGetNameref(reference.Name, out _))
             return BuiltinReferenceResolution.Write;
         if (!variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
-            && !context.TryResolveCircularBinding(reference.Name, variables, out binding)
-            || reference.Kind != VariableReferenceKind.Name
-                && (binding.IsUnsetNameref || binding.Reference.Kind != VariableReferenceKind.Name))
+            && !context.TryResolveCircularBinding(reference.Name, variables, out binding))
             return BuiltinReferenceResolution.Invalid;
+        if (reference.Kind != VariableReferenceKind.Name
+            && (binding.IsUnsetNameref || binding.Reference.Kind != VariableReferenceKind.Name))
+            return selectElementAfterExpansion ? BuiltinReferenceResolution.Write : BuiltinReferenceResolution.Invalid;
         if (reference.Kind == VariableReferenceKind.Name && binding.IsUnsetNameref && binding.Name != reference.Name)
         {
             if (!context.TryResolveLocalNamerefAssignment(reference.Name, variables, Memory, out var fallback)
@@ -491,7 +493,10 @@ public sealed partial class Evaluation
             && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
         var activeCycle = circular;
         var localName = scope.Context.FunctionContext?.IsLocal(sourceName) == true;
-        var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, localName, out var binding);
+        var selectElementAfterExpansion = kind is BuiltinAssignmentKind.Value or BuiltinAssignmentKind.Read
+            && reference.Kind != VariableReferenceKind.Name;
+        var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, localName, selectElementAfterExpansion,
+            out var binding);
         if (resolution == BuiltinReferenceResolution.NoWrite)
             return BuiltinAssignmentResult.NoWrite;
         if (resolution == BuiltinReferenceResolution.Invalid)
@@ -542,11 +547,12 @@ public sealed partial class Evaluation
             if (kind == BuiltinAssignmentKind.Descriptor)
                 return BuiltinAssignmentResult.NoWrite;
         }
-        if (reference.Kind != VariableReferenceKind.Name
+        if (!selectElementAfterExpansion && reference.Kind != VariableReferenceKind.Name
             && destination.TryResolveBinding(reference.Name, selectOwner: null, out var selected)
             && selected.IsUnsetNameref)
             return await InvalidElementTargetAsync().ConfigureAwait(false);
-        var target = await WordExpansion.ResolveBuiltinReferenceAsync(reference, scope, destination, binding.Owner).ConfigureAwait(false);
+        var target = await WordExpansion.ResolveBuiltinReferenceAsync(reference, scope, destination, binding.Owner,
+            selectElementAfterExpansion ? command : ShellValue.Empty).ConfigureAwait(false);
         if (HasPendingExpansionError || !BuiltinDiagnosticsOpen || target == null || target.Name.IsEmpty)
             return BuiltinAssignmentResult.Failed;
         if (localDirectoryOutput && ReferenceEquals(destination, scope.Variables)

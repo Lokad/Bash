@@ -9,8 +9,42 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ArithmeticArrayTestsEndToEnd
 {
     [Theory]
+    [InlineData("let 'ref[i++]=++j,mark=7'", "let: ", "")]
+    [InlineData("((ref[i++]=++j,mark=7))", "((: ", "")]
+    [InlineData("for ((ref[i++]=++j,mark=7; 0; )); do :; done", "((: ", "")]
+    [InlineData("printf '<value:%s>' \"$((ref[i++]=++j,mark=7))\"", "", "<value:7>")]
+    public async Task RejectedNamerefElementWritesKeepTheArithmeticValue(string command, string label, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "declare -n ref; i=0; j=0; mark=unset\n"
+            + command + "\nprintf '<%s|%s|%s|%s>' \"$?\" \"$i\" \"$j\" \"$mark\"");
+
+        Assert.Equal(output + "<0|1|1|7>", result.StdOut);
+        Assert.Equal("line 2: " + label + "`': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("ref[${ref:=a},2]", "<1|0|2>")]
+    [InlineData("ref[${ref:=a},2]=++j", "<0|1|1>")]
+    [InlineData("ref[${ref:=a},2]+=++j", "<0|1|1>")]
+    [InlineData("ref[${ref:=a},2]++", "<1|0|1>")]
+    [InlineData("++ref[${ref:=a},2]", "<0|0|1>")]
+    public async Task ArithmeticReadsAnUnsetElementBeforeItsSelectorEstablishesTheWriteTarget(
+        string expression, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "a=(0 1 2); j=0; declare -n ref\nlet '" + expression
+            + "'\nprintf '<%s|%s|%s>' \"$?\" \"$j\" \"${a[2]}\"; declare -p ref");
+
+        Assert.Equal(expected + "declare -n ref=\"a\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("((a[]))", "[1:0:prior]", "line 2: a[]: bad array subscript\nline 2: a[]: bad array subscript\n")]
-    [InlineData("let 'a[]=7,i++'", "[1:1:prior]", "let: `a[]': not a valid identifier\n")]
+    [InlineData("let 'a[]=7,i++'", "[1:1:prior]", "line 2: let: `a[]': not a valid identifier\n")]
     [InlineData("value=$((a[b[0]]))", "[0:0:20]", "")]
     [InlineData("value=$((a[b[0]]+$i))", "[1:0:prior]", "line 2: b\\[0\\]: syntax error: invalid arithmetic operator (error token is \"\\[0\\]\")\n")]
     [InlineData("value=$((a[~0+2]))", "[1:0:prior]", "line 2: \\~0+2: syntax error: operand expected (error token is \"\\~0+2\")\n")]

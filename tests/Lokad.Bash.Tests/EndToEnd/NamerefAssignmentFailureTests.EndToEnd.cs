@@ -13,6 +13,48 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
         + "warning: s: circular name reference\nwarning: r: circular name reference\n";
 
     [Fact]
+    public async Task PrintfPublishesFormatCountBeforeRejectingAnUnsetElementDestination()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "declare -n ref; i=0; j=0; mark=unset\n"
+            + "printf -v 'ref[i++]' '%s%n' \"data$((j++))\" mark\n"
+            + "printf '<%s|%s|%s|%s>' \"$?\" \"$i\" \"$j\" \"$mark\"; declare -p ref");
+
+        Assert.Equal("<1|1|1|5>declare -n ref\n", result.StdOut);
+        Assert.Equal("line 2: printf: `': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("read -r 'ref[i++]' <<< 'data'", "<1|1>", "read: `': not a valid identifier")]
+    [InlineData("read -r 'ref[-1]' <<< 'data'", "<1|0>", "ref[-1]: bad array subscript")]
+    [InlineData("printf -v 'ref[@]' '%s' data", "<1|0>", "ref[@]: bad array subscript")]
+    public async Task BuiltinElementWritesCheckTheSelectorBeforeRejectingAnUnsetDestination(
+        string command, string output, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "declare -n ref; i=0\n" + command + "\nprintf '<%s|%s>' \"$?\" \"$i\"; declare -p ref");
+
+        Assert.Equal(output + "declare -n ref\n", result.StdOut);
+        Assert.Equal("line 2: " + diagnostic + "\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("printf -v 'ref[${ref:=a},2]' '%s' data")]
+    [InlineData("read -r 'ref[${ref:=a},2]' <<< 'data'")]
+    public async Task BuiltinElementWritesCanUseTheTargetEstablishedByTheSelector(string command)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "a=(0 1 2); declare -n ref\n" + command
+            + "\nprintf '<%s|%s>' \"$?\" \"${a[2]}\"; declare -p ref");
+
+        Assert.Equal("<0|data>declare -n ref=\"a\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task UnsetElementAssignmentDiscardsTheTestedListEvenWithErrexit()
     {
         var result = await EvaluationTestHelper.RunAsync(

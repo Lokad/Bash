@@ -65,10 +65,17 @@ public sealed partial class Evaluation
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr, SyntaxDiagnosticPrefix prefix) =>
         WriteQuotedOperandDiagnosticAsync(command, operand, "not a valid identifier", scope, closedStderr, prefix);
 
+    internal Task ReportInvalidAssignmentIdentifierAsync(ShellValue command, ShellValue operand, ScopedEvaluation scope) =>
+        WriteInvalidIdentifierDiagnosticAsync(command, operand, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetCommandDiagnosticPrefix(scope));
+
     private Task<DescriptorWriteResult> WriteQuotedOperandDiagnosticAsync(ShellValue command, ShellValue operand,
         string message, BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr, SyntaxDiagnosticPrefix prefix) =>
-        WriteDiagnosticAsync([command], [ShellValue.FromText("`"), operand, ShellValue.FromText("': " + message)],
-            scope, closedStderr, prefix);
+        command.IsEmpty
+            ? WriteDiagnosticAsync([ShellValue.FromText("`"), operand, ShellValue.FromText("'")], [ShellValue.FromText(message)],
+                scope, closedStderr, prefix)
+            : WriteDiagnosticAsync([command], [ShellValue.FromText("`"), operand, ShellValue.FromText("': " + message)],
+                scope, closedStderr, prefix);
 
     private Task<DescriptorWriteResult> WriteBuiltinOutputAsync(ShellValue name, ReadOnlyMemory<byte> content) =>
         WriteBuiltinOutputAsync(name, content, default);

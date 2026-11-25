@@ -4326,7 +4326,11 @@ public sealed partial class Evaluation : IFileTester
             kind == ExpansionFailureKind.AssignmentTarget ? GetCommandDiagnosticPrefix(scope) : GetBuiltinDiagnosticPrefix(scope.Context));
 
     private Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
-        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix, bool canResumeUntestedUnit = false)
+        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix) =>
+        ReportFatalExpansionAsync(name, message, kind, prefix, canResumeUntestedUnit: false);
+
+    private Task ReportFatalExpansionAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+        ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix, bool canResumeUntestedUnit)
     {
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
@@ -4582,7 +4586,7 @@ public sealed partial class Evaluation : IFileTester
     internal Task ReportExpansionDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message) =>
         WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite);
 
-    private Task ReportCommandDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
+    internal Task ReportCommandDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         ScopedEvaluation scope) => WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
             GetCommandDiagnosticPrefix(scope));
 

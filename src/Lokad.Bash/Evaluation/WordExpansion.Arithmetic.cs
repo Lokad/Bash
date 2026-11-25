@@ -203,8 +203,9 @@ internal static partial class WordExpansion
                 }
                 // Bad read subscripts diagnose and yield zero. A later write may select a newly created array.
                 long value = 0;
-                if (use == ArithmeticReferenceUse.Read && target.Location != null
-                    && target.Location.TryRead(scope.Variables, out var stored) && !stored.IsEmpty)
+                if (use == ArithmeticReferenceUse.Read && target.Location is { } location
+                    && location is not ResolvedVariableReference.Indexed { ReadAsUnset: true }
+                    && location.TryRead(scope.Variables, out var stored) && !stored.IsEmpty)
                 {
                     if (!ArithmeticEvaluation.TryParseIntegerLiteral(stored.Bytes.Span,
                             scope.Effects.CancellationToken, out value))
@@ -257,7 +258,7 @@ internal static partial class WordExpansion
                             return AssignCircular(circular.Target, rebound);
                     }
                     else if (fallback is ArithmeticElementFallback.Invalid invalid)
-                        await scope.Effects.ReportExpansionDiagnosticAsync(invalid.Subject, ShellValue.FromText("not a valid identifier"))
+                        await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, invalid.Subject, scope)
                             .ConfigureAwait(false);
                     return null;
                 }
@@ -279,9 +280,9 @@ internal static partial class WordExpansion
                 if (!readOnly && namerefFailure != NamerefAssignmentFailure.None)
                 {
                     // A rejected nameref initializer diagnoses without discarding the arithmetic value.
-                    await scope.Effects.ReportExpansionDiagnosticAsync(
-                        namerefFailure == NamerefAssignmentFailure.InvalidTarget ? formatted : ShellValue.Empty,
-                        ShellValue.FromText("not a valid identifier")).ConfigureAwait(false);
+                    await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command,
+                        namerefFailure == NamerefAssignmentFailure.InvalidTarget ? formatted : ShellValue.Empty, scope)
+                        .ConfigureAwait(false);
                     return null;
                 }
                 return new ArithmeticError(readOnly ? ArithmeticErrorKind.ReadonlyVariable : ArithmeticErrorKind.InvalidTarget,

@@ -22,6 +22,8 @@ internal static partial class WordExpansion
         {
             // A local directory write can select an index in a temporary scalar and publish it to the saved binding.
             internal bool ReplaceAssociative { get; init; }
+            // A reached arithmetic selector can establish the write target after selecting an unset read.
+            internal bool ReadAsUnset { get; init; }
         }
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
@@ -463,8 +465,12 @@ internal static partial class WordExpansion
     /// <summary>Selects a builtin destination once, while expanding its selector in the active command scope.</summary>
     internal static Task<ResolvedVariableReference?> ResolveBuiltinReferenceAsync(
         VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables) =>
+        ResolveBuiltinReferenceAsync(reference, scope, destination, indexVariables, ShellValue.Empty);
+
+    internal static Task<ResolvedVariableReference?> ResolveBuiltinReferenceAsync(
+        VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables, ShellValue command) =>
         ResolveReferenceAsync(reference, ReferenceUse.BuiltinAssign, scope,
-            ExpansionPurpose.ArithmeticSource, null, destination, indexVariables);
+            ExpansionPurpose.ArithmeticSource, null, destination, indexVariables, null, command);
 
     /// <summary>Separates array storage selection from the binding supplying negative-index bounds.</summary>
     internal static Task<ResolvedVariableReference?> ResolveDeclarationReferenceAsync(
@@ -505,7 +511,7 @@ internal static partial class WordExpansion
         Variables targetVariables,
         Variables indexVariables,
         ExpandedArraySubscript? preparedSubscript,
-        ShellValue arithmeticCommand)
+        ShellValue command)
     {
         if (!scope.CanExpand)
             return null;
@@ -584,11 +590,18 @@ internal static partial class WordExpansion
             }
         }
 
+        var builtinOutput = use == ReferenceUse.BuiltinAssign && !command.IsEmpty;
         // Compound preparation has already selected the binding.
-        var name = use == ReferenceUse.CompoundAssign ? reference.Name : targetVariables.ResolveNamerefName(reference.Name);
-        var unsetNameref = use == ReferenceUse.DirectAssign && name.IsEmpty
-            && targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var initialBinding)
-            && initialBinding.IsUnsetNameref;
+        var name = reference.Name;
+        var selectAfterIndex = false;
+        if (use != ReferenceUse.CompoundAssign)
+        {
+            var reached = targetVariables.TryResolveBinding(name, selectOwner: null, out var initial);
+            name = reached && initial.Reference.Kind == VariableReferenceKind.Name && !initial.IsUnsetNameref
+                ? initial.Name : BindingName.Empty;
+            selectAfterIndex = reached && name.IsEmpty
+                && (use is ReferenceUse.DirectAssign or ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign || builtinOutput);
+        }
         var associative = use != ReferenceUse.RejectedNamerefDeclaration && targetVariables.AssociativeArrays.ContainsKey(name);
         // Prepared and staged selectors validate expanded bytes.
         var selector = preparedSubscript is { } preparedSelector
@@ -670,22 +683,31 @@ internal static partial class WordExpansion
                 // A reached scalar length still reads as scalar after selector effects.
                 if (scalarLength && !targetVariables.Scalars.ContainsKey(name))
                     return null;
-                if (unsetNameref)
+                if (selectAfterIndex && targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
                 {
-                    // Selector expansion may initialize the nameref. The index has already been validated.
-                    if (!targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
-                        return null;
+                    // Selector expansion may initialize the nameref. Keep the already validated index.
                     var stillUnset = binding.IsUnsetNameref;
-                    if (stillUnset || binding.Reference.Kind != VariableReferenceKind.Name)
+                    if (!stillUnset && binding.Reference.Kind == VariableReferenceKind.Name
+                        && !targetVariables.AssociativeArrays.ContainsKey(binding.Name))
                     {
-                        var spelling = stillUnset
-                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
-                        await scope.Effects.ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
+                        return new ResolvedVariableReference.Indexed(binding.Name, position)
+                        {
+                            ReadOwner = binding.Owner,
+                            ReadAsUnset = use == ReferenceUse.ArithmeticRead
+                        };
+                    }
+                    if (use == ReferenceUse.DirectAssign || builtinOutput)
+                    {
+                        if (stillUnset || binding.Reference.Kind != VariableReferenceKind.Name)
+                        {
+                            var spelling = stillUnset ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
+                            if (builtinOutput)
+                                await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, spelling, scope).ConfigureAwait(false);
+                            else
+                                await scope.Effects.ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
+                        }
                         return null;
                     }
-                    if (targetVariables.AssociativeArrays.ContainsKey(binding.Name))
-                        return null;
-                    name = binding.Name;
                 }
                 return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
             }
@@ -710,10 +732,10 @@ internal static partial class WordExpansion
         Task ReportEmptyArithmeticAssignmentAsync()
         {
             var referenceName = reference.Name.ToValue();
-            ReadOnlySpan<ShellValue> subject = arithmeticCommand.IsEmpty
+            ReadOnlySpan<ShellValue> subject = command.IsEmpty
                 ? [ShellValue.FromText("`"), referenceName, ShellValue.FromText("[]'")]
-                : [arithmeticCommand, ShellValue.FromText(": `"), referenceName, ShellValue.FromText("[]'")];
-            return scope.Effects.ReportExpansionDiagnosticAsync(subject, [ShellValue.FromText("not a valid identifier")]);
+                : [command, ShellValue.FromText(": `"), referenceName, ShellValue.FromText("[]'")];
+            return scope.Effects.ReportCommandDiagnosticAsync(subject, [ShellValue.FromText("not a valid identifier")], scope);
         }
 
         Task ReportBadSubscriptAsync()
