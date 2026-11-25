@@ -514,6 +514,7 @@ public static class Parser
                     UnclosedDelimiter = new UnclosedDelimiter(')', source.Length)
                     {
                         LineAdvance = tokenizer.EndOfInputLineAdvance,
+                        IncludeScriptLine = true,
                         PayloadLine = GetPayloadEndLine(tokenizer, source.Length)
                     }
                 };
@@ -541,7 +542,12 @@ public static class Parser
         static ParserFailure MissingCloser(CaptureHereDocumentWarnings? warnings, int eofOffset, int lineAdvance, int payloadLine) =>
             new(new SyntaxError("unexpected EOF while looking for matching `)'", eofOffset), ParserFailureKind.Delimiter)
             {
-                UnclosedDelimiter = new UnclosedDelimiter(')', eofOffset) { LineAdvance = lineAdvance, PayloadLine = payloadLine },
+                UnclosedDelimiter = new UnclosedDelimiter(')', eofOffset)
+                {
+                    LineAdvance = lineAdvance,
+                    IncludeScriptLine = true,
+                    PayloadLine = payloadLine
+                },
                 CaptureWarnings = warnings
             };
 
@@ -678,9 +684,16 @@ public static class Parser
             prefixed = true;
         }
         // A standalone prefix applies to an empty command, without consuming the list terminator.
-        if (prefixed
-            && tokenizer.PeekTokenCore().Kind is TokenKind.Newline or TokenKind.Semicolon or TokenKind.EndOfInput)
-            return Wrap(new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments));
+        if (prefixed)
+        {
+            var terminator = tokenizer.PeekTokenCore().Kind;
+            if (terminator is TokenKind.Newline or TokenKind.Semicolon or TokenKind.EndOfInput)
+            {
+                if (terminator == TokenKind.EndOfInput)
+                    tokenizer.RecordEmptyPipelinePrefixEndOfInput();
+                return Wrap(new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments));
+            }
+        }
 
         var first = ParseCommandAtom(tokenizer, afterPipe: false);
         if (first == null)

@@ -907,18 +907,36 @@ public sealed class CommandSubstitutionSyntaxTests
     }
 
     [Theory]
-    [InlineData("printf prior\nv=$(cat <<END\nbody\n)\nprintf tail", "prior", "line 5: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
+    [InlineData("$(printf inner", 3)]
+    [InlineData("$(printf inner |\n\n", 4)]
+    [InlineData("$(printf inner\\\n", 4)]
+    [InlineData("$(time\\\n", 5)]
+    [InlineData("$(! \\\n", 4)]
+    public async Task EndOfInputInCaptureReportsTheReachedScriptLine(string capture, int line)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("printf prior\nvalue=" + capture, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("prior", host.StandardOutput.TextContent);
+        Assert.Equal($"line {line}: " + MatchingParenthesisEof, host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("printf prior\nv=$(cat <<END\nbody\n)\nprintf tail", "prior",
+        "line 5: " + MissingCaptureBodyOnLineTwo + "line 6: " + MatchingParenthesisEof, 2)]
     [InlineData("printf prior; printf '%s' \"$(cat <<END\nbody\n)\"", "",
-        "line 3: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n" + MatchingParenthesisEof, 2)]
+        "line 3: warning: here-document at line 1 delimited by end-of-file (wanted `END')\nline 4: " + MatchingParenthesisEof, 2)]
     [InlineData("exit 7\nv=$(cat <<END\nbody\n)", "", "", 7)]
-    [InlineData("printf prior\nv=$(cat <<END", "prior", "line 2: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
-    [InlineData("printf prior\nv=$(cat <<END\\\n", "prior", MatchingParenthesisEof, 2)]
-    [InlineData("printf prior\nv=$(cat <<END\nbody\nEND\n", "prior", MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END", "prior", "line 2: " + MissingCaptureBodyOnLineTwo + "line 3: " + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END\\\n", "prior", "line 4: " + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\nv=$(cat <<END\nbody\nEND\n", "prior", "line 5: " + MatchingParenthesisEof, 2)]
     [InlineData("printf prior\nv=$(cat <<FIRST <<SECOND\nbody\nFIRST\nbody\n)", "prior",
-        "line 6: warning: here-document at line 4 delimited by end-of-file (wanted `SECOND')\n" + MatchingParenthesisEof, 2)]
+        "line 6: warning: here-document at line 4 delimited by end-of-file (wanted `SECOND')\nline 7: " + MatchingParenthesisEof, 2)]
     [InlineData("printf prior\nv=${x:-$(printf '%s' \"$(cat <<END\nbody\n)\")}\n", "prior",
-        "line 4: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 2)]
-    [InlineData("printf prior\na=(\"$(cat <<END\nbody\n)\")", "prior", "line 4: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof, 1)]
+        "line 4: " + MissingCaptureBodyOnLineTwo + "line 5: " + MatchingParenthesisEof, 2)]
+    [InlineData("printf prior\na=(\"$(cat <<END\nbody\n)\")", "prior",
+        "line 4: " + MissingCaptureBodyOnLineTwo + "line 5: " + MatchingParenthesisEof, 1)]
     [InlineData("printf prior\neval 'v=$(cat <<END\nbody\n)' && printf unexpected; printf tail", "priortail",
         "line 6: warning: here-document at line 4 delimited by end-of-file (wanted `END')\n" + "eval: line 7: " + MatchingParenthesisEof, 0)]
     public async Task EndOfInputInHereDocumentCaptureReportsAtTheReachedReadBoundary(
@@ -944,8 +962,8 @@ public sealed class CommandSubstitutionSyntaxTests
         await using var host = new TestHost();
         var result = await host.RunAsync(source, CancellationToken.None);
 
-        byte[] diagnostic = [.. Utf8Text.Encode("line 4: " + MissingCaptureBodyOnLineTwo + MatchingParenthesisEof).Span,
-            .. "unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
+        byte[] diagnostic = [.. Utf8Text.Encode("line 4: " + MissingCaptureBodyOnLineTwo + "line 5: " + MatchingParenthesisEof).Span,
+            .. "line 5: unexpected token `"u8, 0xff, .. "' in conditional command\n"u8];
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("prior", host.StandardOutput.TextContent);
         Assert.Equal(diagnostic, host.StandardError.Content.ToArray());

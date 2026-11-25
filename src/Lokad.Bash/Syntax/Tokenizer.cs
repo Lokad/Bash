@@ -26,6 +26,7 @@ internal sealed class Tokenizer
     private bool _spacingContinuedAtEndOfInput;
     private bool _wordEndsWithUnframedBackslash;
     private bool _redirectionLookaheadAtEndOfInput;
+    private bool _emptyPipelinePrefixContinuedAtEndOfInput;
     private int _wordLookaheadEnd = -1;
     private int _lastPhysicalNewline;
     private int _functionBraceLine;
@@ -76,6 +77,7 @@ internal sealed class Tokenizer
         _spacingContinuedAtEndOfInput = false;
         _wordEndsWithUnframedBackslash = false;
         _redirectionLookaheadAtEndOfInput = false;
+        _emptyPipelinePrefixContinuedAtEndOfInput = false;
     }
 
     internal void RecordFunctionBrace(int offset)
@@ -225,19 +227,25 @@ internal sealed class Tokenizer
         return GetLine(offset);
     }
 
+    internal void RecordEmptyPipelinePrefixEndOfInput() =>
+        _emptyPipelinePrefixContinuedAtEndOfInput = _continuedAtEndOfInput || _spacingContinuedAtEndOfInput;
+
     /// <summary>Extra diagnostic lines reached past the last physical input line.</summary>
     internal int EndOfInputLineAdvance
     {
         get
         {
+            var prefixAdvance = _emptyPipelinePrefixContinuedAtEndOfInput ? 1 : 0;
             // Reading the end of a word reaches the continued line and then EOF.
             if (_wordEndsWithUnframedBackslash)
-                return 2;
+                return 2 + prefixAdvance;
             var source = _input.AsSpan();
             var advance = source.IsEmpty || source[^1] != (byte)'\n' || _continuedAtEndOfInput ? 1 : 0;
             if (_arithmeticFallbackAtFileEnd)
                 advance++;
-            return _redirectionLookaheadAtEndOfInput ? advance + 1 : advance;
+            if (_redirectionLookaheadAtEndOfInput)
+                advance++;
+            return advance + prefixAdvance;
         }
     }
 

@@ -67,6 +67,7 @@ public sealed class ScriptCommandUnitTests
     [InlineData("while false; do :\n", "Expected done keyword.", 3)]
     [InlineData("case a in a) :;;\n", "Expected case pattern.", 3)]
     [InlineData("{ :;\n", "Expected } to close a group.", 3)]
+    [InlineData("{ time -p \\\n", "Group list must end with a terminator before }.", 4)]
     [InlineData("( :\n", "Expected ) to close a subshell.", 3)]
     [InlineData("f()\n", "Expected compound command as function body.", 3)]
     public async Task IncompleteGrammarReportsTheReachedReaderLine(string ending, string parserMessage, int line)

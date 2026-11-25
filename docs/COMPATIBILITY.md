@@ -554,11 +554,11 @@ within the rendered import, and startup returns status 2. Backtick
 captures and captures read directly from a here-document use their source
 separators.
 When a script ends inside a parenthesized capture, the script reader reports
-the delimiter it was matching. A named source and an `eval` reader include
-their reader coordinates. A pending here-document warning precedes the
-missing-closer diagnostic and uses its own warning line. A conditional reader
-also reports the unread token. Earlier complete command units can already
-have executed. Prepared parsing reports the syntax error before any evaluation.
+the delimiter it was matching and the reached line, including for an anonymous
+script. A pending here-document warning precedes the missing-closer diagnostic
+and uses its own warning line. A conditional reader also reports the unread
+token at its reached line. Earlier complete command units can already have
+executed. Prepared parsing reports the syntax error before any evaluation.
 If a pipeline operator or prefix still needs a command at a closing token,
 the streamed reader shows that token and its physical source line.
 When a pipe or list operator reaches EOF while waiting for its next command,

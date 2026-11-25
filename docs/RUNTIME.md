@@ -581,6 +581,10 @@ open groups and quotes, the rejected token, and the end of input.
 An unclosed quote carries the physical line of its opening delimiter through
 script, capture and here-document readers. When it prevents a conditional
 operand from being read, the operand diagnostic uses its own reader line.
+An unclosed parenthesized capture carries the reached EOF line, including any
+advance from reading the last physical line. The streamed script reader uses
+that line in the matching-delimiter diagnostic. An empty pipeline prefix that
+reaches EOF through a continuation advances the diagnostic line once more.
 Quoted bracketed initializer items retain their reader diagnostics with the
 command unit. The prepared tree associates them with the same unit boundary
 used for here-document warnings. Execution reports them before dispatching the
