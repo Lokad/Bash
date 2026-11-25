@@ -1060,6 +1060,8 @@ byte at a time, including bundled flags. A colon after an option byte requires a
 argument. The attached remainder or the next argument is assigned to `OPTARG`,
 including an empty argument. A leading colon selects silent errors. `OPTERR=0`
 suppresses diagnostics while retaining the normal error results.
+A recognized raw option consumes any required argument before interpreting bytes
+`FD`, `FE` and `FF` as missing, unknown and end-of-options results respectively.
 An invalid option to the `getopts` builtin reports the reached source location
 on the error line. The usage line has no location.
 `getopts` reads the signed decimal prefix of the stored `OPTIND` and

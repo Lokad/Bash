@@ -183,10 +183,16 @@ public sealed partial class Evaluation
                     return new(GetoptsOutcome.Missing, flag, null, Diagnostic: true);
             }
 
-            // The pinned scanners use '?' for an error result and -1 for EOF.
+            // Bash reports these results after consuming any required argument.
             if (flag == '?' && (argument == null || argument.Value.IsEmpty))
                 return new(argument == null ? GetoptsOutcome.Unknown : GetoptsOutcome.Missing, flag, null, Diagnostic: false);
-            return flag == byte.MaxValue ? default : new(GetoptsOutcome.Option, flag, argument, Diagnostic: false);
+            return flag switch
+            {
+                0xfd => new(GetoptsOutcome.Missing, flag, null, Diagnostic: false),
+                0xfe => new(GetoptsOutcome.Unknown, flag, null, Diagnostic: false),
+                0xff => default,
+                _ => new(GetoptsOutcome.Option, flag, argument, Diagnostic: false)
+            };
         }
     }
 

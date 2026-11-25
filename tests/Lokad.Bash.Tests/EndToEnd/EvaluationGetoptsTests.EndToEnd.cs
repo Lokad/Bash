@@ -257,6 +257,42 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Empty(result.StdErr);
     }
 
+    [Fact]
+    public async Task GetoptsReportsTheRawMissingResultAndContinuesTheBundle()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -- $'-\375a' -a
+            spec=$':a\375'; OPTARG=seed
+            getopts "$spec" flag
+            printf '<%s:%s:%s:%s>\n' "$?" "$flag" "$OPTIND" "$OPTARG"
+            getopts "$spec" flag
+            printf '<%s:%s:%s:%s>\n' "$?" "$flag" "$OPTIND" "${OPTARG-unset}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal<byte>([.. "<0:::1:"u8, 0xfd, .. ">\n<0:a:2:unset>\n"u8], host.StandardOutput.Content.ToArray());
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Fact]
+    public async Task GetoptsConsumesTheRequiredArgumentBeforeReportingTheRawUnknownResult()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -- $'-\376' arg -a
+            spec=$':a\376:'; OPTARG=seed
+            getopts "$spec" flag
+            printf '<%s:%s:%s:%s>\n' "$?" "$flag" "$OPTIND" "$OPTARG"
+            getopts "$spec" flag
+            printf '<%s:%s:%s:%s>\n' "$?" "$flag" "$OPTIND" "${OPTARG-unset}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal<byte>([.. "<0:?:3:"u8, 0xfe, .. ">\n<0:a:4:unset>\n"u8], host.StandardOutput.Content.ToArray());
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
     [Theory]
     [InlineData("OPTIND=1", "<a:1>")]
     [InlineData("printf -v OPTIND '%s' 1", "<a:1>")]
