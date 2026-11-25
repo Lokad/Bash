@@ -182,6 +182,10 @@ the current frame whose target is missing can declare a separate local for
 that target.
 Initializer validation can reject the value after the array kind is prepared
 and before the requested attributes are applied.
+When this preparation reaches a nonempty selector, its arithmetic effects
+occur once, including when the prepared array is associative. A valid index
+still leaves the prepared array empty. The invalid-identifier diagnostic
+uses the declaration operand's spelling.
 
 For a whole-name `local +n` declaration, a target spelling that has no
 binding becomes a local of its own. A readonly alias can take this path and

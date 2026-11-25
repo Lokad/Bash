@@ -472,6 +472,11 @@ internal static partial class WordExpansion
         ResolveReferenceAsync(reference, ReferenceUse.DeclarationAssign, scope,
             ExpansionPurpose.ArithmeticSource, null, targetVariables, indexVariables);
 
+    /// <summary>Checks the arithmetic selector reached by a rejected local nameref declaration.</summary>
+    internal static Task<ResolvedVariableReference?> ResolveRejectedNamerefSelectorAsync(
+        VariableReference reference, ScopedEvaluation scope) =>
+        ResolveReferenceAsync(reference, ReferenceUse.RejectedNamerefDeclaration, scope, ExpansionPurpose.ArithmeticSource);
+
     private static Task<ResolvedVariableReference?> ResolveReferenceAsync(
         VariableReference reference,
         ReferenceUse use,
@@ -581,7 +586,7 @@ internal static partial class WordExpansion
 
         // Compound preparation has already selected the binding.
         var name = use == ReferenceUse.CompoundAssign ? reference.Name : targetVariables.ResolveNamerefName(reference.Name);
-        var associative = targetVariables.AssociativeArrays.ContainsKey(name);
+        var associative = use != ReferenceUse.RejectedNamerefDeclaration && targetVariables.AssociativeArrays.ContainsKey(name);
         // Prepared and staged selectors validate expanded bytes.
         var selector = preparedSubscript is { } preparedSelector
             ? VariableReference.ForElement(reference.Name, ShellSource.FromBytes(preparedSelector.Value.Bytes))
@@ -716,7 +721,7 @@ internal static partial class WordExpansion
             return use switch
             {
                 ReferenceUse.ArithmeticAssign or ReferenceUse.ArithmeticRead
-                    or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign =>
+                    or ReferenceUse.DeclarationAssign or ReferenceUse.RejectedNamerefDeclaration or ReferenceUse.BuiltinAssign =>
                     scope.Effects.ReportBuiltinDiagnosticAsync(subject, [message], scope.Context),
                 ReferenceUse.CompoundAssign =>
                     scope.Effects.ReportExpansionDiagnosticAsync(subject, [message]),
@@ -760,6 +765,7 @@ internal static partial class WordExpansion
         Assign,
         DirectAssign,
         DeclarationAssign,
+        RejectedNamerefDeclaration,
         CompoundAssign,
         BuiltinAssign,
         Unset,

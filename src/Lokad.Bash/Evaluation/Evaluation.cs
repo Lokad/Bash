@@ -2270,7 +2270,7 @@ public sealed partial class Evaluation : IFileTester
                     if (local && functionContext is { } function)
                     {
                         if ((!setsNameref || !clearsArrayKind)
-                            && await TryRejectEmptyLocalElementAsync(reference, operand, function, setsNameref).ConfigureAwait(false))
+                            && await TryRejectLocalElementInitializerAsync(reference, operand, function, setsNameref).ConfigureAwait(false))
                             continue;
                     }
                     else if (options.IndexedChange != DeclarationAttributeChange.Clear)
@@ -2286,6 +2286,14 @@ public sealed partial class Evaluation : IFileTester
                             continue;
                         }
                     }
+                }
+                else if (local && reference.Kind == VariableReferenceKind.Element && operand.Value != null
+                    && functionContext is { } selectorFunction
+                    && await TryRejectLocalElementInitializerAsync(reference, operand, selectorFunction, setsNameref: false).ConfigureAwait(false))
+                {
+                    if (HasPendingExpansionError)
+                        break;
+                    continue;
                 }
                 if (skipReadonlyAttribute && !operand.CompoundApplied && operand.Value == null)
                 {
@@ -3068,10 +3076,11 @@ public sealed partial class Evaluation : IFileTester
 
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), declarationNegated).ConfigureAwait(false);
 
-            async Task<bool> TryRejectEmptyLocalElementAsync(VariableReference reference, PreparedDeclarationOperand operand,
+            async Task<bool> TryRejectLocalElementInitializerAsync(VariableReference reference, PreparedDeclarationOperand operand,
                 FunctionContext function, bool setsNameref)
             {
                 var name = reference.Name;
+                var emptySelector = reference.Subscript.IsEmpty;
                 var clearsNameref = options.NamerefChange == DeclarationAttributeChange.Clear;
                 var existing = function.Locals.Declares(name);
                 if (!setsNameref && !existing)
@@ -3087,7 +3096,7 @@ public sealed partial class Evaluation : IFileTester
                         var localizesMissing = missing && commandVars.TryResolveBinding(name, selectOwner: null,
                             BindingResolution.LastNameref, out var last) && function.Locals.Declares(last.Name);
                         if (localizesMissing)
-                            prepareTarget = setsNameref || clearsNameref || conflictingArrayKinds;
+                            prepareTarget = emptySelector && (setsNameref || clearsNameref || conflictingArrayKinds);
                         else if (setsNameref || clearsNameref || missing || reached.IsUnsetNameref)
                         {
                             await PrepareAndRejectNamerefArrayAsync(!previous.IsEmpty).ConfigureAwait(false);
@@ -3137,8 +3146,16 @@ public sealed partial class Evaluation : IFileTester
                         await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
                     else if (conflictingArrayKinds)
                         await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
-                    else
+                    else if (emptySelector)
                         await DiagnoseBadArraySubscriptAsync(operand.Name).ConfigureAwait(false);
+                    else
+                    {
+                        exitCode = 1;
+                        var target = await AwaitWordExpansionAsync(WordExpansion.ResolveRejectedNamerefSelectorAsync(reference, executionScope))
+                            .ConfigureAwait(false);
+                        if (target != null && !HasPendingExpansionError)
+                            await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
+                    }
                 }
             }
 

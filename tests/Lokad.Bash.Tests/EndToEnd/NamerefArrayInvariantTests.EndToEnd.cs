@@ -115,4 +115,37 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
         Assert.Equal($"line 4: {diagnostic}\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData("local -n slot=dest", "+n", "i++", "-an slot=()", 1, "local: `slot[i++]': not a valid identifier")]
+    [InlineData("local -n slot", "", "0", "-an slot", 0, "local: `slot[0]': not a valid identifier")]
+    [InlineData("local -n slot", "-a", "i++", "-an slot", 1, "local: `slot[i++]': not a valid identifier")]
+    [InlineData("local -n slot", "-A", "i++", "-An slot", 1, "local: `slot[i++]': not a valid identifier")]
+    [InlineData("local -n slot", "-A", "i++ - 1", "-An slot", 1, "slot[i++ - 1]: bad array subscript")]
+    public async Task RejectedLocalNamerefElementKeepsSelectorEffectsAndThePreparedArray(
+        string setup, string flags, string selector, string declaration, int indexEffects, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync("slot=outer; dest=target; i=0\nf(){\n"
+            + $"  {setup}\n  local {flags} 'slot[{selector}]=value'\n"
+            + "  printf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p slot dest\n"
+            + "}\nf\ndeclare -p slot dest\n");
+
+        Assert.Equal($"<1:{indexEffects}>\ndeclare {declaration}\ndeclare -- dest=\"target\"\n"
+            + "declare -- slot=\"outer\"\ndeclare -- dest=\"target\"\n", result.StdOut);
+        Assert.Equal($"line 4: {diagnostic}\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task RejectedLocalNamerefElementRetainsFieldEffectsAndVisitsLaterOperands()
+    {
+        var result = await EvaluationTestHelper.RunAsync("i=0; j=0\nf(){\n"
+            + "  local -n slot\n  local -A 'slot[i++]'=entry$((j++)) after=kept\n"
+            + "  printf '<%s:%s:%s>\\n' \"$?\" \"$i\" \"$j\"; declare -p slot after\n"
+            + "}\nf\n");
+
+        Assert.Equal("<1:1:1>\ndeclare -An slot\ndeclare -A after=([0]=\"kept\" )\n", result.StdOut);
+        Assert.Equal("line 4: local: `slot[i++]': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
 }
