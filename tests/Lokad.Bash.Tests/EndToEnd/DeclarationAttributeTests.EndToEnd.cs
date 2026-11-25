@@ -240,6 +240,126 @@ public sealed class DeclarationAttributeTestsEndToEnd
         Assert.Equal("line 2: 1/(2-++i): division by 0 (error token is \"(2-++i)\")\n", result.StdErr);
     }
 
+    [Theory]
+    [InlineData("declare -i b=44", "-ix", "declare -ix b=\"44\"")]
+    [InlineData("declare -i b=44", "-r", "declare -ir b=\"44\"")]
+    [InlineData("declare -ix b=44", "+x", "declare -i b=\"44\"")]
+    [InlineData("unset b", "-il", "declare -il b")]
+    public async Task FailedIntegerDeclarationRetainsTheSelectedBindingAndAttributes(
+        string setup, string options, string declaration)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            {setup}; i=0
+            declare {options} b='++i/0' later=7
+            printf '<%s:%s:%s>\n' "$?" "$i" "$later"
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<1:1:>\n{declaration}\n", result.StdOut);
+        Assert.Equal("line 2: declare: ++i/0: division by 0 (error token is \"0\")\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("(b=51,++i)", "<1:0:>", 44, "line 2: b: readonly variable\n")]
+    [InlineData("b+1", "<0:0:7>", 45, "")]
+    public async Task ReadonlyIntegerDeclarationChecksArithmeticWritesAndAllowsTheFinalInitializer(
+        string expression, string status, int value, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -i b=44; i=0
+            declare -r b='{expression}' later=7
+            printf '<%s:%s:%s>\n' "$?" "$i" "$later"
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"{status}\ndeclare -ir b=\"{value}\"\n", result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("b=44", "-ix", "1", "declare -aix b=([0]=\"44\")", "declare -aix b=([0]=\"44\" [1]=\"8\")")]
+    [InlineData("declare -Aix b=([key]=44 [other]=55)", "+x", "key",
+        "declare -Ai b=([key]=\"44\" [other]=\"55\" )", "declare -Ai b=([key]=\"8\" [other]=\"55\" )")]
+    public async Task IntegerElementDeclarationPreparesTheArrayBeforeTheSelector(
+        string setup, string options, string key, string initial, string assigned)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            {setup}
+            declare {options} 'b[$(declare -p b >&2; printf %s {key})]=8'
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(assigned + "\n", result.StdOut);
+        Assert.Equal(initial + "\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task FailedIntegerElementSelectorLeavesTheDeclaredEmptyArray()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            declare -ix 'b[1/0]=8' later=7
+            printf '<%s:%s:%s>\n' "$?" "$i" "$later"
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:0:>\ndeclare -aix b=()\n", result.StdOut);
+        Assert.Equal("line 2: 1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task FailedGlobalIntegerInitializerCreatesTheBindingBeforeLeavingTheFunction()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            unset b
+            f() { declare -gix b='1/0'; printf 'unreached\n'; }
+            f
+            printf 'after:%s\n' "$?"
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("after:1\ndeclare -ix b\n", result.StdOut);
+        Assert.Equal("line 2: declare: 1/0: division by 0 (error token is \"0\")\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task GlobalIntegerDeclarationRejectsWritesToItsReadonlyBindingUnderAPrefix()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -i b=44; i=0
+            b=5 declare -gir b='(b=6,++i)' later=7
+            printf '<%s:%s:%s>\n' "$?" "$i" "$later"
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:0:>\ndeclare -ir b=\"44\"\n", result.StdOut);
+        Assert.Equal("line 2: b: readonly variable\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("-x", "-aix", "")]
+    [InlineData("-r", "-airx", "line 2: link: readonly variable\n")]
+    public async Task PromotedIntegerElementRetainsTheSpellingWhenItsValueConversionFails(
+        string options, string flags, string precedingError)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -ai b=(44 55); declare -n link='b[i++]'; i=0
+            link=5 declare {options} link='++i/0' later=7
+            printf '<%s:%s:%s>\n' "$?" "$i" "$later"
+            declare -p b link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:2:7>\ndeclare {flags} b=([0]=\"++i/0\" [1]=\"55\")\ndeclare -n link=\"b[i++]\"\n", result.StdOut);
+        Assert.Equal(precedingError + "line 2: ++i/0: division by 0 (error token is \"0\")\n", result.StdErr);
+    }
+
     [Fact]
     public async Task LocalNamerefInitializerKeepsReadonlyOnTheReference()
     {

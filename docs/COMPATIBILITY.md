@@ -799,6 +799,13 @@ rejects the assignment before selector expansion. A direct pipeline stage
 reports status 4 for that refusal. Ordinary element declarations make the
 array and its attributes visible to the selector. A newly applied `-r` lets
 a successful selector finish and reports the rejected write with status 0.
+An ordinary integer declaration establishes its destination and applies its attribute
+changes before evaluating the initializer. For an element declaration the
+array kind and attributes are visible during selector expansion. A failed
+initializer can leave an unassigned scalar or an empty array with its new
+attributes. Earlier writes reached by arithmetic are preserved. A new
+readonly attribute rejects arithmetic writes to that binding during
+initialization. A whole-name declaration may still write its own final value.
 An ordinary assignment through a chain ending at an unset nameref leaves
 the chain intact.
 When an ordinary declaration gives an unset nameref its first target,
@@ -824,6 +831,9 @@ declaration's operands finish. It evaluates the restored reference's selector
 once using the caller's bindings and earlier promotions. Multiple prefixes
 publish in Bash's temporary table order. A bad subscript reports a diagnostic
 at publication and leaves the status selected by the operands.
+After successful selection of an integer element, a failed value conversion
+without an expansion failure reports a diagnostic and publishes the staged
+bytes. A selector expansion failure stops the element write.
 At script scope a promoted temporary scalar can give a saved unset nameref
 its first valid target while processing operands. The final temporary value
 publishes through that reference after restoration, with the destination's

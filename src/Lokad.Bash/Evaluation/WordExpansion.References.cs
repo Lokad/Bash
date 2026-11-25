@@ -84,10 +84,15 @@ internal static partial class WordExpansion
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, AssignmentOperator operation) =>
             AssignValueAsync(scope, scope.Variables, sourceName, value, operation, ShellValue.Empty, DeclarationWrite.Ordinary);
 
+        internal ValueTask<ShellValue?> AssignValueAsync(
+            ScopedEvaluation scope, Variables destination, BindingName sourceName, ShellValue value,
+            AssignmentOperator operation, ShellValue command, DeclarationWrite declarationWrite) =>
+            AssignValueAsync(scope, destination, sourceName, value, operation, command, declarationWrite, scope);
+
         internal async ValueTask<ShellValue?> AssignValueAsync(
             ScopedEvaluation scope, Variables destination, BindingName sourceName, ShellValue value,
             AssignmentOperator operation, ShellValue command, DeclarationWrite declarationWrite,
-            ScopedEvaluation? valueScope = null)
+            ScopedEvaluation valueScope)
         {
             if (Name.IsEmpty)
                 return null;
@@ -97,7 +102,7 @@ internal static partial class WordExpansion
             if ((attributes & Variables.BindingAttributes.Integer) != 0
                 && declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
                 return null;
-            if (await PrepareAssignmentValueAsync(value, previous, attributes, valueScope ?? scope, command)
+            if (await PrepareAssignmentValueAsync(value, previous, attributes, valueScope, command)
                 .ConfigureAwait(false) is not { } prepared)
                 return null;
             value = prepared;
@@ -156,7 +161,8 @@ internal static partial class WordExpansion
             bool TryAssignTo(Variables variables, BindingName name) => !name.IsEmpty
                 && (declarationWrite != DeclarationWrite.Ordinary || !variables.IsReadonly(name)) && this switch
             {
-                Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory),
+                Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory,
+                    initializeReadonly: declarationWrite == DeclarationWrite.ReadonlyInitializer),
                 Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory, indexed.ReplaceAssociative),
                 Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),

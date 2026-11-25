@@ -434,6 +434,11 @@ existing write target to retain direct arithmetic effects. Publication
 feeds the captured spelling to the shared arithmetic evaluator after
 restoration. A pending operand failure keeps its original status and
 reader disposition while completed integer promotions finish.
+An ordinary integer initializer establishes the selected binding and its
+attributes before the shared assignment evaluator runs. The evaluator
+uses the usual readonly checks for arithmetic effects. A whole-name
+declaration that has just made the destination readonly holds the existing
+initializer permission for its final write to that destination.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.

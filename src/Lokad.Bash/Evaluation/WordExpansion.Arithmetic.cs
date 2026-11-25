@@ -289,7 +289,9 @@ internal static partial class WordExpansion
                     return null;
                 if (assignOutput == null)
                     target = target.SelectPrefixElementWrite(reference, scope);
-                var readOnly = scope.Variables.IsReadonly(reference.Name) || (target.ReadOwner ?? scope.Variables).IsReadonly(target.Name);
+                var readOnly = scope.Variables.IsReadonly(reference.Name) || (target.ReadOwner ?? scope.Variables).IsReadonly(target.Name)
+                    || scope.ExpansionWriteTarget is { PreparingPrefixes: true }
+                        && scope.GetExpansionWriteTarget(reference.Name)?.IsReadonly(reference.Name) == true;
                 if (assignOutput == null && !readOnly && AssignExpansion(reference, target, formatted))
                     return null;
                 var namerefFailure = scope.Variables.GetNamerefAssignmentFailure(

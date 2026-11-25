@@ -1039,9 +1039,12 @@ public sealed partial class Variables
         SetResolvedScalar(resolved, value);
     }
 
-    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory)
+    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory) =>
+        TrySetResolvedScalar(name, value, memory, initializeReadonly: false);
+
+    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory, bool initializeReadonly)
     {
-        if (name.IsEmpty || IsReadonly(name))
+        if (name.IsEmpty || !initializeReadonly && IsReadonly(name))
             return false;
         if (NamerefTargets.TryGetValue(name, out var target))
         {

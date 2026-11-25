@@ -3056,7 +3056,14 @@ public sealed partial class Evaluation : IFileTester
                 {
                     var kind = arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
                     var arrayDeclarationBinding = referentAttributes ?? new VariableBinding(VariableReference.ForName(name), targetVars);
-                    if (!arrayDeclarationBinding.Owner.TryDeclareArray(arrayDeclarationBinding.Name, kind, ScalarArrayPromotion.RetainValue))
+                    var owner = arrayDeclarationBinding.Owner;
+                    var arrayName = arrayDeclarationBinding.Name;
+                    var initializesIntegerArray = operand.Value.HasValue && PreparesIntegerDeclaration(owner, arrayName)
+                        && !owner.HasBinding(arrayName);
+                    var declared = initializesIntegerArray
+                        ? owner.TryAssignResolvedArray(arrayName, [], kind, initializeReadonly: false)
+                        : owner.TryDeclareArray(arrayName, kind, ScalarArrayPromotion.RetainValue);
+                    if (!declared)
                     {
                         await DiagnoseAsync(global && reference.Kind == VariableReferenceKind.Name ? sourceName : name, ArrayConversionMessage(kind)).ConfigureAwait(false);
                         if (arrayAttributeAssignment)
@@ -3221,19 +3228,6 @@ public sealed partial class Evaluation : IFileTester
                                 continue;
                             }
                         }
-                        if (ordinaryElement == null && reference.Kind != VariableReferenceKind.Name && options.Readonly)
-                        {
-                            // Element declarations create the array and set attributes before selecting its slot.
-                            var attributeName = targetVars.ResolveNamerefName(name);
-                            var kind = targetVars.AssociativeArrays.ContainsKey(attributeName) ? ArrayKind.Associative : ArrayKind.Indexed;
-                            if (!targetVars.TryDeclareArray(attributeName, kind, ScalarArrayPromotion.RetainValue))
-                            {
-                                await DiagnoseAsync(name, "invalid name reference").ConfigureAwait(false);
-                                continue;
-                            }
-                            SetAttributes(attributeName, targetVars, assignmentExport);
-                            elementAttributesApplied = true;
-                        }
                         if (ordinaryElement is { } elementDeclaration)
                         {
                             if (!await PrepareReferencedElementDeclarationAsync(elementDeclaration, arrayKind, hasInitializer: true).ConfigureAwait(false))
@@ -3258,6 +3252,29 @@ public sealed partial class Evaluation : IFileTester
                         }
                         var writeScope = global ? declarationScope : executionScope;
                         var selectorOwner = ordinaryElement?.Owner ?? writeVariables;
+                        if (!local && !elementAttributesApplied && reference.Kind != VariableReferenceKind.Name
+                            && !clearsArrayAttribute && bindings?.Contains(writeReference.Name) != true
+                            && PreparesIntegerDeclaration(selectorOwner, writeReference.Name))
+                        {
+                            var selected = new VariableBinding(writeReference, selectorOwner);
+                            if (!await PrepareReferencedElementDeclarationAsync(selected, arrayKind, hasInitializer: true).ConfigureAwait(false))
+                                continue;
+                            SetAttributes(selected.Name, selected.Owner, assignmentExport);
+                            elementAttributesApplied = true;
+                        }
+                        else if (ordinaryElement == null && reference.Kind != VariableReferenceKind.Name && options.Readonly)
+                        {
+                            // Element declarations create the array and set attributes before selecting its slot.
+                            var attributeName = targetVars.ResolveNamerefName(name);
+                            var kind = targetVars.AssociativeArrays.ContainsKey(attributeName) ? ArrayKind.Associative : ArrayKind.Indexed;
+                            if (!targetVars.TryDeclareArray(attributeName, kind, ScalarArrayPromotion.RetainValue))
+                            {
+                                await DiagnoseAsync(name, "invalid name reference").ConfigureAwait(false);
+                                continue;
+                            }
+                            SetAttributes(attributeName, targetVars, assignmentExport);
+                            elementAttributesApplied = true;
+                        }
                         var writeTarget = await AwaitWordExpansionAsync(WordExpansion.ResolveDeclarationReferenceAsync(
                             writeReference, ordinaryElement == null ? writeScope : GetDeclarationElementScope(), selectorOwner,
                             reference.Kind != VariableReferenceKind.Name || writesNamedElement || ordinaryElement != null ? commandVars : writeVariables))
@@ -3275,7 +3292,7 @@ public sealed partial class Evaluation : IFileTester
                                 writeScope, writeVariables, value, operand.Operator,
                                 declarationWrite, ordinaryElement?.Name
                                     ?? (local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName),
-                                applyAssignmentAttributes: ordinaryElement == null, writesNamedElement).ConfigureAwait(false))
+                                applyAssignmentAttributes: !elementAttributesApplied, writesNamedElement).ConfigureAwait(false))
                         {
                             RecordOperandFailure();
                             if (HasPendingExpansionError) break;
@@ -3401,7 +3418,7 @@ public sealed partial class Evaluation : IFileTester
                         var assignmentAttributes = binding.Owner.GetAssignmentAttributes(binding.Name);
                         if (promotion == DeclarationPrefixPromotion.Integer && (assignmentAttributes & BindingAttributes.Integer) != 0)
                         {
-                            await PublishIntegerAsync(binding, value, publicationScope).ConfigureAwait(false);
+                            await PublishIntegerAsync(binding, value, publicationScope, target: null).ConfigureAwait(false);
                         }
                         else
                         {
@@ -3416,15 +3433,19 @@ public sealed partial class Evaluation : IFileTester
                     {
                         var target = await WordExpansion.ResolveDeclarationReferenceAsync(binding.Reference,
                             executionScope, binding.Owner, binding.Owner).ConfigureAwait(false);
-                        if (target == null || await target.AssignValueAsync(publicationScope, binding.Owner, binding.Name,
-                            value, AssignmentOperator.Replace, ShellValue.Empty, WordExpansion.DeclarationWrite.PromotedPrefix)
-                            .ConfigureAwait(false) == null)
+                        if (target == null)
+                            continue;
+                        var published = binding.Owner.IsIntegerBinding(binding.Name)
+                            ? await PublishIntegerAsync(binding, value, publicationScope, target).ConfigureAwait(false)
+                            : target.TryPublishValue(publicationScope, binding.Name, value, WordExpansion.DeclarationWrite.PromotedPrefix);
+                        if (!published)
                             continue;
                     }
                     binding.Owner.UpdateBindingAttributes(binding.Name, attributes, BindingAttributes.None);
                 }
 
-                async ValueTask PublishIntegerAsync(VariableBinding binding, ShellValue value, ScopedEvaluation publicationScope)
+                async ValueTask<bool> PublishIntegerAsync(VariableBinding binding, ShellValue value, ScopedEvaluation publicationScope,
+                    WordExpansion.ResolvedVariableReference? target)
                 {
                     var failedOperand = _state.TryConsumeExpansionError(out var status, out var kind);
                     var fatalOperand = _state.FatalExpansion;
@@ -3436,8 +3457,13 @@ public sealed partial class Evaluation : IFileTester
                             publicationScope, ShellValue.Empty,
                             WordExpansion.ArithmeticFailureMode.Promotion).ConfigureAwait(false);
                         // An arithmetic diagnostic keeps the staged spelling. A failed selector stops the write.
-                        if (!HasPendingExpansionError)
-                            binding.Owner.SetResolvedValuePreservingArray(binding.Name, converted ?? value, Memory);
+                        if (HasPendingExpansionError)
+                            return false;
+                        var published = converted ?? value;
+                        if (target != null)
+                            return target.TryPublishValue(publicationScope, binding.Name, published, WordExpansion.DeclarationWrite.PromotedPrefix);
+                        binding.Owner.SetResolvedValuePreservingArray(binding.Name, published, Memory);
+                        return true;
                     }
                     finally
                     {
@@ -3824,6 +3850,13 @@ public sealed partial class Evaluation : IFileTester
                 options.IndexedChange == DeclarationAttributeChange.Clear && owner.IndexedArrays.ContainsKey(name)
                 || options.AssociativeChange == DeclarationAttributeChange.Clear && owner.AssociativeArrays.ContainsKey(name);
 
+            bool PreparesIntegerDeclaration(Variables owner, BindingName name) =>
+                !setsNamedAttribute && options.NamerefChange == DeclarationAttributeChange.Unchanged
+                && !name.IsEmpty
+                && (options.IntegerChange == DeclarationAttributeChange.Set
+                    || options.IntegerChange == DeclarationAttributeChange.Unchanged && owner.IsIntegerBinding(name))
+                && !owner.IsUnsetNameref(name);
+
             async Task<bool> AssignReferencedElementAsync(
                 VariableReference reference, VariableBinding attributes, ShellValue value, AssignmentOperator operation,
                 bool assignsGlobalElement, bool circularGlobal, DeclarationAttributeChange exportChange)
@@ -3915,25 +3948,33 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseReadonlyAsync(diagnosticName).ConfigureAwait(false);
                     return false;
                 }
+                var writesTemporary = ReferenceEquals(destination, commandVars) && bindings?.Contains(target.Name) == true;
                 if (applyAssignmentAttributes)
                 {
-                    if (!target.Name.IsEmpty && options.IntegerChange != DeclarationAttributeChange.Unchanged)
-                        destination.SetIntegerBinding(target.Name, options.IntegerChange == DeclarationAttributeChange.Set);
-                    destination.SetCaseAttributes(target.Name, options.CaseChange);
+                    if (!writesTemporary && declarationWrite == WordExpansion.DeclarationWrite.Ordinary
+                        && PreparesIntegerDeclaration(destination, target.Name))
+                    {
+                        if (target is WordExpansion.ResolvedVariableReference.Scalar)
+                            destination.TryDeclareName(target.Name);
+                        SetAttributes(target.Name, destination, options.ExportChange);
+                        // The declaration may initialize its new readonly binding. Operand arithmetic still observes readonly.
+                        if (options.Readonly)
+                            declarationWrite = WordExpansion.DeclarationWrite.ReadonlyInitializer;
+                    }
+                    else
+                    {
+                        const BindingAttributes valueAttributes = BindingAttributes.Integer | BindingAttributes.Case;
+                        var (set, clear) = GetAttributeChanges(options.ExportChange);
+                        destination.UpdateBindingAttributes(target.Name, set & valueAttributes, clear & valueAttributes);
+                    }
                 }
-                var valueScope = mayDeferPrefixPromotion && !options.Global && bindings is { } commandBindings
-                    && ReferenceEquals(destination, commandVars) && target is WordExpansion.ResolvedVariableReference.Scalar
-                    && commandBindings.Contains(target.Name) && destination.IsIntegerBinding(target.Name)
+                var valueScope = bindings is { } commandBindings && target is WordExpansion.ResolvedVariableReference.Scalar
+                    && (writesTemporary && mayDeferPrefixPromotion
+                        || options.Global && ReferenceEquals(destination, commandBindings.SavedVariables))
+                    && destination.IsIntegerBinding(target.Name)
                     ? GetIntegerPromotionScope(writeScope, commandBindings) : writeScope;
-                if (await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
-                    ShellValue.FromText(commandName), declarationWrite, valueScope).ConfigureAwait(false) is not null)
-                    return true;
-                if (applyAssignmentAttributes && reference.Kind == VariableReferenceKind.Name
-                    && target is WordExpansion.ResolvedVariableReference.Scalar
-                    && deferredPrefixPromotions?.ContainsValue(DeclarationPrefixPromotion.Integer) == true
-                    && bindings?.Contains(target.Name) == false && _state.FatalExpansion?.Kind == ExpansionFailureKind.IntegerAssignment)
-                    SetAttributes(target.Name, destination, options.ExportChange);
-                return false;
+                return await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
+                    ShellValue.FromText(commandName), declarationWrite, valueScope).ConfigureAwait(false) is not null;
             }
 
             async Task ApplyNamedAttributesAsync(BindingName name, ShellValue? assignmentPrefix)
@@ -3984,32 +4025,33 @@ public sealed partial class Evaluation : IFileTester
                     }
                     return;
                 }
-                SetAttributes(attributeName, variables, exportChange);
-                if (!global && !local && bindings is { } commandBindings
-                    && (exportChange == DeclarationAttributeChange.Set || options.Readonly))
+                var promotionBindings = !global && !local && (exportChange == DeclarationAttributeChange.Set || options.Readonly)
+                    ? bindings : null;
+                if (promotionBindings is { } integerBindings && mayDeferPrefixPromotion && integerBindings.Contains(attributeName)
+                    && integerBindings.SavedVariables.IsIntegerBinding(attributeName)
+                    && variables.Scalars.TryGetValue(attributeName, out var integerOperand))
                 {
-                    if (mayDeferPrefixPromotion && commandBindings.Contains(attributeName)
-                        && commandBindings.SavedVariables.IsIntegerBinding(attributeName)
-                        && variables.Scalars.TryGetValue(attributeName, out var integerOperand))
+                    var deferred = GetDeferredPrefixPromotions(integerBindings.PrefixNames.Count);
+                    var converted = await WordExpansion.EvaluateIntegerAssignmentAsync(integerOperand, addend: null,
+                        GetIntegerPromotionScope(executionScope, integerBindings), ShellValue.FromText(commandName),
+                        WordExpansion.ArithmeticFailureMode.Promotion)
+                        .ConfigureAwait(false);
+                    if (converted is not { } integerValue)
                     {
-                        var deferred = GetDeferredPrefixPromotions(commandBindings.PrefixNames.Count);
-                        var converted = await WordExpansion.EvaluateIntegerAssignmentAsync(integerOperand, addend: null,
-                            GetIntegerPromotionScope(executionScope, commandBindings), ShellValue.FromText(commandName),
-                            WordExpansion.ArithmeticFailureMode.Promotion)
-                            .ConfigureAwait(false);
-                        if (converted is not { } integerValue)
-                        {
-                            failedIntegerPromotion = GetIntegerAssignmentFailure();
-                            return;
-                        }
-                        // Arithmetic reads the temporary scalar. The caller receives the converted value
-                        // before the original spelling is evaluated again after restoration.
-                        var assignmentAttributes = GetPromotionAttributes(variables, attributeName)
-                            & (BindingAttributes.Integer | BindingAttributes.Case);
-                        commandBindings.RetainScalarBinding(attributeName, integerValue, Memory, _cancellationToken, assignmentAttributes);
-                        deferred[attributeName] = DeclarationPrefixPromotion.Integer;
+                        failedIntegerPromotion = GetIntegerAssignmentFailure();
                         return;
                     }
+                    // A prefix remains writable while its staged arithmetic runs. Publish flags with the converted value.
+                    SetAttributes(attributeName, variables, exportChange);
+                    var assignmentAttributes = GetPromotionAttributes(variables, attributeName)
+                        & (BindingAttributes.Integer | BindingAttributes.Case);
+                    integerBindings.RetainScalarBinding(attributeName, integerValue, Memory, _cancellationToken, assignmentAttributes);
+                    deferred[attributeName] = DeclarationPrefixPromotion.Integer;
+                    return;
+                }
+                SetAttributes(attributeName, variables, exportChange);
+                if (promotionBindings is { } commandBindings)
+                {
                     // A nonlocal declaration promotes the prefix reached through its reference.
                     if (options.Builtin == BuiltinKind.Declare && options.NamerefChange == DeclarationAttributeChange.Unchanged
                         && attributeName != name && commandBindings.Contains(attributeName))
