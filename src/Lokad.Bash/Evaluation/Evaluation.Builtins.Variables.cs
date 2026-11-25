@@ -488,10 +488,12 @@ public sealed partial class Evaluation
         ScopedEvaluation.ExpansionBindings? expansionWriteTarget)
     {
         var sourceName = reference.Name;
-        var circular = reference.Kind == VariableReferenceKind.Name
-            && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _)
-            && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
+        var namedCycle = reference.Kind == VariableReferenceKind.Name
+            && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _);
+        var circular = namedCycle && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
         var activeCycle = circular;
+        var warnsWithoutFallback = kind is BuiltinAssignmentKind.Value or BuiltinAssignmentKind.Read
+            or BuiltinAssignmentKind.Getopts or BuiltinAssignmentKind.PrintfCount;
         var localName = scope.Context.FunctionContext?.IsLocal(sourceName) == true;
         var selectElementAfterExpansion = kind is BuiltinAssignmentKind.Value or BuiltinAssignmentKind.Read
             && reference.Kind != VariableReferenceKind.Name;
@@ -500,8 +502,12 @@ public sealed partial class Evaluation
         if (resolution == BuiltinReferenceResolution.NoWrite)
             return BuiltinAssignmentResult.NoWrite;
         if (resolution == BuiltinReferenceResolution.Invalid)
+        {
+            if (namedCycle && warnsWithoutFallback)
+                return await RejectCircularOutputAsync(reference.Name).ConfigureAwait(false);
             return reference.Kind == VariableReferenceKind.Name
                 ? BuiltinAssignmentResult.Failed : await InvalidElementTargetAsync().ConfigureAwait(false);
+        }
         var destination = binding.Owner;
         reference = binding.Reference;
         var localDirectoryOutput = kind == BuiltinAssignmentKind.Directory && localName
@@ -529,12 +535,16 @@ public sealed partial class Evaluation
             ? persistentOutputs.SavedVariables : destination;
         if (reference.Kind == VariableReferenceKind.Name
             && !caller.TryResolveBinding(reference.Name,
-                ReferenceEquals(caller, persistentOutputs?.SavedVariables) ? SelectCallerOwner : null, out _)
-            && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out var fallback))
+                ReferenceEquals(caller, persistentOutputs?.SavedVariables) ? SelectCallerOwner : null, out _))
         {
-            circular = true;
-            destination = fallback.Owner;
-            reference = fallback.Reference;
+            if (scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out var fallback))
+            {
+                circular = true;
+                destination = fallback.Owner;
+                reference = fallback.Reference;
+            }
+            else if (warnsWithoutFallback)
+                return await RejectCircularOutputAsync(reference.Name).ConfigureAwait(false);
         }
         if (circular)
         {
@@ -616,6 +626,14 @@ public sealed partial class Evaluation
 
         Variables SelectCallerOwner(BindingName name) => persistentOutputs?.Contains(name) == true
             ? persistentOutputs.SavedVariables : scope.Variables;
+
+        async Task<BuiltinAssignmentResult> RejectCircularOutputAsync(BindingName name)
+        {
+            await ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
+            if (kind == BuiltinAssignmentKind.PrintfCount)
+                await ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
+            return BuiltinAssignmentResult.Failed;
+        }
 
         async Task<BuiltinAssignmentResult> InvalidElementTargetAsync()
         {

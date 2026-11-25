@@ -16,7 +16,6 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinMapfileAsync(
         IReadOnlyList<ShellValue> arguments, ScopedEvaluation scope, bool negated)
     {
-        var variables = scope.Variables;
         const int ReadBatchRecords = 128;
         using var diagnostics = new BuiltinDiagnosticScope(this);
         var input = ResolveInputBinding(LogicalDescriptor.StdIn);
@@ -84,6 +83,7 @@ public sealed partial class Evaluation
         if (selected is not { } target)
             return await FinishAsync(targetStatus).ConfigureAwait(false);
         var resolved = target.Name;
+        var variables = target.Owner;
 
         var attributes = variables.GetAssignmentAttributes(resolved);
         var integer = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
@@ -145,21 +145,21 @@ public sealed partial class Evaluation
                 return await FinishAsync(0).ConfigureAwait(false);
             }
             if (integer)
-                return await FinishAsync(await AssignIntegerIndexedInputAsync(resolved, values, origin, scope, arguments[0])
+                return await FinishAsync(await AssignIntegerIndexedInputAsync(target, values, origin, scope, arguments[0])
                     .ConfigureAwait(false) ? 0 : 1).ConfigureAwait(false);
 
             // The staged values already have admission. The list and array coexist during publication.
             var retainedBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
-            if (origin.HasValue && variables.Scalars.ContainsKey(resolved))
+            if (origin.HasValue && (target.NamerefValue.HasValue || variables.Scalars.ContainsKey(resolved)))
                 retainedBytes += IndexedArray.ElementMemoryBytes;
             Memory.Charge(retainedBytes);
             stagedBytes += retainedBytes;
 
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
-            target.PrepareForPublication(variables);
+            target.PrepareForPublication();
             assigned = origin is { } first
-                ? variables.TryUpdateResolvedIndexedArray(resolved, first, values, Memory, _cancellationToken)
+                ? variables.TryUpdateResolvedIndexedArray(resolved, first, values, target.NamerefValue, Memory, _cancellationToken)
                 : variables.TryAssignResolvedIndexedArray(resolved, IndexedArray.FromSequential(values));
         }
         catch (ShellDescriptorReadException)
@@ -188,7 +188,7 @@ public sealed partial class Evaluation
 
         Variables.IndexedInputAssignment StartCallbackAssignment() =>
             callbackAssignment ??= new Variables.IndexedInputAssignment(variables, resolved, origin.HasValue,
-                resetAttributes: target.Kind == IndexedInputTargetKind.CircularNameref, Memory);
+                resetAttributes: target.Kind == IndexedInputTargetKind.CircularNameref, target.NamerefValue, Memory);
 
         async ValueTask<EvaluationResult?> AcceptBatchAsync(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
         {
@@ -370,7 +370,7 @@ public sealed partial class Evaluation
     }
 
     private async Task<bool> AssignIntegerIndexedInputAsync(
-        BindingName name, IReadOnlyList<ShellValue> values, uint? origin, ScopedEvaluation scope, ShellValue command)
+        IndexedInputTarget target, IReadOnlyList<ShellValue> values, uint? origin, ScopedEvaluation scope, ShellValue command)
     {
         // The longest rendered signed decimal uses 20 bytes. Include each value's backing
         // along with sparse storage while the input records and saved binding remain live.
@@ -378,8 +378,8 @@ public sealed partial class Evaluation
         var prepaidBytes = checked((long)values.Count * RecordMemoryBytes);
         Memory.Charge(prepaidBytes);
         CheckCancellation();
-        using var assignment = new Variables.IndexedInputAssignment(scope.Variables, name, origin.HasValue,
-            resetAttributes: false, Memory);
+        using var assignment = new Variables.IndexedInputAssignment(target.Owner, target.Name, origin.HasValue,
+            resetAttributes: false, target.NamerefValue, Memory);
         var first = origin.GetValueOrDefault();
         for (var offset = 0; offset < values.Count; offset++)
         {
@@ -395,7 +395,7 @@ public sealed partial class Evaluation
             }
             // Like ordinary mapfile input, the destination wraps at the unsigned 32-bit boundary.
             var position = IndexedArrayIndex.FromUnsigned(unchecked(first + (uint)offset));
-            if (!scope.Variables.TrySetResolvedArrayElement(name, position, integer.Value, Memory, prepaidBytes))
+            if (!target.Owner.TrySetResolvedArrayElement(target.Name, position, integer.Value, Memory, prepaidBytes))
                 return false;
             // Keep consumed credit with the written positions and decimal values.
             prepaidBytes -= RecordMemoryBytes;
@@ -407,14 +407,15 @@ public sealed partial class Evaluation
 
     private enum IndexedInputTargetKind { ExistingOrNew, CircularNameref, UnassignedNameref }
 
-    private readonly record struct IndexedInputTarget(BindingName Name, IndexedInputTargetKind Kind)
+    private readonly record struct IndexedInputTarget(
+        BindingName Name, Variables Owner, IndexedInputTargetKind Kind, ShellValue? NamerefValue)
     {
-        public void PrepareForPublication(Variables variables)
+        public void PrepareForPublication()
         {
             if (Kind == IndexedInputTargetKind.CircularNameref)
-                variables.RecreateDeclarationArray(Name, ArrayKind.Indexed);
+                Owner.RecreateDeclarationArray(Name, ArrayKind.Indexed);
             else if (Kind == IndexedInputTargetKind.UnassignedNameref)
-                variables.TryDeclareArray(Name, ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue);
+                Owner.TryDeclareArray(Name, ArrayKind.Indexed, ScalarArrayPromotion.DiscardValue);
         }
     }
 
@@ -426,22 +427,26 @@ public sealed partial class Evaluation
             || reference.Kind != VariableReferenceKind.Name)
             return await InvalidTargetAsync(operand).ConfigureAwait(false);
 
-        var variables = scope.Variables;
         var target = reference.Name;
-        var resolvedBinding = variables.TryResolveBinding(target, selectOwner: null, out var binding);
+        var resolvedBinding = scope.Variables.TryResolveBinding(target, selectOwner: null, out var binding);
         var resolved = resolvedBinding ? binding.Name : target;
         if (resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name)
             return await InvalidTargetAsync(binding.Reference.ToValue(Memory)).ConfigureAwait(false);
         if (!resolved.IsIdentifier)
             return await InvalidTargetAsync(resolved.ToValue()).ConfigureAwait(false);
 
-        var kind = !resolvedBinding ? IndexedInputTargetKind.CircularNameref
-            : variables.TryGetNameref(resolved, out var referenced) && referenced.IsEmpty
+        // A local cycle retries the authored name in the global store without following its nameref.
+        var variables = resolvedBinding ? binding.Owner : scope.Context.GetGlobalBindingOwner(target, scope.Variables);
+        var recreatesCycle = !resolvedBinding && ReferenceEquals(variables, scope.Variables);
+        var kind = recreatesCycle ? IndexedInputTargetKind.CircularNameref
+            : resolvedBinding && variables.TryGetNameref(resolved, out var referenced) && referenced.IsEmpty
                 ? IndexedInputTargetKind.UnassignedNameref
                 : IndexedInputTargetKind.ExistingOrNew;
+        ShellValue? namerefValue = !resolvedBinding && !recreatesCycle
+            && variables.TryGetNameref(resolved, out var raw) && !raw.IsEmpty ? raw : null;
         if (warn)
         {
-            if (kind == IndexedInputTargetKind.CircularNameref)
+            if (!resolvedBinding)
                 await ReportCircularNameReferenceAsync(target, scope).ConfigureAwait(false);
             else if (kind == IndexedInputTargetKind.UnassignedNameref)
                 await ReportRemovingNamerefAsync(target).ConfigureAwait(false);
@@ -450,7 +455,7 @@ public sealed partial class Evaluation
             return (null, 0);
 
         // A cycle recreates the binding; otherwise readonly belongs to the selected array.
-        if (resolvedBinding && variables.IsReadonly(resolved))
+        if (!recreatesCycle && variables.IsReadonlyBinding(resolved))
         {
             await ReportBuiltinDiagnosticAsync(operand, "readonly variable", scope.Context).ConfigureAwait(false);
             return (null, 1);
@@ -462,7 +467,7 @@ public sealed partial class Evaluation
             return (null, 1);
         }
 
-        return (new IndexedInputTarget(resolved, kind), 0);
+        return (new IndexedInputTarget(resolved, variables, kind, namerefValue), 0);
 
         async Task<(IndexedInputTarget?, int)> InvalidTargetAsync(ShellValue name)
         {

@@ -162,10 +162,10 @@ public sealed partial class Evaluation
                 fieldMemory, scope.Variables, Memory, _cancellationToken);
             if (arrayTarget is { } array)
             {
-                var attributes = scope.Variables.GetAssignmentAttributes(array.Name);
+                var attributes = array.Owner.GetAssignmentAttributes(array.Name);
                 if ((attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0)
                 {
-                    var assigned = await AssignIntegerIndexedInputAsync(array.Name, fields, null, scope, command)
+                    var assigned = await AssignIntegerIndexedInputAsync(array, fields, null, scope, command)
                         .ConfigureAwait(false);
                     return await FinishAsync(assigned ? exitCode : 1).ConfigureAwait(false);
                 }
@@ -179,8 +179,8 @@ public sealed partial class Evaluation
                 }
                 var replacement = IndexedArray.FromSequential(fields);
                 _cancellationToken.ThrowIfCancellationRequested();
-                array.PrepareForPublication(scope.Variables);
-                if (!scope.Variables.TryAssignResolvedIndexedArray(array.Name, replacement))
+                array.PrepareForPublication();
+                if (!array.Owner.TryAssignResolvedIndexedArray(array.Name, replacement))
                     exitCode = 1;
                 return await FinishAsync(exitCode).ConfigureAwait(false);
             }

@@ -822,6 +822,13 @@ internal static partial class WordExpansion
                     .ConfigureAwait(false);
                 var value = ShellValue.Empty;
                 var isSet = target != null && target.TryRead(scope.Variables, out value);
+                if (target is { Name.IsEmpty: true } && reference.Kind == VariableReferenceKind.Name
+                    && parsed.Kind == BracedParameterOperatorKind.AssignDefault && modifier == ParameterModifier.None)
+                {
+                    // A failed local lookup can still see the original global nameref spelling.
+                    var global = scope.Context.GetGlobalBindingOwner(reference.Name, scope.Variables);
+                    isSet = !ReferenceEquals(global, scope.Variables) && global.TryGetNameref(reference.Name, out value);
+                }
                 return modifier == ParameterModifier.Length
                     ? new ParameterValue(VariableReferenceKind.Name,
                         [ShellValue.FromInteger(CountParameterCharacters(value, scope))], true, null, null)

@@ -1276,7 +1276,7 @@ public sealed partial class Variables
     /// <summary>Publishes an already admitted indexed array without copying its storage.</summary>
     internal bool TryAssignResolvedIndexedArray(BindingName resolved, IndexedArray array)
     {
-        if (resolved.IsEmpty || IsReadonly(resolved))
+        if (resolved.IsEmpty || IsReadonlyBinding(resolved))
             return false;
         ReplaceValue(resolved, new IndexedSlot(array));
         return true;
@@ -1301,9 +1301,9 @@ public sealed partial class Variables
     /// <summary>Applies admitted records to the selected sparse array after input has settled.</summary>
     internal bool TryUpdateResolvedIndexedArray(
         BindingName resolved, uint origin, IReadOnlyList<ShellValue> values,
-        EvaluationMemory memory, CancellationToken cancellationToken)
+        ShellValue? namerefValue, EvaluationMemory memory, CancellationToken cancellationToken)
     {
-        if (resolved.IsEmpty || IsReadonly(resolved) || AssociativeArrays.ContainsKey(resolved))
+        if (resolved.IsEmpty || IsReadonlyBinding(resolved) || AssociativeArrays.ContainsKey(resolved))
             return false;
         if (IndexedArrays.TryGetValue(resolved, out var array))
         {
@@ -1313,6 +1313,8 @@ public sealed partial class Variables
         else
         {
             var promoted = CreatePromotedIndexedArray(resolved, memory: null);
+            if (namerefValue is { } raw)
+                promoted.Set(default, raw);
             promoted.SetSequential(origin, values, memory: null, CancellationToken.None);
             ReplaceValue(resolved, new IndexedSlot(promoted));
         }
@@ -1848,10 +1850,15 @@ public sealed partial class Variables
     }
 
     internal NamerefAssignmentFailure GetNamerefAssignmentFailure(
-        BindingName sourceName, BindingName selectedName, ShellValue value, EvaluationMemory memory)
+        BindingName sourceName, BindingName selectedName, ShellValue value, EvaluationMemory memory) =>
+        TryResolveBinding(selectedName, selectOwner: null, out var binding)
+            ? GetNamerefAssignmentFailure(sourceName, binding, value, memory)
+            : NamerefAssignmentFailure.None;
+
+    internal static NamerefAssignmentFailure GetNamerefAssignmentFailure(
+        BindingName sourceName, VariableBinding binding, ShellValue value, EvaluationMemory memory)
     {
-        if (!TryResolveBinding(selectedName, selectOwner: null, out var binding)
-            || !binding.IsUnsetNameref)
+        if (!binding.IsUnsetNameref)
             return NamerefAssignmentFailure.None;
         if (binding.Name != sourceName)
             return NamerefAssignmentFailure.IndirectUnsetTarget;

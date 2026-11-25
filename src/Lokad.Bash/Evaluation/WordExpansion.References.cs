@@ -290,13 +290,17 @@ internal static partial class WordExpansion
     private static async Task<NamerefAssignmentResult> PrepareNamerefAssignmentAsync(
         BindingName name, ShellValue value, AssignmentOperator operation, ScopedEvaluation scope, ExpansionFailureKind failure)
     {
-        if (!scope.Variables.TryResolveBinding(name, selectOwner: null, out _)
-            && scope.Context.TryResolveCircularBinding(name, scope.Variables, out var circularBinding))
+        if (!scope.Variables.TryResolveBinding(name, selectOwner: null, out var selectedBinding))
         {
             await scope.Effects.ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
-            return await AssignSelectedAsync(circularBinding).ConfigureAwait(false);
+            if (!scope.CanExpand)
+                return new(NamerefAssignmentAction.Fail, value);
+            if (scope.Context.TryResolveCircularBinding(name, scope.Variables, out var circularBinding))
+                return await AssignSelectedAsync(circularBinding).ConfigureAwait(false);
+            scope.Effects.SetFatalExpansionError(failure);
+            return new(NamerefAssignmentAction.Fail, value);
         }
-        switch (scope.Variables.GetNamerefAssignmentFailure(name, name, value, scope.Effects.Memory))
+        switch (Variables.GetNamerefAssignmentFailure(name, selectedBinding, value, scope.Effects.Memory))
         {
             case NamerefAssignmentFailure.None:
                 return new(NamerefAssignmentAction.Assign, value);

@@ -320,7 +320,7 @@ public sealed partial class Variables
         internal long SavedBytes { get; }
 
         internal IndexedInputAssignment(Variables owner, BindingName name, bool preserve, bool resetAttributes,
-            EvaluationMemory memory)
+            ShellValue? namerefValue, EvaluationMemory memory)
         {
             _owner = owner;
             _name = name;
@@ -337,6 +337,8 @@ public sealed partial class Variables
                 ? indexed.Value.Clone() : new IndexedArray(isInitialized: true);
             if (preserve && _previous is ScalarSlot scalar)
                 staged.Set(default, scalar.Value);
+            else if (preserve && namerefValue is { } raw)
+                staged.Set(default, raw);
             staged.MarkInitialized();
             if (resetAttributes)
                 owner.ClearBinding(name);

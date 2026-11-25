@@ -167,6 +167,17 @@ Circular nameref warnings report the reached command line and the current
 reader's filename, when present. Compound declarations report their lookup
 warnings after initializer expansion. A circular `readonly -n` assignment
 reports the lookup and assignment warnings and skips the attribute lookup.
+A bare assignment through a cycle with no fallback discards the
+current command unit. A parameter default through that cycle reports the
+read and write warnings and returns status 2 at the root, or 1 from `eval`
+or `source`. A default read through a local cycle can see the raw global
+nameref spelling and therefore skip its operand. `read`, `printf -v`, and
+`getopts` report rejected writes as command failures. A rejected `printf %n`
+write reports its warnings and leaves formatting available.
+Indexed input through a local cycle writes to the global binding for the
+authored name. `read -a` and `mapfile` preserve the local references. When a
+global nameref becomes an indexed array under `mapfile -O`, its target
+spelling occupies element zero unless the input writes that element.
 An ordinary local redeclaration through an existing local nameref can create
 a local for its whole-name referent. A readonly reference can select a writable
 referent. A readonly local in an enclosing function can be shadowed, and `-I`

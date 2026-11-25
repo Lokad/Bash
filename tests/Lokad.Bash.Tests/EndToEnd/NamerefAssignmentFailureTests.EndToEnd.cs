@@ -15,6 +15,68 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
     private const string LoadedCircularFallbackWarnings = CircularDeclarationWarnings
         + "/script: line 1: warning: s: circular name reference\n/script: line 1: warning: r: circular name reference\n";
 
+    [Theory]
+    [InlineData("first=new; printf unreachable", 1, 1)]
+    [InlineData("first+=new || printf unreachable", 1, 1)]
+    [InlineData("f(){ first=new; printf unreachable; }; f; printf unreachable", 1, 1)]
+    [InlineData("printf '%s' \"${first:=new}\"; printf unreachable", 2, 2)]
+    public async Task CircularWritesWithoutFallbackDiscardTheCommandUnit(string body, int status, int warnings)
+    {
+        var result = await EvaluationTestHelper.RunAsync("declare -n first=second second=first\n" + body
+            + "\nprintf '<%s>\\n' \"$?\"; declare -p first second");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}>\ndeclare -n first=\"second\"\ndeclare -n second=\"first\"\n", result.StdOut);
+        Assert.Equal(string.Concat(Enumerable.Repeat("line 2: warning: first: circular name reference\n", warnings)), result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("eval 'printf \"%s\" \"${first:=new}\"; printf unreachable'", "line 2: ")]
+    [InlineData("source ./unit", "./unit: line 1: ")]
+    public async Task CircularDefaultsWithoutFallbackReturnOneFromALoadedReader(string invocation, string prefix)
+    {
+        var result = await EndToEndHarness.RunScriptAsync("declare -n first=second second=first\n" + invocation
+            + "; printf '<%s>' \"$?\"", EndToEndHarness.BuildTree([("/unit", "printf '%s' \"${first:=new}\"; printf unreachable\n")]));
+
+        var warning = prefix + "warning: first: circular name reference\n";
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", result.Host.StandardOutput.TextContent);
+        Assert.Equal(warning + warning, result.Host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task CircularDefaultReadsTheOuterNamerefSpellingBeforeExpandingItsOperand()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -n first=second second=first
+            f(){
+                local -n first=third third=first
+                printf '<%s>' "${first:=$(printf forbidden >&2; printf new)}"
+            }; f
+            declare -p first
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<second>declare -n first=\"second\"\n", result.StdOut);
+        Assert.Equal("line 3: warning: first: circular name reference\nline 3: warning: first: circular name reference\n"
+            + "line 4: warning: first: circular name reference\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("read -r first <<<payload", 1, 1)]
+    [InlineData("printf -v first '%s' value", 1, 1)]
+    [InlineData("printf '%n' first", 0, 2)]
+    [InlineData("getopts x first -x", 1, 1)]
+    public async Task BuiltinsReportCircularOutputWithTheirOwnStatus(string command, int status, int warnings)
+    {
+        var result = await EvaluationTestHelper.RunAsync("declare -n first=second second=first\n" + command
+            + "; printf '<%s>\\n' \"$?\"; declare -p first");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{status}>\ndeclare -n first=\"second\"\n", result.StdOut);
+        Assert.Equal(string.Concat(Enumerable.Repeat("line 2: warning: first: circular name reference\n", warnings)), result.StdErr);
+    }
+
     [Fact]
     public async Task PrintfPublishesFormatCountBeforeRejectingAnUnsetElementDestination()
     {

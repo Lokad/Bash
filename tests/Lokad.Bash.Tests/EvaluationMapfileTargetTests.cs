@@ -36,6 +36,29 @@ public sealed class EvaluationMapfileTargetTests
     }
 
     [Theory]
+    [InlineData("mapfile -t -O 1 first <<<7", "[0]=\"other\" [1]=\"7\"")]
+    [InlineData("mapfile -t -O 1 -C ':' -c 1 first <<<7", "[0]=\"other\" [1]=\"7\"")]
+    [InlineData("read -a first <<< '7 8'", "[0]=\"7\" [1]=\"8\"")]
+    public async Task IndexedInputPublishesToTheSavedBindingBehindACircularLocal(string command, string elements)
+    {
+        var result = await EndToEndHarness.RunScriptAsync($$"""
+            readonly other=kept; declare -nx first=other
+            f() {
+                local -n first=second second=first
+                {{command}}
+                printf '<%s>' "$?"; declare -p first second
+            }; f
+            declare -p first other
+            """, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0>declare -nx first=\"second\"\ndeclare -n second=\"first\"\n"
+            + $"declare -ax first=({elements})\ndeclare -r other=\"kept\"\n", result.Host.StandardOutput.TextContent);
+        Assert.Equal("line 4: warning: first: circular name reference\n", result.Host.StandardError.TextContent);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
