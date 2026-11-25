@@ -162,6 +162,13 @@ apply to the selected declaration binding before a deferred selector runs.
 A rejected selector leaves those attributes on that binding. Expansions
 that already ran while constructing the command's fields see the earlier
 attributes.
+When the local nameref already points to an array element, the complete
+target spelling can name a separate local array. Readonly on the alias or
+on the underlying array leaves that declaration available. An empty
+selector with `-n` selects that local before rejecting the nameref flag.
+A nonempty replacement initializer in that form is validated as a nameref
+target before the array can be prepared. An append follows selector handling.
+A nonempty selector with `-n` fails before that selection or selector evaluation.
 
 For a whole-name `local +n` declaration, a target spelling that has no
 binding becomes a local of its own. A readonly alias can take this path and

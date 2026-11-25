@@ -255,6 +255,8 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [Theory]
     [InlineData("declare -n arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
         "<1>\ndeclare -a arr=()\n", "line 1: arr[]: bad array subscript\n")]
+    [InlineData("arr=old; declare -n 'arr[]=two words'; printf '<%s>\\n' \"$?\"; declare -p arr",
+        "<1>\ndeclare -- arr=\"old\"\n", "line 1: declare: `two words': invalid variable name for name reference\n")]
     [InlineData("declare arr; declare -n arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",
         "<1>\ndeclare -a arr\n", "line 1: arr[]: bad array subscript\n")]
     [InlineData("declare -i arr=3; declare -nx arr[]=target; printf '<%s>\\n' \"$?\"; declare -p arr",

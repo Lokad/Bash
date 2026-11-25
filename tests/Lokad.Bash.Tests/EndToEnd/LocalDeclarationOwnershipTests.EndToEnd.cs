@@ -144,6 +144,56 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("local -n ref='items[3]'", "local -ni 'ref[]=value'", ":a",
+        "ref: reference variable cannot be an array")]
+    [InlineData("local -n indirect='items[3]' ref=indirect", "declare -An ref[]=value", ":A",
+        "ref: reference variable cannot be an array")]
+    [InlineData("local -nr ref='items[3]'", "typeset -n ref[]=value", ":a",
+        "ref: reference variable cannot be an array")]
+    [InlineData("local -n ref='items[3]'", "local -n 'ref[i++]=value'", "third:",
+        "ref[i++]: reference variable cannot be an array")]
+    [InlineData("local -n ref='items[3]'", "local -ni 'ref[]=i++'", "third:",
+        "`i++': invalid variable name for name reference")]
+    [InlineData("local -n ref='items[3]'", "local -n 'ref[]+=two words'", ":a",
+        "ref: reference variable cannot be an array")]
+    [InlineData("local -n ref='items[3]'", "local -n 'ref[i++]=two words'", "third:",
+        "ref[i++]: reference variable cannot be an array")]
+    public async Task RejectedLocalNamerefElementDeclarationSelectsTheCompleteTargetSpelling(
+        string setup, string declaration, string after, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "ref=outer; items=([3]=third); i=0\n"
+            + $"f(){{ {setup}; {declaration}; "
+            + "printf '<%s:%s><%s:%s><%s>\\n' \"$?\" \"$i\" \"$ref\" \"${ref@a}\" \"${items[3]}\"; }\n"
+            + "f; printf '<%s:%s>\\n' \"$ref\" \"${items[3]}\"");
+
+        Assert.Equal($"<1:0><{after}><third>\n<outer:third>\n", result.StdOut);
+        var command = declaration[..declaration.IndexOf(' ')];
+        Assert.Equal($"line 2: {command}: {error}\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -nr ref='items[3]'", "local 'ref[i++]=value'", "third", "0:1", "value", "")]
+    [InlineData("local -ar items=([3]=inner); local -n ref='items[3]'", "local -a 'ref[i++]=value'", "inner",
+        "0:1", "value", "")]
+    [InlineData("local -nr ref='items[3]'", "local -A ref[]=value", "third", "1:0", "",
+        "line 2: ref[]: bad array subscript\n")]
+    public async Task LocalElementDeclarationChecksReadonlyOnTheCompleteTargetSpelling(
+        string setup, string declaration, string inside, string status, string value, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "ref=outer; items=([3]=third); i=0\n"
+            + $"f(){{ {setup}; {declaration}; "
+            + "printf '<%s:%s><%s><%s>\\n' \"$?\" \"$i\" \"$ref\" \"${items[3]}\"; }\n"
+            + "f; printf '<%s:%s>\\n' \"$ref\" \"${items[3]}\"");
+
+        Assert.Equal($"<{status}><{value}><{inside}>\n<outer:third>\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("local -i 'ref[${dest@a}]=j++'", "<0:1><missing><0>")]
     [InlineData("local -i \"ref[${dest@a}]=j++\"", "<0:1><0><missing>")]
     public async Task LocalElementInitializerObservesAttributesAtTheSelectorExpansionPhase(
