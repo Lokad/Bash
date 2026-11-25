@@ -112,10 +112,8 @@ public sealed class DirectoryNavigationHostTests
         Assert.Equal(0, memory.ReservedBytes);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DirectoryStackMemoryFollowsLivePathsAndPendingOutput(bool measureOutput)
+    [Fact]
+    public async Task DirectoryStackMemoryFollowsLivePathsAndPendingOutput()
     {
         var paths = Enumerable.Range(0, 24).Select(index => "/" + index + new string('é', 640)).ToArray();
         await using var host = new TestHost();
@@ -149,18 +147,15 @@ public sealed class DirectoryNavigationHostTests
         await evaluation.Completion;
 
         Assert.True(retainedBeforeClear > 0 && retainedAfterClear > 0 && pendingOutput > 0);
-        if (measureOutput)
-        {
-            var outputBytes = Encoding.UTF8.GetByteCount(expectedOutput);
-            var delta = pendingOutput - retainedBeforeClear;
-            Assert.True(delta >= outputBytes - 1024, $"Pending output changed admission by {delta} B for {outputBytes} B of output.");
-        }
-        else
-        {
-            var lowerBound = 2 * paths.Take(paths.Length - 1).Sum(path => path.Length);
-            var delta = retainedBeforeClear - retainedAfterClear;
-            Assert.True(delta >= lowerBound, $"Clearing the stack retired {delta} B for {lowerBound} B of path text.");
-        }
+        var outputBytes = Encoding.UTF8.GetByteCount(expectedOutput);
+        var pendingOutputDelta = pendingOutput - retainedBeforeClear;
+        var clearedPathLowerBound = 2 * paths.Take(paths.Length - 1).Sum(path => path.Length);
+        var clearedPathDelta = retainedBeforeClear - retainedAfterClear;
+        Assert.Multiple(
+            () => Assert.True(pendingOutputDelta >= outputBytes - 1024,
+                $"Pending output changed admission by {pendingOutputDelta} B for {outputBytes} B of output."),
+            () => Assert.True(clearedPathDelta >= clearedPathLowerBound,
+                $"Clearing the stack retired {clearedPathDelta} B for {clearedPathLowerBound} B of path text."));
         Assert.Equal("@full" + expectedOutput + "@idle", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
