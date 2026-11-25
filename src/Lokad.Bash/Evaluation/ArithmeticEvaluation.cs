@@ -883,17 +883,22 @@ public static partial class ArithmeticEvaluation
                 return false;
             }
 
-            var cached = _operand.Syntax is { } syntax && syntax.TryGetReference(_index, out var retained)
-                ? retained : ReadReferenceSyntax(ShellSource.FromBytes(_expression.Bytes), _index, PeekToken(out _).Length, _memory);
-            if (cached.Bracket >= 0)
+            var cached = default(CachedReference);
+            var hasCached = _operand.Syntax?.TryGetReference(_index, out cached) == true;
+            var nameLength = hasCached ? 0 : PeekToken(out _).Length;
+            var bracket = hasCached ? cached.Bracket : _index + nameLength;
+            var source = ShellSource.FromBytes(_expression.Bytes);
+            if (_operand.Subscripts.Count != 0 && bracket >= 0 && _operand.Subscripts.TryGetValue(bracket, out var prepared))
             {
-                if (_operand.Subscripts.TryGetValue(cached.Bracket, out var prepared))
-                {
-                    reference = new ArithmeticReference(VariableReference.ForElement(cached.Syntax.Name, prepared.Source), prepared.Expansion);
-                    ConsumeToken(cached.Bracket + prepared.Expansion.Value.Bytes.Length + 2 - _index);
-                    return true;
-                }
+                // Preparation recorded the bracket offset before inserting the expanded bytes.
+                // Those bytes can include shell punctuation and do not define the selector boundaries.
+                var name = hasCached ? cached.Syntax.Name : ReadReferenceName(source, _index, nameLength, _memory);
+                reference = new ArithmeticReference(VariableReference.ForElement(name, prepared.Source), prepared.Expansion);
+                ConsumeToken(bracket + prepared.Expansion.Value.Bytes.Length + 2 - _index);
+                return true;
             }
+            if (!hasCached)
+                cached = ReadReferenceSyntax(source, _index, nameLength, _memory);
             ConsumeToken(cached.End - _index);
             if (cached.IsIncomplete)
             {

@@ -9,6 +9,50 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ArithmeticOperandTests
 {
+    [Theory]
+    [InlineData("map[$key]+1")]
+    [InlineData("1+map[$key]")]
+    public async Task EvaluatingPreparedSelectorsTreatsExpandedBytesAsData(string expression)
+    {
+        var evaluation = new Eval(Parser.Parse(":"));
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TryDeclareResolvedArray("map", ArrayKind.Associative, ScalarArrayPromotion.DiscardValue));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+
+        var plain = await ReadAsync(ShellValue.FromText("ordinary map key"));
+        var punctuation = await ReadAsync(ShellValue.FromText("$(printf marker)"));
+        Assert.Equal(plain, punctuation);
+        Assert.Equal(0, governor.ReservedBytes);
+
+        async Task<long> ReadAsync(ShellValue key)
+        {
+            Assert.True(variables.TrySetScalar("key", key));
+            using var command = evaluation.Memory.BeginCommand(scope);
+            var operand = Assert.IsType<ArithmeticOperand>(await WordExpansion.PrepareArithmeticAsync(
+                ShellSource.FromText(expression), scope, ExpansionPurpose.ArithmeticSource));
+            Assert.Null(operand.Syntax);
+            using var scratch = new MemoryCapacity(owner, 0);
+            var reads = 0;
+            var result = await ArithmeticEvaluation.EvaluateAsync<string>(operand, Bind,
+                static (_, _, _) => throw new InvalidOperationException("Unexpected write"), scratch, CancellationToken.None);
+            Assert.Equal(new ArithmeticResult(8, null), result);
+            Assert.Equal(1, reads);
+            return scratch.Bytes;
+
+            ValueTask<ArithmeticBinding<string>> Bind(ArithmeticReference reference, ArithmeticReferenceUse use)
+            {
+                reads++;
+                Assert.Equal(ArithmeticReferenceUse.Read, use);
+                Assert.Equal((BindingName)"map", reference.Syntax.Name);
+                Assert.Equal("$key", reference.Syntax.Subscript.ToUtf8String());
+                Assert.Equal(new ExpandedArraySubscript(key, QuoteForArithmetic: true), reference.ExpandedSubscript);
+                return ValueTask.FromResult<ArithmeticBinding<string>>(new ArithmeticBinding<string>.Bound("map", 7));
+            }
+        }
+    }
+
     [Fact]
     public async Task PreparingAnExpandedOperandKeepsItsBackingChargedToTheCommand()
     {

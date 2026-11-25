@@ -171,8 +171,7 @@ public static partial class ArithmeticEvaluation
 
     private static CachedReference ReadReferenceSyntax(ShellSource source, int start, int nameLength, MemoryCapacity? memory)
     {
-        memory?.Grow(checked(4L * nameLength));
-        var name = Utf8Text.Decode(source.Bytes.Slice(start, nameLength));
+        var name = ReadReferenceName(source, start, nameLength, memory);
         var reference = VariableReference.ForName(name);
         var end = start + nameLength;
         if (end == source.Length || source.AsSpan()[end] != (byte)'[')
@@ -182,6 +181,12 @@ public static partial class ArithmeticEvaluation
             return new CachedReference(reference, end, bracket, true);
         reference = VariableReference.ForElement(name, source.Slice(bracket + 1, closing - bracket - 1));
         return new CachedReference(reference, closing + 1, bracket, false);
+    }
+
+    private static BindingName ReadReferenceName(ShellSource source, int start, int length, MemoryCapacity? memory)
+    {
+        memory?.Grow(checked(4L * length));
+        return Utf8Text.Decode(source.Bytes.Slice(start, length));
     }
 
     /// <summary>Immutable lexical decisions owned by source syntax; no binding or execution state is retained.</summary>
