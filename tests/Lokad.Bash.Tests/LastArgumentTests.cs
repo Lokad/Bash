@@ -61,6 +61,26 @@ public sealed class LastArgumentTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("export item[0]+=b", "<1:item[0]:unset>", "line 1: export: `item[0]': not a valid identifier\n")]
+    [InlineData("command readonly item[0]={a,b}", "<1:item[0]:unset>",
+        "line 1: readonly: `item[0]': not a valid identifier\nline 1: readonly: `item[0]': not a valid identifier\n")]
+    [InlineData("export 'item[0]'=b keep=yes", "<1:keep=yes:yes>",
+        "line 1: export: `item[0]': not a valid identifier\n")]
+    [InlineData("export item[0]=b 2>&-", "<1:item[0]:unset>", "")]
+    [InlineData("export(){ :; }; export item[0]={a,b}", "<0:item[0]=b:unset>", "")]
+    public async Task RejectedFinalElementAssignmentPublishesTheName(string command, string output, string error)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(command + "\nprintf '<%s:%s:%s>' \"$?\" \"$_\" \"${keep-unset}\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ReadonlyLastArgumentKeepsThePreviousBinding()
     {

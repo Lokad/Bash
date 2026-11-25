@@ -176,11 +176,11 @@ public sealed class EvaluationBraceExpansionTests
     [Fact]
     public async Task GeneratedBacktickWithUnquotedSuffixDiagnosesIncompleteSubstitution()
     {
-        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' prefix{Z..a}suffix");
+        var result = await EvaluationTestHelper.RunAsync(":\nprintf '<%s>' \\\nprefix{Z..a}suffix");
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("bad substitution: no closing \"`\" in `suffix\n", result.StdErr);
+        Assert.Equal("line 2: bad substitution: no closing \"`\" in `suffix\n", result.StdErr);
     }
 
     [Theory]
@@ -208,7 +208,19 @@ public sealed class EvaluationBraceExpansionTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("bad substitution: no closing \"`\" in `" + suffix + "\n", result.StdErr);
+        Assert.Equal("line 1: bad substitution: no closing \"`\" in `" + suffix + "\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(":\neval 'printf %s p{Z..a}suffix\nprintf next'", 3)]
+    [InlineData(":\neval ':\n:\nprintf %s p{Z..a}suffix\nprintf next'", 7)]
+    public async Task GeneratedBacktickUsesTheEvalReaderLine(string script, int line)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("next", result.StdOut);
+        Assert.Equal($"line {line}: bad substitution: no closing \"`\" in `suffix\n", result.StdErr);
     }
 
     [Theory]
@@ -292,7 +304,7 @@ public sealed class EvaluationBraceExpansionTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(":1", host.StandardOutput.TextContent);
         Assert.Equal("x", host.ReadFile("/effect"));
-        Assert.Equal("bad substitution: no closing \"`\" in `\"$(printf ok; printf x >> effect)\"\n",
+        Assert.Equal("line 1: bad substitution: no closing \"`\" in `\"$(printf ok; printf x >> effect)\"\n",
             host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, governor.ReservedBytes);
@@ -306,7 +318,7 @@ public sealed class EvaluationBraceExpansionTests
             "printf prior >first\nprintf '%s' p{Z..a}s >body\nprintf tail >after", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("bad substitution: no closing \"`\" in `s\n", host.StandardError.TextContent);
+        Assert.Equal("line 2: bad substitution: no closing \"`\" in `s\n", host.StandardError.TextContent);
         Assert.Equal("prior", host.ReadFile("/first"));
         Assert.Equal("tail", host.ReadFile("/after"));
         Assert.False(host.FileExists("/body"));

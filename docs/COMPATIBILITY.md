@@ -744,6 +744,8 @@ during application, preserving any changes already applied. After `-`,
 without arguments records its name, and a command with only assignments or
 redirections records an empty value. Word and redirection expansion can read the
 previous value. Function calls publish their invocation argument on return.
+If `export` or `readonly` rejects a final element assignment, it records the
+element name as the last argument.
 Subshell and pipeline commands keep their own updates. The binding preserves
 bytes and follows ordinary variable assignment rules, including readonly
 diagnostics and local bindings.

@@ -2303,9 +2303,9 @@ public sealed partial class Evaluation : IFileTester
             const string NamerefArrayError = "reference variable cannot be an array";
             var exitCode = 0;
             List<Variables.CommandBindings>? exposedPrefixes = null;
-            foreach (var preparedOperand in operands)
+            for (var index = 0; index < operands.Count; index++)
             {
-                var operand = preparedOperand;
+                var operand = operands[index];
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
                     continue;
                 if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference)
@@ -2319,6 +2319,9 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (reference.Kind != VariableReferenceKind.Name && setsNamedAttribute)
                 {
+                    // A rejected assignment to an element leaves its name as the argument.
+                    if (operand.Value.HasValue && index == operands.Count - 1)
+                        lastArgument = operand.Name;
                     await DiagnoseQuotedAsync(operand.Name, "not a valid identifier").ConfigureAwait(false);
                     continue;
                 }
@@ -4444,7 +4447,7 @@ public sealed partial class Evaluation : IFileTester
 
     internal Task ReportBraceExpansionFailureAsync(ShellValue message, ScopedEvaluation scope) =>
         ReportFatalExpansionAsync([ShellValue.FromText("bad substitution")], [message], ExpansionFailureKind.WordSyntax,
-            GetNamedSourceDiagnosticPrefix(scope.Context));
+            GetCommandDiagnosticPrefix(scope));
 
     private Task ReportUnitExpansionFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message, ScopedEvaluation scope,
         ExpansionFailureKind kind, SyntaxDiagnosticPrefix prefix)
