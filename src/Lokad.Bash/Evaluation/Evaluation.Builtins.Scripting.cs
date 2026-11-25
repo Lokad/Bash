@@ -314,11 +314,13 @@ public sealed partial class Evaluation
         var directPipelineReader = pipelineReader && !nestedPipelineReader;
         var nestedLoadedReader = IsNestedLoadedReader(kind);
         var outermostLoadedReader = nestedLoadedReader && !scope.InNestedCommandUnits;
+        var enclosingReaderTiming = scope.ReaderEntryTiming;
         scope = scope with { InEvalReader = kind == ScriptExecutionKind.Eval };
         if (nestedLoadedReader)
             scope = scope with
             {
                 InNestedCommandUnits = true,
+                ReaderEntryTiming = scope.Timing,
                 LoadedSyntaxFunctionDepth = scope.Context.FunctionContext?.Depth ?? 0,
                 LoadedReaderIgnoresErrexit = scope.Context.ErrexitIgnored
             };
@@ -402,8 +404,7 @@ public sealed partial class Evaluation
                     if (stopAfterPrimaryDiagnostic)
                     {
                         // The parser exits from the active reader, abandoning its pending timing reports.
-                        for (var timing = scope.Timing; timing != null; timing = timing.Enclosing)
-                            timing.Settled = true;
+                        SuppressPendingTimings(scope.Timing);
                         return await RunExitTrapAsync(scope, EvaluationResult.Exit(2)).ConfigureAwait(false);
                     }
                     if (failedUnit.QuotedRecovery is { } recovery)
@@ -477,6 +478,15 @@ public sealed partial class Evaluation
                         resetStatus: IsLoadedReader(kind) && result.DiscardsCompoundRedirection).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {
+                    if (nestedLoadedReader && _state.FatalExpansion is { UnwindsLoadedReader: true })
+                    {
+                        // Timers around this invocation run through its still-active descriptors.
+                        await ReportPendingTimingsAsync(scope.Timing, enclosingReaderTiming).ConfigureAwait(false);
+                        if (outermostLoadedReader && _state.ForkKind != ShellForkKind.CommandSubstitution)
+                            return await RunExitTrapAsync(scope with { Timing = null }, result, ExitTrapKind.Expansion)
+                                .ConfigureAwait(false);
+                        return result;
+                    }
                     if (outermostLoadedReader && result.DefersLoadedErrexit && result.DeferredErrexit == null)
                         return await RunErrexitExitTrapAsync(scope, result, fromLoadedReader: true).ConfigureAwait(false);
                     if (directPipelineReader && result.ExitsNestedPipelineReader)

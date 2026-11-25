@@ -18,6 +18,48 @@ public sealed class TrapCommandUnitTests
         "printf \"<exit:%s:%s:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" \"$1\" \"${x-unset}\"; printf handler >&2";
 
     [Theory]
+    [InlineData(false, "<exit:1:1:reader:unset>", "timed\n", "timed\n", "handler")]
+    [InlineData(true, "<exit:1:1:inner:unset>", "handler", "", "")]
+    public async Task RequiredParameterExitSelectsTheReaderAndSettlesItsTimers(
+        bool errexit, string output, string reachedSuffix, string invocationTiming, string readerOutput)
+    {
+        const string Diagnostic = "./inner.sh: line 1: missing: required\n";
+        var script = (errexit ? "set -e" : "set +e") + """
+
+            set -- outer
+            TIMEFORMAT=timed
+            label=value source ./sample.sh reader 2>reader-error
+            printf skipped
+            """;
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            await using var host = new TestHost { MemoryBudget = governor };
+            host.AddFile("/sample.sh", $"trap '{PrintParserExitFrame}; return 8' EXIT\n"
+                + "time { source ./inner.sh inner 2>invocation-error; } 2>outer-error\nprintf skipped\n");
+            host.AddFile("/inner.sh", """
+                time { : "${missing:?required}"; } 2>reached-error
+                printf skipped
+                """);
+            using var owner = governor.CreateScope();
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(8, result.ExitCode);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(Diagnostic + reachedSuffix, host.ReadFile("/reached-error"));
+            Assert.Equal(invocationTiming, host.ReadFile("/invocation-error"));
+            Assert.Empty(host.ReadFileBytes("/outer-error"));
+            Assert.Equal(readerOutput, host.ReadFile("/reader-error"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "false 2>inner-error",
         "<exit:1:1:reader:unset><prefix:value>", "reader-error")]
     [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "fail() { return 7; }; fail",

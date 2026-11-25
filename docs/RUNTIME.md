@@ -624,9 +624,14 @@ mapping and returns status 1 through ordinary cleanup.
 EXIT actions retain their own flow/status policy: normal completion preserves the
 triggering status, while return/exit and errexit can replace it. They do not inherit
 tested-status suppression from the caller. Explicit exit invokes the action before
-active bindings, loop targets and redirections unwind. A required-parameter exit
-under errexit also uses its active lexical frame. Arity and recoverable expansion
-failures retain their existing unwind paths.
+active bindings, loop targets and redirections unwind. With errexit enabled, a
+required-parameter failure skips pending timing reports and uses its active
+lexical frame for EXIT. With errexit disabled, a loaded reader unwinds inner
+readers, bindings and descriptors before running EXIT in the outer reader.
+A capturing child finishes unwinding the reader invocation before running its
+action. Pending timings in the reader and around its invocation report through
+their reached descriptors. Arity and recoverable expansion failures retain
+their existing unwind paths.
 
 An unhandled status retains active positional and control-flow frames for EXIT.
 Simple failures settle the nearest reached simple invocation with restorable

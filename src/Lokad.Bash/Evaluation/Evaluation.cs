@@ -788,6 +788,7 @@ public sealed partial class Evaluation : IFileTester
                 Context = childContext.WithLoopDepth(0),
                 ErrexitRedirections = null,
                 Timing = null,
+                ReaderEntryTiming = null,
                 InNestedCommandUnits = false,
                 InDirectPipelineReader = false
             };
@@ -4249,10 +4250,9 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
         if (fatalKind is { } kind)
-            SetFatalExpansionError(kind);
+            SetScopedExpansionFailure(kind, scope);
         _state.SetHereDocumentParameterError();
-        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
-            GetHereDocumentParameterDiagnosticPrefix(scope));
+        return WriteExpansionFailureDiagnosticAsync(subject, message, GetHereDocumentParameterDiagnosticPrefix(scope), scope);
     }
 
     internal Task ReportInvalidParameterTransformAsync(ShellValue subject, ScopedEvaluation scope, bool hereDocument)
@@ -4405,10 +4405,39 @@ public sealed partial class Evaluation : IFileTester
             return Task.CompletedTask;
 
         // Publish status while the reached lexical scope is still active.
-        SetFatalExpansionError(kind);
+        SetScopedExpansionFailure(kind, scope);
         _state.LastExitCode = 1;
         PublishExpansionPipelineStatus(1, scope);
-        return WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+        return WriteExpansionFailureDiagnosticAsync(subject, message, prefix, scope);
+    }
+
+    private void SetScopedExpansionFailure(ExpansionFailureKind kind, ScopedEvaluation scope)
+    {
+        if (kind == ExpansionFailureKind.RequiredParameter)
+            SetFatalExpansionError(new ExpansionFailure(kind, 1)
+            {
+                UnwindsLoadedReader = scope.InNestedCommandUnits && !_state.ErrexitEnabled
+            });
+        else
+            SetFatalExpansionError(kind);
+    }
+
+    private Task WriteExpansionFailureDiagnosticAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
+        SyntaxDiagnosticPrefix prefix, ScopedEvaluation scope)
+    {
+        var write = WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
+        return scope.Timing != null && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter } failure
+            && (failure.UnwindsLoadedReader || _state.ErrexitEnabled)
+            ? SettleTimingAfterRequiredParameterAsync(write, scope, failure.UnwindsLoadedReader) : write;
+
+        static async Task SettleTimingAfterRequiredParameterAsync(Task diagnostic, ScopedEvaluation active, bool unwindsReader)
+        {
+            await diagnostic.ConfigureAwait(false);
+            if (unwindsReader)
+                await active.Effects.ReportPendingTimingsAsync(active.Timing, active.ReaderEntryTiming).ConfigureAwait(false);
+            else
+                SuppressPendingTimings(active.Timing);
+        }
     }
 
     private void PublishAssignmentTargetFailure(ScopedEvaluation scope)

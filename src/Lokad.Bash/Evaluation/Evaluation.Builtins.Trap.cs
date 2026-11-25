@@ -198,8 +198,7 @@ public sealed partial class Evaluation
         try
         {
             if (kind != ExitTrapKind.Completion)
-                for (var timing = scope.Timing; timing != null; timing = timing.Enclosing)
-                    await ReportTimingAsync(timing).ConfigureAwait(false);
+                await ReportPendingTimingsAsync(scope.Timing, stop: null).ConfigureAwait(false);
 
             var function = scope.Context.FunctionContext;
             var prefixes = scope.Context.GlobalPrefixes;
@@ -230,6 +229,7 @@ public sealed partial class Evaluation
                     SourceMemory = scope.Context.SourceMemory
                 },
                 Timing = null,
+                ReaderEntryTiming = null,
                 ErrexitRedirections = null,
                 InDirectPipelineReader = false
             };
@@ -254,7 +254,10 @@ public sealed partial class Evaluation
         finally
         {
             traps.EndExit();
-            _state.FatalExpansion = failure;
+            // Later command finalization reads the fatal status as the result unwinds.
+            _state.FatalExpansion = kind == ExitTrapKind.Expansion
+                && failure is { Kind: ExpansionFailureKind.RequiredParameter } required
+                    ? required with { ExitCode = result.ExitCode } : failure;
             _state.LastExitCode = result.ExitCode;
         }
 

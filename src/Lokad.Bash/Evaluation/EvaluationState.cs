@@ -56,6 +56,9 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
 
     // Argument expansion in a direct pipeline stage precedes the child boundary that resets EXIT.
     internal bool UseInheritedPipelineExitAction { get; init; }
+
+    // A required parameter with errexit off exits through the active loaded readers.
+    internal bool UnwindsLoadedReader { get; init; }
 }
 
 internal enum ExpansionErrorKind { General, HereDocumentSyntax, HereDocumentParameter }

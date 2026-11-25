@@ -77,7 +77,7 @@ public sealed partial class Evaluation
             if (result.Flow == FlowControlKind.Exit && _state.ErrexitEnabled
                 && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.InvalidParameterTransform
                     or ExpansionFailureKind.CompoundArrayIndex or ExpansionFailureKind.ArrayRead,
-                    UseInheritedPipelineExitAction: false })
+                    UseInheritedPipelineExitAction: false, UnwindsLoadedReader: false })
                 return await RunExitTrapAsync(scope, result, ExitTrapKind.Expansion).ConfigureAwait(false);
         }
         if (result.Flow == FlowControlKind.None && result.ExitCode != 0)
@@ -287,6 +287,18 @@ public sealed partial class Evaluation
         internal Variables Variables { get; } = variables;
         internal ActiveTiming? Enclosing { get; } = enclosing;
         internal bool Settled { get; set; }
+    }
+
+    private static void SuppressPendingTimings(ActiveTiming? timing)
+    {
+        for (; timing != null; timing = timing.Enclosing)
+            timing.Settled = true;
+    }
+
+    private async ValueTask ReportPendingTimingsAsync(ActiveTiming? timing, ActiveTiming? stop)
+    {
+        for (; timing != null && !ReferenceEquals(timing, stop); timing = timing.Enclosing)
+            await ReportTimingAsync(timing).ConfigureAwait(false);
     }
 
     private async ValueTask ReportTimingAsync(ActiveTiming timing)

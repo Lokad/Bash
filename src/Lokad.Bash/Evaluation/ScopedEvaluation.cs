@@ -84,6 +84,9 @@ internal readonly record struct ScopedEvaluation(
 
     internal Evaluation.ActiveTiming? Timing { get; init; }
 
+    /// <summary>Separates timers started by the active reader from its callers' timers.</summary>
+    internal Evaluation.ActiveTiming? ReaderEntryTiming { get; init; }
+
     /// <summary>Eval and source use a command-unit boundary even in a child shell.</summary>
     internal bool InNestedCommandUnits { get; init; }
 
