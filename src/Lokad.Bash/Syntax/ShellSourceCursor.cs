@@ -793,6 +793,7 @@ internal sealed class ShellScanContext
     internal bool CanReadAhead(ShellSource source) => !ScriptInput.IsEmpty && source.Bytes.Equals(ScriptInput.Bytes);
 
     internal bool ReadsCommandString { get; init; }
+    internal bool ReadQuotedRecovery { get; set; } = true;
 
     internal FinalBackslash GetFinalBackslash(ShellSource source)
     {

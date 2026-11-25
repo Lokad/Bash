@@ -224,7 +224,8 @@ public static class Parser
                     CompletedPrefix = prefix,
                     Locations = prefix != null ? tokenizer.Locations : null,
                     DiagnosticLine = header is { } reached ? tokenizer.GetLine(reached.Start) : 0,
-                    QuotedRecovery = header is { } recovery ? tokenizer.ReadQuotedRecoveryDelimiter(recovery.BodyEnd) : null,
+                    QuotedRecovery = scanContext.ReadQuotedRecovery && header is { } recovery
+                        ? tokenizer.ReadQuotedRecoveryDelimiter(recovery.BodyEnd) : null,
                     ReadDiagnostics = diagnostics
                 };
                 yield break;

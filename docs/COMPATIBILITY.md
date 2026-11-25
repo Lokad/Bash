@@ -1195,6 +1195,9 @@ can restore that mapping before EXIT.
 
 EXIT actions preserve the triggering status on ordinary completion and parse failure
 without errexit. Explicit return/exit and errexit failures can replace that status.
+Parser diagnostics from the EXIT action reader carry the `exit trap:` prefix.
+With errexit enabled when that reader reaches a syntax error, it reports the
+first parser diagnostic and stops before any same-unit recovery.
 Arithmetic/default expansion failures end their unit; assignment-target and parameter
 failures stop an errexit-enabled action. Pending loop flow skips later execution while
 still validating remaining units. Caller tested-status suppression does not apply to EXIT.

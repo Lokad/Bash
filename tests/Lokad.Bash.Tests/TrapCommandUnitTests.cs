@@ -172,6 +172,77 @@ public sealed class TrapCommandUnitTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("printf earlier\n)\n", "exit 7", 7,
+        "exit trap: line 2: syntax error near unexpected token `)'\nexit trap: line 2: `)'\n")]
+    [InlineData("printf earlier\n)\n", "set -e\nexit 7", 2,
+        "exit trap: line 2: syntax error near unexpected token `)'\n")]
+    [InlineData("set -e\nprintf earlier\n)\n", "exit 7", 2,
+        "exit trap: line 3: syntax error near unexpected token `)'\n")]
+    [InlineData("set +e\nprintf earlier\n)\n", "set -e\nfalse", 1,
+        "exit trap: line 3: syntax error near unexpected token `)'\nexit trap: line 3: `)'\n")]
+    [InlineData("printf earlier\nset -e; )\n", "exit 7", 7,
+        "exit trap: line 2: syntax error near unexpected token `)'\nexit trap: line 2: `set -e; )'\n")]
+    [InlineData("printf earlier\n[[ ( ( -z ]]\n", "set -e\nfalse", 2,
+        "exit trap: line 2: unexpected argument `]]' to conditional unary operator\n")]
+    [InlineData("printf earlier\n[[ ( ( ]]\n", "set -e\nfalse", 2,
+        "exit trap: line 2: expected `)'\n")]
+    [InlineData("printf earlier\n[[ -z \"\n", "set -e\nfalse", 2,
+        "exit trap: line 2: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("printf earlier\nif true; then :\n", "exit 7", 7,
+        "exit trap: line 3: syntax error: unexpected end of file\n")]
+    [InlineData("printf earlier\nvalue=$(printf hidden |)\n", "set -e\nfalse", 2,
+        "exit trap: line 2: syntax error near unexpected token `)'\n")]
+    public async Task ExitActionParserUsesTheReachedOptionState(string action, string ending, int status, string error)
+    {
+        var script = $"trap '{action}' EXIT\n{ending}\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            await using var host = new TestHost { MemoryBudget = governor };
+            using var owner = governor.CreateScope();
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(status, result.ExitCode);
+            Assert.Equal("earlier", host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
+    [InlineData("exit 7", 7, "earlierprefix", "exit trap: line 2: syntax error: `((1;))'\n"
+        + "exit trap: line 2: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("set -e\nfalse", 2, "earlier", "")]
+    public async Task ExitActionQuotedHeaderRecoveryUsesTheReachedOptionState(string ending, int status, string output, string recovery)
+    {
+        var result = await EvaluationTestHelper.RunAsync("trap 'printf earlier\nprintf prefix; "
+            + "value=\"$(for ((1;)); do :; done)\"\n' EXIT\n" + ending + "\n");
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal("exit trap: line 2: syntax error: arithmetic expression required\n" + recovery, result.StdErr);
+    }
+
+    [Fact]
+    public async Task ExitActionParserWritesItsLabelToTheReachedStderr()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/ending", "exit 7\n");
+        var result = await host.RunAsync("trap 'printf earlier\n)\n' EXIT\nsource ./ending 2>diagnostics\n", CancellationToken.None);
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("earlier", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./ending: exit trap: line 2: syntax error near unexpected token `)'\n"
+            + "./ending: exit trap: line 2: `)'\n", host.ReadFile("/diagnostics"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ResetDuringExitKeepsTheSavedStatus()
     {

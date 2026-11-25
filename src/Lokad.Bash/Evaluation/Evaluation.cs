@@ -4723,7 +4723,10 @@ public sealed partial class Evaluation : IFileTester
             .ConfigureAwait(false);
     }
 
-    private enum SyntaxDiagnosticOrigin { Script, ScriptLine, Eval, CommandSubstitution, ArrayAssignment }
+    private enum SyntaxDiagnosticOrigin { Script, ScriptLine, Eval, ExitTrap, CommandSubstitution, ArrayAssignment }
+
+    private bool ReportsOnlyPrimarySyntaxDiagnostic(SyntaxDiagnosticOrigin origin) =>
+        origin == SyntaxDiagnosticOrigin.ExitTrap && _state.ErrexitEnabled;
 
     private readonly struct SyntaxDiagnosticPrefix
     {
@@ -4770,6 +4773,7 @@ public sealed partial class Evaluation : IFileTester
         private ReadOnlySpan<byte> GetOrigin() => _origin switch
         {
             SyntaxDiagnosticOrigin.Eval => "eval: "u8,
+            SyntaxDiagnosticOrigin.ExitTrap => "exit trap: "u8,
             SyntaxDiagnosticOrigin.CommandSubstitution => "command substitution: "u8,
             SyntaxDiagnosticOrigin.ArrayAssignment => "array assign: "u8,
             _ => []
@@ -4814,25 +4818,30 @@ public sealed partial class Evaluation : IFileTester
         };
         // Operator lookahead can reach EOF between physical lines, leaving no text to quote.
         var hasNearToken = conditional == null || !syntax.Token.IsEmpty;
-        includeLine &= hasNearToken;
+        var primaryOnly = ReportsOnlyPrimarySyntaxDiagnostic(origin);
+        includeLine &= hasNearToken && !primaryOnly;
+        var groups = conditional?.UnclosedGroupLines;
+        var groupCount = groups?.Count ?? 0;
+        if (primaryOnly)
+            groupCount = reason.IsEmpty ? Math.Min(groupCount, 1) : 0;
+        var reportNearToken = !primaryOnly || (reason.IsEmpty && groupCount == 0);
         var tokenPrefix = conditional != null || syntax.UseNearPrefix
             ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
         if (!hasNearToken)
             tokenPrefix = "syntax error\n"u8;
         var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
         var prefixLength = prefix.Length;
-        var length = (long)prefixLength + tokenPrefix.Length;
-        if (hasNearToken)
-            length += syntax.Token.Length + 2L;
+        var length = reportNearToken
+            ? (long)prefixLength + tokenPrefix.Length + (hasNearToken ? syntax.Token.Length + 2L : 0)
+            : 0;
         var lineOffset = line - (conditional?.ReadLine ?? line);
         var reasonPrefix = reason.IsEmpty || conditional is not { } read || read.ReasonLine == read.ReadLine
             ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + read.ReasonLine);
-        var groups = conditional?.UnclosedGroupLines;
-        if (groups != null)
+        if (groupCount != 0)
         {
             // Reserve for any 32-bit line number without formatting each prefix twice.
             const int maximumLineNumberGrowth = 10;
-            length += groups.Count * (long)(prefixLength + maximumLineNumberGrowth + MissingConditionalGroup.Length);
+            length += groupCount * (long)(prefixLength + maximumLineNumberGrowth + MissingConditionalGroup.Length);
         }
         if (includeLine)
             length += prefixLength + (long)syntax.Line.Length + 3;
@@ -4852,20 +4861,23 @@ public sealed partial class Evaluation : IFileTester
         }
         if (groups != null)
         {
-            foreach (var groupLine in groups)
+            for (var index = 0; index < groupCount; index++)
             {
-                var groupPrefix = lineOffset + groupLine == line
-                    ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + groupLine);
+                var groupLine = lineOffset + groups[index];
+                var groupPrefix = groupLine == line ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, groupLine);
                 groupPrefix.AppendTo(diagnostic);
                 diagnostic.Append(MissingConditionalGroup);
             }
         }
-        prefix.AppendTo(diagnostic);
-        diagnostic.Append(tokenPrefix);
-        if (hasNearToken)
+        if (reportNearToken)
         {
-            AppendToken(syntax.Token.AsSpan());
-            diagnostic.Append("'\n"u8);
+            prefix.AppendTo(diagnostic);
+            diagnostic.Append(tokenPrefix);
+            if (hasNearToken)
+            {
+                AppendToken(syntax.Token.AsSpan());
+                diagnostic.Append("'\n"u8);
+            }
         }
         if (includeLine)
         {
@@ -4899,7 +4911,10 @@ public sealed partial class Evaluation : IFileTester
             : "syntax error: arithmetic expression required\n"u8;
         var expressionPrefix = "syntax error: `(("u8;
         var expressionSuffix = "))'\n"u8;
-        var length = 2L * prefix.Length + reason.Length + expressionPrefix.Length + header.Expression.Length + expressionSuffix.Length;
+        var includeExpression = !ReportsOnlyPrimarySyntaxDiagnostic(origin);
+        var length = (long)prefix.Length + reason.Length;
+        if (includeExpression)
+            length += prefix.Length + expressionPrefix.Length + (long)header.Expression.Length + expressionSuffix.Length;
         if (!TryReserveDiagnostic(length, out var reservation))
             throw new MemoryBudgetExceededException();
 
@@ -4907,8 +4922,11 @@ public sealed partial class Evaluation : IFileTester
         using var diagnostic = ByteMemoryBuilder.CreateUnaccounted((int)length);
         prefix.AppendTo(diagnostic);
         diagnostic.Append(reason);
-        prefix.AppendTo(diagnostic);
-        diagnostic.Append(expressionPrefix).Append(header.Expression.AsSpan()).Append(expressionSuffix);
+        if (includeExpression)
+        {
+            prefix.AppendTo(diagnostic);
+            diagnostic.Append(expressionPrefix).Append(header.Expression.AsSpan()).Append(expressionSuffix);
+        }
         await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
     }
 
@@ -4946,11 +4964,18 @@ public sealed partial class Evaluation : IFileTester
         lineOffset += failure.CaptureLineOffset.GetValueOrDefault();
         if (origin == SyntaxDiagnosticOrigin.Script)
             origin = SyntaxDiagnosticOrigin.ScriptLine;
+        var primaryOnly = ReportsOnlyPrimarySyntaxDiagnostic(origin);
         if (failure.DoubleQuoted is { } doubleQuoted)
+        {
             await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.QuoteLine),
                 doubleQuoted ? MissingDoubleQuote : MissingSingleQuote).ConfigureAwait(false);
+            if (primaryOnly)
+                return;
+        }
         await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.Diagnostic.ReasonLine),
             GetConditionalEndOfInputMessage(failure.Diagnostic.Error, failure.DoubleQuoted.HasValue)).ConfigureAwait(false);
+        if (primaryOnly)
+            return;
         if (failure.Diagnostic.UnclosedGroupLines is { } groups)
             foreach (var groupLine in groups)
                 await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(groupLine), MissingConditionalGroup).ConfigureAwait(false);
@@ -5027,7 +5052,7 @@ public sealed partial class Evaluation : IFileTester
             _ => Utf8Text.EncodeLine($"unexpected EOF while looking for matching `{endOfInput.Delimiter}'")
         };
         await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, message).ConfigureAwait(false);
-        if (endOfInput.Conditional is { } conditional)
+        if (endOfInput.Conditional is { } conditional && !ReportsOnlyPrimarySyntaxDiagnostic(origin))
         {
             var lineOffset = line - conditional.ReadLine;
             await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, lineOffset + conditional.ReasonLine),

@@ -293,8 +293,12 @@ public sealed partial class Evaluation
 
     private Task<EvaluationResult> EvaluateCommandUnitsAsync(
         ShellSource source, ScopedEvaluation scope, ScriptExecutionKind kind) =>
-        EvaluateCommandUnitsAsync(source, scope, kind,
-            kind == ScriptExecutionKind.Eval ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.Script);
+        EvaluateCommandUnitsAsync(source, scope, kind, kind switch
+        {
+            ScriptExecutionKind.Eval => SyntaxDiagnosticOrigin.Eval,
+            ScriptExecutionKind.Trap => SyntaxDiagnosticOrigin.ExitTrap,
+            _ => SyntaxDiagnosticOrigin.Script
+        });
 
     /// <summary>Shares complete-command parsing and execution across the public entry point, source, eval and EXIT actions.</summary>
     private async Task<EvaluationResult> EvaluateCommandUnitsAsync(
@@ -332,6 +336,9 @@ public sealed partial class Evaluation
             var parent = scope.Context.SourceMemory;
             var unitMemory = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent);
             scanContext.SyntaxMemory = unitMemory.SyntaxMemory;
+            // Earlier action units can change errexit before the next parse.
+            var stopAfterPrimaryDiagnostic = ReportsOnlyPrimarySyntaxDiagnostic(diagnosticOrigin);
+            scanContext.ReadQuotedRecovery = !stopAfterPrimaryDiagnostic;
             try
             {
                 if (!commands.MoveNext())
@@ -382,6 +389,8 @@ public sealed partial class Evaluation
                     }
                     else
                         await ReportSyntaxErrorAsync(failedUnit.Error).ConfigureAwait(false);
+                    if (stopAfterPrimaryDiagnostic)
+                        return EvaluationResult.Exit(2);
                     if (failedUnit.QuotedRecovery is { } recovery)
                         await ReportUnclosedDelimiterAsync(recovery.Delimiter, lineOffset + recovery.Line, path, diagnosticOrigin)
                             .ConfigureAwait(false);
@@ -406,8 +415,6 @@ public sealed partial class Evaluation
                         if (failedUnit.Failure.Kind is ParserFailureKind.ArrayQuotedSubstitutionForHeader
                             or ParserFailureKind.ArrayDelimiter)
                             return result.WithExitCode(1);
-                        if (kind == ScriptExecutionKind.Trap && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored)
-                            return EvaluationResult.Exit(2);
                         return result.WithExitCode(2);
                     }
                 }
