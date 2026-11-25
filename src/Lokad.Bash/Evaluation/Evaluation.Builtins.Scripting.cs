@@ -323,7 +323,7 @@ public sealed partial class Evaluation
             };
         var lineOffset = kind switch
         {
-            ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.EndLine) - 1,
+            ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.Line) - 1,
             ScriptExecutionKind.ArrayReaderCallback => Math.Max(1, scope.Context.Coordinates.Line) - 1,
             ScriptExecutionKind.Source or ScriptExecutionKind.Trap => 0,
             _ => scope.Context.Coordinates.Offset

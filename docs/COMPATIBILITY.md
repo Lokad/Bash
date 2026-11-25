@@ -1189,7 +1189,7 @@ lookahead. An initial assignment or redirection uses the line where that first
 element ends. Rendered word-capture diagnostics and array-reader callbacks use
 the same command coordinate. Functions defined in a script retain their defining
 source coordinates. Sourced files and EXIT action source start at line 1, and
-`eval` bases its coordinates on the calling command's end line.
+`eval` bases its coordinates on the calling command's parsed line.
 Parenthesized captures project the command coordinate into the rendered body layout.
 Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an

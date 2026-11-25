@@ -601,6 +601,65 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal($"eval: line {line}: syntax error: unexpected end of file\n", host.StandardError.TextContent);
     }
 
+    private const string EvalFirstLine = "printf \"<first:%s>\" \"$LINENO\"";
+    private const string EvalSecondLine = "printf \"<second:%s>\" \"$LINENO\"\n)\n";
+    private const string EvalLocationLead = "\n\nprintf before\n";
+    private const string EvalLocationTail = "\nprintf \"<reader:%s>\" \"$?\"\n";
+
+    [Theory]
+    [InlineData("eval", 7)]
+    [InlineData("eval --", 4)]
+    [InlineData("builtin eval", 4)]
+    [InlineData("command -p -- eval", 4)]
+    [InlineData("prefix=value \\\n  eval", 4)]
+    [InlineData("prefix='one\ntwo' eval", 5)]
+    public async Task EvalUsesTheParsedInvocationLineForCommandsAndSyntaxErrors(string invocation, int line)
+    {
+        var script = EvalLocationLead + $"{invocation} '{EvalFirstLine}\n{EvalSecondLine}'" + EvalLocationTail;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal($"before<first:{line}><second:{line + 1}><reader:2>", host.StandardOutput.TextContent);
+            Assert.Equal($"eval: line {line + 2}: syntax error near unexpected token `)'\neval: line {line + 2}: `)'\n",
+                host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task EvalWithAContinuedSecondArgumentUsesTheFirstArgumentLookahead()
+    {
+        var script = EvalLocationLead + $"eval '{EvalFirstLine};' \\\n  '{EvalSecondLine}'" + EvalLocationTail;
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before<first:4><second:4><reader:2>", host.StandardOutput.TextContent);
+        Assert.Equal("eval: line 5: syntax error near unexpected token `)'\neval: line 5: `)'\n",
+            host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task EvalBeginningWithRedirectionUsesTheReachedSourceLine()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/caller.sh", EvalLocationLead + $"2>report eval '{EvalFirstLine}\n{EvalSecondLine}'" + EvalLocationTail);
+
+        var result = await host.RunAsync("source ./caller.sh\nprintf \"<outer:%s>\" \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before<first:4><second:5><reader:2><outer:0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./caller.sh: eval: line 6: syntax error near unexpected token `)'\n"
+            + "./caller.sh: eval: line 6: `)'\n", host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("printf '<%s:%s>' \"$?\" \"${PIPESTATUS[*]}\"; (exit 7); value=", "<2:2>|7:7", 7)]
     [InlineData("printf discarded; printf unfinished >", "|2:2", 2)]
