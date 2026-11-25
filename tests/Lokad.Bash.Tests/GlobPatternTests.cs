@@ -191,6 +191,34 @@ public sealed class GlobPatternTests
     }
 
     [Theory]
+    [InlineData("", "/")]
+    [InlineData("😀//./", "/😀/.")]
+    [InlineData("//😀///../", "/😀/..")]
+    public async Task GlobSortOrdersFullPathsByUtf8WithALiteralPrefix(string prefix, string lookup)
+    {
+        string[] names = ["a", "aa", "\uE000", "\U00010000", "\U00010001"];
+        var entries = names.Reverse().Select(name => new DirectoryEntry(name, FilePathKind.File)).ToArray();
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(prefix + "*"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        using var resultMemory = new MemoryCapacity(owner, 0);
+        var listing = new GlobListing(path =>
+        {
+            Assert.Equal(lookup, path);
+            return entries;
+        });
+
+        var result = await new GlobEvaluation(pattern, ShellPath.Root, resultMemory, CancellationToken.None).EvaluateAsync(listing);
+
+        Assert.Equal(names.Select(name => prefix + name), result);
+        resultMemory.Dispose();
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("*", FilePathKind.File, "")]
     [InlineData("*/", FilePathKind.Directory, "/")]
     public async Task TerminalGlobKeepsOnlyItsOutputSpelling(string spelling, FilePathKind kind, string suffix)
