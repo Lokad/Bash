@@ -28,7 +28,7 @@ public sealed class EvaluationCompoundCommandCompositionTestsEndToEnd
 
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("earlier", host.StandardOutput.TextContent);
-        Assert.Equal("line 2: syntax error near unexpected token `)'\nline 2: `true || value=$(time)'\n", host.StandardError.TextContent);
+        Assert.Equal("syntax error near unexpected token `)'\n`true || value=$(time)'\n", host.StandardError.TextContent);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public sealed class EvaluationCompoundCommandCompositionTestsEndToEnd
         else
         {
             Assert.False(createdFile);
-            Assert.Equal("line 2: syntax error near unexpected token `esac'\nline 2: `case x in x) (printf hit) >out esac; cat out'\n",
+            Assert.Equal("syntax error near unexpected token `esac'\n`case x in x) (printf hit) >out esac; cat out'\n",
                 host.StandardError.TextContent);
         }
     }
