@@ -154,7 +154,7 @@ public sealed partial class Evaluation
             ? PositionalParametersRestorePolicy.UnlessReplaced : PositionalParametersRestorePolicy.Always;
         using var positionalScope = argumentCount == 0 ? null : scope.Variables.EnterPositionalParametersScope(
             words, argumentStart, restorePolicy);
-        return ApplyNegation(await ExecuteSourceAsync(commandName, path, scope).ConfigureAwait(false), negated);
+        return ApplyNegation(await ExecuteSourceAsync(commandName, path, scope, positionalScope).ConfigureAwait(false), negated);
 
         async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {
@@ -316,6 +316,12 @@ public sealed partial class Evaluation
         var outermostLoadedReader = nestedLoadedReader && !scope.InNestedCommandUnits;
         var enclosingReaderTiming = scope.ReaderEntryTiming;
         scope = scope with { InEvalReader = kind == ScriptExecutionKind.Eval };
+        if (outermostLoadedReader)
+            scope = scope with
+            {
+                PipelineExitReader = new PipelineExitBoundary(_state.RedirectionDepth,
+                    scope.Context.FunctionContext?.Depth ?? 0, scope.Context.CallerSource)
+            };
         if (nestedLoadedReader)
             scope = scope with
             {

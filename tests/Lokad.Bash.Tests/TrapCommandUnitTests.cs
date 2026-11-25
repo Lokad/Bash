@@ -112,6 +112,103 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InheritedPipelineExitRestoresTemporaryDescriptorMappings(bool prepared)
+    {
+        const string script = """
+            set -- outer
+            value=present
+            exec <reader-in >reader-out 2>reader-error 3>reader-aux
+            stage() {
+                local x=local
+                trap 'printf "<exit:%s:%s:%s>" "$?" "$1" "${x-unset}"; IFS= read -r item || item=eof; printf "<input:%s>" "$item"; printf handler >&2; printf auxiliary >&3' EXIT
+                : | : "${value@Z}" 2>unreached-error
+                printf "<result:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            }
+            stage inner <active-in >active-out 2>active-error 3>&-
+            printf "<parent>"
+            """;
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/reader-in", "reader\n");
+        host.AddFile("/active-in", "active\n");
+        using var owner = governor.CreateScope();
+        var result = prepared
+            ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+            : await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 7: ${value@Z}: bad substitution\n", host.ReadFile("/active-error"));
+        Assert.Equal("<result:1:0 1>", host.ReadFile("/active-out"));
+        Assert.Equal("<exit:1:outer:unset><input:reader><parent><exit:0:outer:unset><input:eof>",
+            host.ReadFile("/reader-out"));
+        Assert.Equal("handlerhandler", host.ReadFile("/reader-error"));
+        Assert.Equal("auxiliaryauxiliary", host.ReadFile("/reader-aux"));
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InheritedPipelineExitRestoresArgumentsAndDescriptorsToTheFirstLoadedReader(bool prepared)
+    {
+        var script = $$"""
+            set -- outer
+            value=present
+            trap '{{PrintParserExitFrame}}' EXIT
+            eval 'source ./sample.sh reader 2>source-error' 2>eval-error
+            printf "<parent>"
+            """;
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", """
+            set -- changed
+            stage() {
+                local x=local
+                : | : "${value@Z}"
+                printf "<result:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            }
+            stage inner 2>active-error
+
+            """);
+        var exitCode = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("<exit:1:1:outer:unset><result:1:0 1><parent><exit:0:0:outer:unset>",
+            host.StandardOutput.TextContent);
+        Assert.Equal("handler", host.StandardError.TextContent);
+        Assert.Equal("./sample.sh: line 4: ${value@Z}: bad substitution\n", host.ReadFile("/active-error"));
+        Assert.Equal("handler", host.ReadFile("/eval-error"));
+        Assert.Empty(host.ReadFileBytes("/source-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task InheritedPipelineExitKeepsTheCompoundStagesEntryRedirection()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            value=present
+            : | {
+                trap 'printf handler >&2' EXIT
+                : | : "${value@Z}"
+                printf "<result:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            } 2>stage-error
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<result:1:0 1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 4: ${value@Z}: bad substitution\nhandlerhandler", host.ReadFile("/stage-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "false 2>inner-error",
         "<exit:1:1:reader:unset><prefix:value>", "reader-error")]
     [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "fail() { return 7; }; fail",

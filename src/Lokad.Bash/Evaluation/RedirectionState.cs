@@ -25,6 +25,7 @@ internal struct RedirectionState
 
     public DescriptorTable? CurrentTable { get; private set; }
     public readonly IReadOnlyCollection<FileDescriptor> OpenedDescriptors => _openedDescriptors.Handles;
+    public readonly int Depth => _frames.Count;
 
     public RedirectionState(DescriptorTable? inheritedTable)
         : this(inheritedTable, new DescriptorHandleOwner())
@@ -46,6 +47,47 @@ internal struct RedirectionState
     /// <summary>Forks supplied bindings for a substitution or pipeline stage, retaining inherited handle lists.</summary>
     public readonly RedirectionState ForkForNestedEvaluation(DescriptorTable.Snapshot bindings) =>
         new(bindings.Fork(), _openedDescriptors.Capture());
+
+    /// <summary>Captures the reader's descriptor mappings and the standard streams its child must restore.</summary>
+    /// <remarks>The parent retains the referenced handles through all stage completions.</remarks>
+    internal readonly PipelineExitRedirections? CaptureForPipelineExit(int depth)
+    {
+        var remaining = _frames.Count - depth;
+        if (remaining == 0)
+            return null;
+
+        var changed = _changedDescriptors;
+        var restoresMappings = false;
+        var restoresInput = false;
+        var restoresOutput = false;
+        foreach (var frame in _frames)
+        {
+            restoresMappings |= changed.Count != 0;
+            restoresInput |= changed.Contains(LogicalDescriptor.StdIn);
+            restoresOutput |= changed.Contains(LogicalDescriptor.StdOut);
+            if (--remaining == 0)
+                return restoresMappings && frame.Table is { } table
+                    ? new PipelineExitRedirections(table.Capture(), restoresInput, restoresOutput) : null;
+            changed = frame.Changed;
+        }
+        throw new InvalidOperationException("The reader's redirection boundary must be active.");
+    }
+
+    /// <summary>Restores borrowed bindings at child completion while retaining the child's handle ownership.</summary>
+    internal void RestoreForPipelineExit(PipelineExitRedirections redirections)
+    {
+        if (_frames.Count != 0 || CurrentTable == null)
+            throw new InvalidOperationException("Pipeline EXIT requires the child shell's base mappings.");
+        CurrentTable = redirections.Restore(CurrentTable);
+    }
+
+    internal sealed class PipelineExitRedirections(DescriptorTable.Snapshot bindings, bool restoresInput, bool restoresOutput)
+    {
+        internal DescriptorTable Restore(DescriptorTable active) => bindings.WithStandardStreams(
+            restoresInput ? bindings.ResolveBinding(LogicalDescriptor.StdIn) : active.ResolveBinding(LogicalDescriptor.StdIn),
+            restoresOutput ? bindings.ResolveBinding(LogicalDescriptor.StdOut) : active.ResolveBinding(LogicalDescriptor.StdOut),
+            bindings.ResolveBinding(LogicalDescriptor.StdErr)).Fork();
+    }
 
     /// <summary>
     /// Borrows active redirection handles in scope order, including repeated aliases.

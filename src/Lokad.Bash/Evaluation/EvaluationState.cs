@@ -501,6 +501,14 @@ internal sealed class EvaluationState
 
     public DescriptorTable? CurrentRedirectionTable => _redirections.CurrentTable;
 
+    internal int RedirectionDepth => _redirections.Depth;
+
+    internal RedirectionState.PipelineExitRedirections? CapturePipelineExitRedirections(int depth) =>
+        _redirections.CaptureForPipelineExit(depth);
+
+    internal void RestorePipelineExitRedirections(RedirectionState.PipelineExitRedirections redirections) =>
+        _redirections.RestoreForPipelineExit(redirections);
+
     internal long RetainedDescriptorMemoryBytes => _redirections.OwnedMemoryBytes;
 
     public IReadOnlyCollection<FileDescriptor> CurrentRedirectionOpenedDescriptors => _redirections.OpenedDescriptors;

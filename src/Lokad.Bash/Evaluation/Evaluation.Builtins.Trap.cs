@@ -185,6 +185,8 @@ public sealed partial class Evaluation
     {
         var failure = _state.FatalExpansion;
         var useInheritedPipelineAction = kind == ExitTrapKind.Completion && failure is { UseInheritedPipelineExitAction: true };
+        var parameterTransform = useInheritedPipelineAction
+            && failure is { Kind: ExpansionFailureKind.InvalidParameterTransform };
         var status = kind == ExitTrapKind.Completion && result.Flow == FlowControlKind.Exit
             && failure is { Kind: ExpansionFailureKind.ReaderSyntax } readerFailure
                 ? ExitActionStatus(readerFailure) : result.ExitCode;
@@ -204,11 +206,19 @@ public sealed partial class Evaluation
             var prefixes = scope.Context.GlobalPrefixes;
             var callerSource = scope.Context.CallerSource;
             var returnTarget = scope.Context.ReturnTarget;
-            var keepsInheritedBindings = failure is { Kind: ExpansionFailureKind.InvalidParameterTransform }
-                && _state.ErrexitEnabled;
+            var keepsInheritedBindings = parameterTransform
+                && (_state.ErrexitEnabled || _pipelineExitBoundary.KeepsReachedBindings);
             if (useInheritedPipelineAction && !keepsInheritedBindings)
             {
-                (function, prefixes) = RestoreBindings(scope, scope.LoadedSyntaxFunctionDepth, restorePositionals: true);
+                var retainDepth = scope.LoadedSyntaxFunctionDepth;
+                if (parameterTransform)
+                {
+                    if (_pipelineExitRedirections is { } redirections)
+                        _state.RestorePipelineExitRedirections(redirections);
+                    retainDepth = _pipelineExitBoundary.FunctionDepth;
+                    callerSource = _pipelineExitBoundary.Source;
+                }
+                (function, prefixes) = RestoreBindings(scope, retainDepth, restorePositionals: true);
                 var functionDepth = function?.Depth ?? 0;
                 returnTarget = callerSource?.FunctionDepth == functionDepth ? ReturnTargetKind.Source
                     : function != null ? ReturnTargetKind.Function : ReturnTargetKind.None;
@@ -269,9 +279,14 @@ public sealed partial class Evaluation
             var prefix = active.Context.GlobalPrefixes;
             var frame = active.Context.FunctionContext;
             Variables.PositionalParametersScope? positionals = null;
+            var positionalFunctionDepth = int.MaxValue;
             for (; frame != null && frame.Depth > retainDepth.GetValueOrDefault(); frame = frame.Enclosing)
             {
-                positionals = frame.CallerPositionals ?? positionals;
+                if (frame.CallerPositionals is { } savedPositionals)
+                {
+                    positionals = savedPositionals;
+                    positionalFunctionDepth = frame.Depth;
+                }
                 var temporaryScriptBindings = frame.Locals.IsTemporaryPrefixScope;
                 var bindings = temporaryScriptBindings && prefix?.FunctionDepth == frame.Depth
                     ? prefix.Bindings : frame.PrefixBindings;
@@ -290,7 +305,20 @@ public sealed partial class Evaluation
             for (; prefix != null && (retainDepth == null || prefix.FunctionDepth > retainDepth.Value); prefix = prefix.Enclosing)
                 prefix.Bindings.Dispose();
             if (restorePositionals)
+            {
+                if (parameterTransform)
+                {
+                    // A source's saved arguments are newer than its containing function's saved arguments.
+                    for (var source = active.Context.CallerSource;
+                         source != null && !ReferenceEquals(source, _pipelineExitBoundary.Source);
+                         source = source.Enclosing)
+                    {
+                        if (source.FunctionDepth < positionalFunctionDepth && source.CallerPositionals is { } savedPositionals)
+                            positionals = savedPositionals;
+                    }
+                }
                 positionals?.CopySavedParametersTo(active.Variables, Memory);
+            }
             return (frame, prefix);
         }
     }

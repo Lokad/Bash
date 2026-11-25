@@ -76,6 +76,8 @@ public sealed partial class Evaluation : IFileTester
     private bool _pipelineUsesLoadedUnitStatus;
     private int? _loadedSyntaxFunctionDepth;
     private bool _loadedReaderIgnoresErrexit;
+    private PipelineExitBoundary _pipelineExitBoundary;
+    private RedirectionState.PipelineExitRedirections? _pipelineExitRedirections;
     // A |& stage may replace its root command to append a redirection while borrowing the original locations.
     private ICommand? _pipelineStageSource;
     private SimpleCommand? _finalCaptureInput;
@@ -194,7 +196,8 @@ public sealed partial class Evaluation : IFileTester
             outer.Memory.Budget,
             outer._preparedSyntaxRoot)
         {
-            _finalCaptureInput = finalInput
+            _finalCaptureInput = finalInput,
+            _pipelineExitBoundary = new PipelineExitBoundary(0, context.FunctionContext?.Depth ?? 0, context.CallerSource)
         };
     }
 
@@ -467,7 +470,8 @@ public sealed partial class Evaluation : IFileTester
                 var scope = new ScopedEvaluation(this, _vars, _initialContext)
                 {
                     LoadedSyntaxFunctionDepth = _loadedSyntaxFunctionDepth,
-                    LoadedReaderIgnoresErrexit = _loadedReaderIgnoresErrexit
+                    LoadedReaderIgnoresErrexit = _loadedReaderIgnoresErrexit,
+                    PipelineExitReader = _state.ForkKind == ShellForkKind.PipelineSimpleCommand ? default : _pipelineExitBoundary
                 };
                 if (!await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false))
                     result = EvaluationResult.FromExitCode(2);
@@ -662,9 +666,10 @@ public sealed partial class Evaluation : IFileTester
     {
         if (redirectedCommand.Body is SubshellCommand subshell)
             return await EvaluateSubshellAsync(subshell, scope, negated, redirectedCommand.Redirections).ConfigureAwait(false);
+        var stageEntry = IsPipelineStageCommand(redirectedCommand);
         var redirectionScope = await OpenRedirectionScopeAsync(redirectedCommand.Redirections, HereDocumentRedirectionScope(scope),
             RedirectionPersistence.AllocationsAndMoves, RedirectionLifetime.Command, RedirectionOrigin.Command,
-            reportMoveRestorationFailure: !IsPipelineStageCommand(redirectedCommand))
+            reportMoveRestorationFailure: !stageEntry)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
         var result = EvaluationResult.FromExitCode(0);
@@ -686,8 +691,10 @@ public sealed partial class Evaluation : IFileTester
             }
             else
             {
+                if (stageEntry)
+                    scope = scope with { PipelineExitReader = scope.PipelineExitReader with { RedirectionDepth = _state.RedirectionDepth } };
                 result = await EvaluateCommandAsync(redirectedCommand.Body, scope, negated: false).ConfigureAwait(false);
-                if (IsPipelineStageCommand(redirectedCommand) && result.Flow is FlowControlKind.None or FlowControlKind.Return)
+                if (stageEntry && result.Flow is FlowControlKind.None or FlowControlKind.Return)
                     result = await RunExitTrapAsync(scope, result).ConfigureAwait(false);
             }
         }
@@ -805,6 +812,7 @@ public sealed partial class Evaluation : IFileTester
 
             if (result.ExitCode == 0)
             {
+                childScope = childScope with { PipelineExitReader = scope.SubshellExitBoundary(_state.RedirectionDepth) };
                 result = await EvaluateCommandAsync(subshellCommand.Body, childScope, negated: false)
                     .ConfigureAwait(false);
                 result = CompleteDiscardInChild(result);
@@ -925,6 +933,10 @@ public sealed partial class Evaluation : IFileTester
             // namespace owners so refusal cannot strand a partially constructed stage.
             var borrowedDescriptors = CollectDescriptorsAvailableToNestedEvaluation();
             var bindings = CaptureDescriptorBindings();
+            var exitReader = scope.PipelineExitReader;
+            var exitRedirections = !_state.ErrexitEnabled && !exitReader.KeepsReachedBindings
+                && _state.Traps?.HasPendingExitAction == true
+                    ? _state.CapturePipelineExitRedirections(exitReader.RedirectionDepth) : null;
             for (var index = 0; index < stageCount; index++)
             {
                 var stdIn = index > 0 ? new DescriptorBinding(pipes[index - 1].Read)
@@ -962,6 +974,13 @@ public sealed partial class Evaluation : IFileTester
                 stage._pipelineStageSource = sourceCommand;
                 stage._loadedSyntaxFunctionDepth = scope.LoadedSyntaxFunctionDepth;
                 stage._loadedReaderIgnoresErrexit = scope.LoadedReaderIgnoresErrexit;
+                if (forkKind == ShellForkKind.PipelineSimpleCommand)
+                {
+                    stage._pipelineExitBoundary = exitReader;
+                    stage._pipelineExitRedirections = exitRedirections;
+                }
+                else
+                    stage._pipelineExitBoundary = scope.SubshellExitBoundary(redirectionDepth: 0);
                 stage._pipelineUsesLoadedUnitStatus = forkKind == ShellForkKind.PipelineSimpleCommand
                     && (scope.InNestedCommandUnits || _state.ForkKind == ShellForkKind.CommandSubstitution
                         || PipelineInheritsLoadedUnitStatus);
@@ -5412,7 +5431,8 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Reads bounded source, then executes complete command units in the caller's context.
     /// </summary>
-    private async Task<EvaluationResult> ExecuteSourceAsync(string commandName, string path, ScopedEvaluation scope)
+    private async Task<EvaluationResult> ExecuteSourceAsync(string commandName, string path, ScopedEvaluation scope,
+        Variables.PositionalParametersScope? callerPositionals)
     {
         var searchPath = !path.Contains('/') && scope.Variables.TryGetScalar("PATH", out var value)
             ? value.Bytes : ReadOnlyMemory<byte>.Empty;
@@ -5482,7 +5502,7 @@ public sealed partial class Evaluation : IFileTester
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
                     ErrexitIgnored = scope.Context.ErrexitIgnored,
                     CallerSource = new SourceCallerFrame(scope.Context.FunctionContext?.Depth ?? 0,
-                        scope.Context.CallerSource),
+                        scope.Context.CallerSource, callerPositionals),
                     SourceMemory = sourceMemory
                 }
             };
@@ -6115,7 +6135,8 @@ public sealed partial class Evaluation : IFileTester
     internal enum ReturnTargetKind { None, Function, Source }
 
     /// <summary>An active source invocation above the recorded function depth.</summary>
-    internal sealed record SourceCallerFrame(int FunctionDepth, SourceCallerFrame? Enclosing);
+    internal sealed record SourceCallerFrame(int FunctionDepth, SourceCallerFrame? Enclosing,
+        Variables.PositionalParametersScope? CallerPositionals);
 
     /// <summary>Carries control-flow boundaries independently of function-local binding ownership.</summary>
     internal readonly struct EvaluationContext(int loopDepth, FunctionContext? functionContext, ReturnTargetKind returnTarget)

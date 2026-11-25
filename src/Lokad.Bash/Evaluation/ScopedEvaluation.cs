@@ -102,6 +102,15 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Records whether a loaded reader was invoked as a tested command.</summary>
     internal bool LoadedReaderIgnoresErrexit { get; init; }
 
+    /// <summary>The first reader's entry in this shell, for inherited EXIT after pipeline expansion.</summary>
+    internal PipelineExitBoundary PipelineExitReader { get; init; }
+
+    internal PipelineExitBoundary SubshellExitBoundary(int redirectionDepth) =>
+        new(redirectionDepth, FunctionDepth: null, Source: null)
+        {
+            KeepsReachedBindings = InNestedCommandUnits || PipelineExitReader.KeepsReachedBindings
+        };
+
     /// <summary>Redirections and builtin execution run after a pipeline stage resets its EXIT action.</summary>
     internal bool AfterPipelineExitReset { get; init; }
 
@@ -164,6 +173,11 @@ internal readonly record struct ScopedEvaluation(
         Variables.TryGetNameref(name, out _)
         && Variables.TryResolveBinding(name, selectOwner: null, out var binding)
         && prefixes.Contains(binding.Name);
+}
+
+internal readonly record struct PipelineExitBoundary(int RedirectionDepth, int? FunctionDepth, Evaluation.SourceCallerFrame? Source)
+{
+    internal bool KeepsReachedBindings { get; init; }
 }
 
 /// <summary>Shares one pump across a numeric expression and its nested selectors.</summary>
