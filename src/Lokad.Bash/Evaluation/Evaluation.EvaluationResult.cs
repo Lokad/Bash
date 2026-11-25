@@ -62,6 +62,9 @@ public partial class Evaluation
 
         public RedirectionScope? DeferredErrexit { get; private init; }
 
+        /// <summary>EXIT still needs the loaded reader's binding policy. Without a saved redirection, the outer reader runs it.</summary>
+        public bool DefersLoadedErrexit { get; private init; }
+
         private ExitCause Cause { get; init; }
 
         /// <summary>Unwinds through the active command unit to its outer script reader.</summary>
@@ -87,8 +90,8 @@ public partial class Evaluation
         public EvaluationResult WithTestedStatus(bool tested) =>
             this with { TestedStatus = tested };
 
-        public EvaluationResult WithDeferredErrexit(RedirectionScope? redirections) =>
-            this with { DeferredErrexit = redirections };
+        public EvaluationResult WithDeferredErrexit(RedirectionScope? redirections, bool fromLoadedReader) =>
+            this with { DeferredErrexit = redirections, DefersLoadedErrexit = fromLoadedReader };
 
         /// <summary>Propagates return/exit or the remaining levels of loop flow past one loop owner.</summary>
         public bool TryPropagateLoopFlow(out EvaluationResult outward)

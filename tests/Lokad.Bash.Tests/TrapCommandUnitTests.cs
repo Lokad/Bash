@@ -18,6 +18,57 @@ public sealed class TrapCommandUnitTests
         "printf \"<exit:%s:%s:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" \"$1\" \"${x-unset}\"; printf handler >&2";
 
     [Theory]
+    [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "false 2>inner-error",
+        "<exit:1:1:reader:unset><prefix:value>", "reader-error")]
+    [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "fail() { return 7; }; fail",
+        "<exit:1:7:reader:unset><prefix:value>", "reader-error")]
+    [InlineData("true | prefix=value source ./sample.sh reader 2>reader-error", "(exit 7)",
+        "<exit:1:7:reader:unset><prefix:value>", "reader-error")]
+    [InlineData("run() { local x=local; true | prefix=value source ./sample.sh reader 2>reader-error; }; run function",
+        "{ false; } 2>inner-error", "<exit:1:1:reader:unset><prefix:unset>", "inner-error")]
+    [InlineData("run() { local x=local; prefix=value source ./sample.sh reader 2>reader-error; }; true | run function 2>stage-error",
+        "false", "<exit:1:1:function:unset><prefix:unset>", "stage-error")]
+    [InlineData("(prefix=value source ./sample.sh reader 2>reader-error) 2>stage-error",
+        "source ./nested.sh leaf 2>inner-error", "<exit:1:1:reader:unset><prefix:value>", "reader-error")]
+    public async Task LoadedErrexitUsesTheReachedReaderAndDescriptorOwners(
+        string invocation, string failure, string expectedOutput, string expectedFile)
+    {
+        var script = $"set -e\nset -- outer\n{invocation}\nprintf skipped\n";
+        var body = $"trap '{PrintParserExitFrame}; printf \"<prefix:%s>\" \"${{prefix-unset}}\"' EXIT\n:\n{failure}\nprintf skipped\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/sample.sh", body);
+            host.AddFile("/nested.sh", "false\n");
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal("handler", host.ReadFile("/" + expectedFile));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task ExitActionKeepsItsOwnErrexitStatusInADirectPipelineReader()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -e
+            true | eval 'trap "return 9" EXIT; (exit 7)' 2>reader-error
+            printf skipped
+            """, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 1: return: can only `return' from a function or sourced script\n", host.ReadFile("/reader-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("true | stage inner", "", "<exit:7:0:inner:local><parent:7:0 7>")]
     [InlineData("true | stage inner", "; return 9", "<exit:7:0:inner:local><parent:9:0 9>")]
     [InlineData("(stage inner)", "", "<exit:7:7:outer:unset><parent:7:7>")]

@@ -632,8 +632,11 @@ An unhandled status retains active positional and control-flow frames for EXIT.
 Simple failures settle the nearest reached simple invocation with restorable
 redirections first. Compound failures run through the reached descriptor mapping.
 Ordinary shell command units restore local and temporary bindings before the action.
-Direct child execution retains them. Eval and source restore bindings at their
-command-unit boundary for ordinary failures. On ordinary pipeline completion,
+An ordinary failure reached by eval or source carries its binding policy through
+any deferred redirection cleanup. A directly invoked pipeline stage owns its
+descriptor mapping through EXIT. A failure at global scope inside a reader unwinds
+inner readers and their descriptor scopes before the outer reader runs EXIT, when
+no saved simple invocation has been selected. On ordinary pipeline completion,
 a direct builtin or redirected group runs EXIT through its stage descriptors.
 A direct function runs EXIT before unwinding its locals, arguments and return
 target. A valid return leaves the current pipeline status in place until its

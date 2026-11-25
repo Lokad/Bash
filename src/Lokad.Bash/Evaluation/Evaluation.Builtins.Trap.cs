@@ -167,13 +167,18 @@ public sealed partial class Evaluation
         }
     }
 
-    private enum ExitTrapKind { Completion, Errexit, Expansion }
+    private enum ExitTrapKind { Completion, Errexit, LoadedErrexit, Expansion }
 
     private static int ExitActionStatus(ExpansionFailure failure) =>
         failure is { Kind: ExpansionFailureKind.ReaderSyntax, ExitCode: 1 } ? BuiltinSyntaxErrorStatus : failure.ExitCode;
 
     private ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result) =>
         RunExitTrapAsync(scope, result, ExitTrapKind.Completion);
+
+    private ValueTask<EvaluationResult> RunErrexitExitTrapAsync(ScopedEvaluation scope, EvaluationResult result,
+        bool fromLoadedReader) =>
+        RunExitTrapAsync(scope, result.WithDeferredErrexit(null, fromLoadedReader: false),
+            fromLoadedReader ? ExitTrapKind.LoadedErrexit : ExitTrapKind.Errexit);
 
     /// <summary>Runs EXIT once with the bindings and descriptors selected by the reason for termination.</summary>
     private async ValueTask<EvaluationResult> RunExitTrapAsync(ScopedEvaluation scope, EvaluationResult result, ExitTrapKind kind)
@@ -207,7 +212,8 @@ public sealed partial class Evaluation
                 returnTarget = callerSource?.FunctionDepth == functionDepth ? ReturnTargetKind.Source
                     : function != null ? ReturnTargetKind.Function : ReturnTargetKind.None;
             }
-            else if (kind == ExitTrapKind.Errexit && (!_state.KeepsLocalsOnErrexit || scope.InNestedCommandUnits))
+            else if (kind is ExitTrapKind.Errexit or ExitTrapKind.LoadedErrexit
+                && (!_state.KeepsLocalsOnErrexit || kind == ExitTrapKind.LoadedErrexit && function != null))
             {
                 (function, prefixes) = RestoreBindings(scope, retainDepth: null, restorePositionals: false);
                 callerSource = null;
@@ -224,7 +230,8 @@ public sealed partial class Evaluation
                     SourceMemory = scope.Context.SourceMemory
                 },
                 Timing = null,
-                ErrexitRedirections = null
+                ErrexitRedirections = null,
+                InDirectPipelineReader = false
             };
             var handler = await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap)
                 .ConfigureAwait(false);

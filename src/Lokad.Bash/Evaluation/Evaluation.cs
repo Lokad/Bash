@@ -788,7 +788,8 @@ public sealed partial class Evaluation : IFileTester
                 Context = childContext.WithLoopDepth(0),
                 ErrexitRedirections = null,
                 Timing = null,
-                InNestedCommandUnits = false
+                InNestedCommandUnits = false,
+                InDirectPipelineReader = false
             };
             if (redirections != null)
             {
@@ -1452,7 +1453,8 @@ public sealed partial class Evaluation : IFileTester
             // A failed redirection must not change exports or $0.
             ShellValue? argumentZero = executable.ExecutionOptions is { } executionOptions
                 ? PrepareExecArgumentZero(executionOptions, commandName) : null;
-            var invocationScope = commandRedirections is { IsActive: true, HasRestorableMappings: true }
+            // A direct pipeline invocation owns its descriptor mapping through completion.
+            var invocationScope = !directPipelineStage && commandRedirections is { IsActive: true, HasRestorableMappings: true }
                 ? scope with { ErrexitRedirections = commandRedirections }
                 : scope;
             if (executable.Resolution is CommandResolution.Function function)
@@ -1565,7 +1567,12 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Set => await EvaluateBuiltinSetAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Unset => await AwaitWordExpansionAsync(EvaluateBuiltinUnsetAsync(byteOperands, commandVars, builtinScope, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Eval or BuiltinKind.Source => await EvaluateBuiltinScriptingAsync(evaluatorBuiltin.Kind,
-                        commandName, byteOperands, builtinScope with { Variables = commandVars }, false).ConfigureAwait(false),
+                        commandName, byteOperands, builtinScope with
+                        {
+                            Variables = commandVars,
+                            InDirectPipelineReader = builtinScope.InDirectPipelineReader
+                                || directPipelineStage && executable.Completion == CommandCompletion.Continue
+                        }, false).ConfigureAwait(false),
                     BuiltinKind.Trap => await AwaitWordExpansionAsync(EvaluateBuiltinTrapAsync(byteOperands, builtinScope.Context))
                         .ConfigureAwait(false),
                     BuiltinKind.Return => await AwaitWordExpansionAsync(

@@ -313,6 +313,7 @@ public sealed partial class Evaluation
         var nestedPipelineReader = pipelineReader && scope.InNestedCommandUnits;
         var directPipelineReader = pipelineReader && !nestedPipelineReader;
         var nestedLoadedReader = IsNestedLoadedReader(kind);
+        var outermostLoadedReader = nestedLoadedReader && !scope.InNestedCommandUnits;
         scope = scope with { InEvalReader = kind == ScriptExecutionKind.Eval };
         if (nestedLoadedReader)
             scope = scope with
@@ -476,6 +477,8 @@ public sealed partial class Evaluation
                         resetStatus: IsLoadedReader(kind) && result.DiscardsCompoundRedirection).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {
+                    if (outermostLoadedReader && result.DefersLoadedErrexit && result.DeferredErrexit == null)
+                        return await RunErrexitExitTrapAsync(scope, result, fromLoadedReader: true).ConfigureAwait(false);
                     if (directPipelineReader && result.ExitsNestedPipelineReader)
                         return await RunExitTrapAsync(scope, result).ConfigureAwait(false);
                     if (nestedLoadedReader

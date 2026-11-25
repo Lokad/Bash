@@ -73,7 +73,7 @@ public sealed partial class Evaluation
         if (hasExitAction)
         {
             if (result.DeferredErrexit is { IsActive: false })
-                return await RunExitTrapAsync(scope, result.WithDeferredErrexit(null), ExitTrapKind.Errexit).ConfigureAwait(false);
+                return await RunErrexitExitTrapAsync(scope, result, result.DefersLoadedErrexit).ConfigureAwait(false);
             if (result.Flow == FlowControlKind.Exit && _state.ErrexitEnabled
                 && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.InvalidParameterTransform
                     or ExpansionFailureKind.CompoundArrayIndex or ExpansionFailureKind.ArrayRead,
@@ -86,13 +86,17 @@ public sealed partial class Evaluation
                 result = result.WithTestedStatus(true);
             else if (ShouldExitForFailure(result))
             {
-                result = EvaluationResult.Exit(result.ExitCode);
+                result = EvaluationResult.Exit(scope.InDirectPipelineReader ? 1 : result.ExitCode);
                 if (hasExitAction)
                 {
-                    // Simple failures restore the nearest saved invocation before EXIT.
-                    if (command is SimpleCommand && scope.ErrexitRedirections is { IsActive: true } pending)
-                        return result.WithDeferredErrexit(pending);
-                    return await RunExitTrapAsync(scope, result, ExitTrapKind.Errexit).ConfigureAwait(false);
+                    // Simple failures restore the nearest saved invocation. In a reader
+                    // at global scope, other pending redirections unwind with its command units.
+                    var pending = command is SimpleCommand ? scope.ErrexitRedirections : null;
+                    if (pending is { IsActive: true })
+                        return result.WithDeferredErrexit(pending, scope.InNestedCommandUnits);
+                    if (scope.InNestedCommandUnits && scope.Context.FunctionContext == null)
+                        return result.WithDeferredErrexit(null, fromLoadedReader: true);
+                    return await RunErrexitExitTrapAsync(scope, result, scope.InNestedCommandUnits).ConfigureAwait(false);
                 }
             }
         }

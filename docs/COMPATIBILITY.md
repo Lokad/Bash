@@ -1205,6 +1205,13 @@ the action. For a failing top-level brace group with a redirection, incremental
 execution follows the pinned Bash script reader. Bash command-string invocation
 can restore that mapping before EXIT.
 
+An ordinary errexit failure inside a directly piped source or eval stage runs
+EXIT with status 1 while `PIPESTATUS` retains the reached command's status.
+The stage's redirections stay active. For a failing simple command, an inner
+restorable invocation can unwind its own mappings before EXIT. Without a saved
+invocation at global scope, the outer reader runs EXIT after its inner readers
+unwind.
+
 On ordinary pipeline completion, EXIT runs with the stage's active redirections.
 A direct function stage retains its arguments, local bindings and return target.
 A direct source stage restores the source arguments before the action. An
