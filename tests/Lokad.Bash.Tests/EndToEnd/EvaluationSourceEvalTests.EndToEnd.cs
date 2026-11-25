@@ -43,6 +43,22 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("source ./missing", "./missing: No such file or directory")]
+    [InlineData(". ./folder", ".: ./folder: is a directory")]
+    public async Task SourceOpenFailureUsesTheRetainedFunctionSource(string invocation, string diagnostic)
+    {
+        var host = EndToEndHarness.BuildTree([
+            ("/definition", "f() {\n  :\n  " + invocation + "\n}\n"), ("/folder/item", "")
+        ]);
+        var result = await EndToEndHarness.RunScriptAsync("source ./definition\n:\nf", host);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal($"./definition: line 3: {diagnostic}\n", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("export x=body", "body")]
     [InlineData("readonly x=body", "body")]
     [InlineData("unset x; export x=body", "body")]
@@ -244,11 +260,11 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
-    [InlineData(". ''", "<1:new><root>", ": No such file or directory\n")]
-    [InlineData("builtin source -- '' temporary", "<1:new><root>", ": No such file or directory\n")]
+    [InlineData(". ''", "<1:new><root>", "./unit: line 1: : No such file or directory\n")]
+    [InlineData("builtin source -- '' temporary", "<1:new><root>", "./unit: line 1: : No such file or directory\n")]
     [InlineData("empty=; . \"$empty\" temporary 2>&-", "<1:new><root>", "")]
-    [InlineData("empty=; . $empty", "<2:new><new>", ".: filename argument required\n.: usage: . [--] filename [arguments]\n")]
-    [InlineData("( . '' temporary )", "<1:new><new>", ": No such file or directory\n")]
+    [InlineData("empty=; . $empty", "<2:new><new>", "./unit: line 1: .: filename argument required\n.: usage: . filename [arguments]\n")]
+    [InlineData("( . '' temporary )", "<1:new><new>", "./unit: line 1: : No such file or directory\n")]
     public async Task EmptySourceFilenameClearsTheReachedPositionalReplacement(
         string command, string output, string diagnostic)
     {

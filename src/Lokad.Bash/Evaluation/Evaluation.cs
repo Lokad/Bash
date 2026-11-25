@@ -5182,7 +5182,7 @@ public sealed partial class Evaluation : IFileTester
         if (!descriptor.HasValue)
         {
             if (open.Error is { Message.Length: > 0 } error)
-                await ReportSourceOpenFailureAsync(commandName, openedPath, error).ConfigureAwait(false);
+                await ReportSourceOpenFailureAsync(commandName, openedPath, error, scope.Context).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(1);
         }
 

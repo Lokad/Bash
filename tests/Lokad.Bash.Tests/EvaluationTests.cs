@@ -1049,7 +1049,7 @@ public partial class EvaluationTests
 
         var usage = await NextWriteAsync(state);
         Assert.Equal(2, usage.FileDescriptor.Id);
-        Assert.Equal("source: usage: source [--] filename [arguments]\n", Text(usage.Content));
+        Assert.Equal("source: usage: source filename [arguments]\n", Text(usage.Content));
         usage.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));

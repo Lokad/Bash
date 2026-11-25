@@ -81,8 +81,8 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
             "Declare function-local variables, arrays or name references. -I inherits the outer value and its attributes, except the name-reference attribute. '-' saves shell options for restoration when the function returns.\n    Declaration attributes use the same flags as declare except -g."
             + CaseAttributeDescription),
         BuiltinKind.Caller => new("[expr]", "Print the current function or source invocation. An index selects an enclosing invocation."),
-        BuiltinKind.Source => new("[--] filename [arguments]", "Read and execute filename in the current shell context, with optional positional parameters."),
-        BuiltinKind.Eval => new("[--] [arg ...]", "Join arguments with spaces, then parse and execute them in the current shell context."),
+        BuiltinKind.Source => new("filename [arguments]", "Read and execute filename in the current shell context, with optional positional parameters. A leading -- ends option parsing."),
+        BuiltinKind.Eval => new("[arg ...]", "Join arguments with spaces, then parse and execute them in the current shell context. A leading -- ends option parsing."),
         BuiltinKind.Getopts => new("optstring name [arg ...]",
             "Parse one short option from the supplied arguments or positional parameters into name.\n    A colon after an option requires an argument, stored in OPTARG. Set OPTIND=1 to restart the scan.\n    A leading colon selects silent errors. Set OPTERR=0 to suppress diagnostics without changing error results."),
         BuiltinKind.Command => new("[-pVv] command [arg ...]", "Run a command without function lookup, or describe its resolution."),

@@ -100,6 +100,23 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Theory]
+    [InlineData("eval \\\n-xyz", 3, "eval: -x: invalid option", "eval: usage: eval [arg ...]")]
+    [InlineData("source --", 2, "source: filename argument required", "source: usage: source filename [arguments]")]
+    [InlineData(". -xyz", 2, ".: -x: invalid option", ".: usage: . filename [arguments]")]
+    [InlineData("caller 0xno", 2, "caller: 0xno: invalid hex number", "caller: usage: caller [expr]")]
+    public async Task ScriptingUsagePrefixesOnlyTheErrorInTheReachedFile(
+        string invocation, int line, string diagnostic, string usage)
+    {
+        await using var host = EndToEndHarness.BuildTree([("/loaded", ":\n" + invocation + " 2>log\n")]);
+        var result = await EndToEndHarness.RunScriptAsync("source ./loaded", host);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal($"./loaded: line {line}: {diagnostic}\n{usage}\n", host.ReadFile("/log"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("dirs -c stray")]
     [InlineData("pushd -x")]
     [InlineData("popd stray")]
@@ -120,9 +137,9 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Theory]
-    [InlineData("eval", "-", "[--] [arg ...]", false)]
-    [InlineData("source", "-", "[--] filename [arguments]", false)]
-    [InlineData(".", "-", "[--] filename [arguments]", false)]
+    [InlineData("eval", "-", "[arg ...]", false)]
+    [InlineData("source", "-", "filename [arguments]", false)]
+    [InlineData(".", "-", "filename [arguments]", false)]
     [InlineData("type", "-t", "[-aftpP] [--] [name ...]", true)]
     public async Task InvalidOptionPreservesRawByteAndUsageWriteBoundaries(
         string name, string optionPrefix, string arguments, bool combined)

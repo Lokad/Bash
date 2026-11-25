@@ -76,7 +76,8 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {
-            await ReportExpansionDiagnosticAsync([command], [operand, ShellValue.FromText(reason)])
+            await WriteDiagnosticAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics,
+                ClosedStderrHandling.AttemptWrite, GetNamedSourceDiagnosticPrefix(context))
                 .ConfigureAwait(false);
             var synopsis = BuiltinDocumentation.For(BuiltinKind.Caller).Synopsis("caller");
             await ReportExpansionDiagnosticAsync([command], [ShellValue.FromText("usage: "), ShellValue.FromText(synopsis)])
@@ -114,12 +115,7 @@ public sealed partial class Evaluation
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, kind, commandName, negated)
                     .ConfigureAwait(false);
             else if (option.Span is [(byte)'-', _, ..])
-            {
-                await WriteDiagnosticUnlessStderrClosedAsync([command],
-                    [ShellValue.FromBytes(option[..2]), ShellValue.FromText(": invalid option")], _builtinDiagnostics)
-                    .ConfigureAwait(false);
-                return await FinishUsageErrorAsync().ConfigureAwait(false);
-            }
+                return await ReportUsageAsync(ShellValue.FromBytes(option[..2]), ": invalid option").ConfigureAwait(false);
         }
 
         if (kind == BuiltinKind.Eval)
@@ -133,17 +129,13 @@ public sealed partial class Evaluation
         }
 
         if (first == words.Count)
-        {
-            await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("filename argument required")],
-                _builtinDiagnostics)
-                .ConfigureAwait(false);
-            return await FinishUsageErrorAsync().ConfigureAwait(false);
-        }
+            return await ReportUsageAsync(ShellValue.Empty, "filename argument required").ConfigureAwait(false);
         if (words[first].IsEmpty)
         {
             // A supplied filename reaches the source boundary even when it is empty.
             scope.Variables.ClearPositionalReplacement();
-            await ReportSourceOpenFailureAsync(commandName, string.Empty, new OperationError("No such file or directory\n"))
+            await ReportSourceOpenFailureAsync(commandName, string.Empty, new OperationError("No such file or directory\n"),
+                scope.Context)
                 .ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
@@ -164,23 +156,27 @@ public sealed partial class Evaluation
             words, argumentStart, restorePolicy);
         return ApplyNegation(await ExecuteSourceAsync(commandName, path, scope).ConfigureAwait(false), negated);
 
-        async Task<EvaluationResult> FinishUsageErrorAsync()
+        async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {
+            await WriteDiagnosticUnlessStderrClosedAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics,
+                GetNamedSourceDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
             await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "
                 + BuiltinDocumentation.For(kind).Synopsis(commandName))], _builtinDiagnostics).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
     }
 
-    private Task ReportSourceOpenFailureAsync(string commandName, string path, OperationError error)
+    private Task ReportSourceOpenFailureAsync(string commandName, string path, OperationError error, EvaluationContext context)
     {
         var standardError = GetStdErrDescriptor();
         if (standardError.IsClosed)
             return Task.CompletedTask;
 
+        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
         return error.Kind == OperationErrorKind.IsDirectory
-            ? WriteOperationDiagnosticAsync(standardError, commandName + ": ", path, new OperationError("is a directory\n"))
-            : WriteOperationDiagnosticAsync(standardError, string.Empty, path, error);
+            ? WriteOperationDiagnosticAsync(standardError, ShellValue.Empty, commandName + ": ", path,
+                new OperationError("is a directory\n"), sourcePrefix)
+            : WriteOperationDiagnosticAsync(standardError, ShellValue.Empty, string.Empty, path, error, sourcePrefix);
     }
 
     private async Task<(FileOpenResult Result, string Path, bool CurrentSearchEntry)> SearchSourcePathAsync(
