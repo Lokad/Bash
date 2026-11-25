@@ -169,6 +169,40 @@ public sealed class DirectoryNavigationHostTests
     }
 
     [Theory]
+    [InlineData("pwd", 1, "/a /b\n")]
+    [InlineData("dirs -v", 1, "/a /b\n")]
+    [InlineData("pushd -n /c", 0, "/a /c /b\n")]
+    [InlineData("popd -n", 0, "/a\n")]
+    public async Task ClosedDirectoryListingReportsFailureWithoutPublishingAnOutputWrite(
+        string command, int status, string stack)
+    {
+        await using var host = new TestHost();
+        host.AddDirectory("/a");
+        var script = $"""
+            cd /a
+            pushd -n /b >/dev/null
+            {command} 1>&-
+            printf '%s\n' "$?"
+            dirs -l
+            """;
+        var evaluation = new Eval(Parser.Parse(script));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (await evaluation.GetNextStep(deadline.Token) is { } operation)
+        {
+            Assert.False(operation is WriteOperation { FileDescriptor.IsClosed: true });
+            await ShellOperationDispatcher.DispatchAsync(operation, host, deadline.Token);
+        }
+        await evaluation.Completion;
+
+        var name = command.Split(' ')[0];
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal("/a", evaluation.CurrentDirectory.Path);
+        Assert.Equal($"{status}\n{stack}", host.StandardOutput.TextContent);
+        Assert.Equal($"line 3: {name}: write error: Bad file descriptor\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(false, "PWD")]
     [InlineData(true, "PWD")]
     [InlineData(false, "OLDPWD")]

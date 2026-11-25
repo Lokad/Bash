@@ -76,7 +76,9 @@ assignment. Deferred entries own their literal bytes and child stacks borrow
 that backing while their parent is live. Selecting one for navigation then
 uses ordinary path decoding, host lookup, and directory bookkeeping. Successful
 push and pop operations report a failed listing write through active stderr
-while keeping the completed stack change and its status.
+while keeping the completed stack change and its status. When stdout is closed
+by the shell, the directory listing reports the failure without formatting
+output or sending a write request to the host.
 
 Nameref declaration validation precedes replacement of values and attributes.
 An empty element initializer can publish the array kind before reporting failure.

@@ -625,8 +625,21 @@ public sealed partial class Evaluation
     private Task<DescriptorWriteResult> WriteDirectoryStackAsync(
         string commandName, int? index, DirectoryStackLayout layout, ShellValue home, EvaluationContext context)
     {
+        var command = ShellValue.FromText(commandName);
+        var prefix = GetBuiltinDiagnosticPrefix(context);
+        if (GetStdOutDescriptor().IsClosed)
+            return ReportClosedOutputAsync(command, prefix);
+
         var content = _state.FormatDirectoryStack(index, layout, home, Memory, _cancellationToken);
-        return WriteBuiltinOutputAsync(ShellValue.FromText(commandName), content, GetBuiltinDiagnosticPrefix(context));
+        return WriteBuiltinOutputAsync(command, content, prefix);
+
+        async Task<DescriptorWriteResult> ReportClosedOutputAsync(ShellValue name, SyntaxDiagnosticPrefix sourcePrefix)
+        {
+            CheckCancellation();
+            var failure = DescriptorWriteResult.WriteFailure;
+            await ReportBuiltinWriteFailureAsync(name, failure, sourcePrefix).ConfigureAwait(false);
+            return failure;
+        }
     }
 
     private static string DirectoryCommandName(DirectoryChangeKind kind) => kind switch
