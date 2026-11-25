@@ -56,12 +56,12 @@ public sealed class PositionalParameterTests
         variables.PositionalParameters = [ShellValue.FromText("drop"), ShellValue.FromText("outer"), ShellValue.Empty];
         Assert.True(variables.TryShiftPositionalParameters(1));
         var view = variables.PositionalParameters;
-        var source = variables.EnterPositionalParametersScope(
-            [ShellValue.FromText("first"), ShellValue.FromText("source")], PositionalParametersRestorePolicy.UnlessReplaced);
+        var source = variables.EnterSourcePositionals(
+            [ShellValue.FromText("first"), ShellValue.FromText("source")], 0, PositionalParametersRestorePolicy.UnlessReplaced);
         Assert.True(variables.TryShiftPositionalParameters(1));
-        using (variables.EnterPositionalParametersScope([ShellValue.FromText("function")], PositionalParametersRestorePolicy.Always))
+        using (variables.EnterFunctionPositionals([ShellValue.FromText("function")]))
         {
-            variables.ReplacePositionalParametersFromSet([ShellValue.FromText("explicit replacement")], 0);
+            variables.ReplacePositionalParametersFromSet([ShellValue.FromText("explicit replacement")], 0, inFunction: true);
             Assert.True(variables.TryShiftPositionalParameters(1));
         }
         Assert.Equal("source", Assert.Single(view).ToUtf8String());
@@ -77,9 +77,9 @@ public sealed class PositionalParameterTests
     {
         var variables = Variables.CreateEmpty();
         variables.PositionalParameters = [ShellValue.FromText("outer")];
-        using (variables.EnterPositionalParametersScope([ShellValue.FromText("inner")], PositionalParametersRestorePolicy.UnlessReplaced))
+        using (variables.EnterSourcePositionals([ShellValue.FromText("inner")], 0, PositionalParametersRestorePolicy.UnlessReplaced))
         {
-            variables.ReplacePositionalParametersFromSet(variables.PositionalParameters, 0);
+            variables.ReplacePositionalParametersFromSet(variables.PositionalParameters, 0, inFunction: false);
             Assert.True(variables.TryShiftPositionalParameters(1));
         }
         Assert.Empty(variables.PositionalParameters);

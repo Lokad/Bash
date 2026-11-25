@@ -27,11 +27,10 @@ public sealed partial class Evaluation
         using var functionContext = new FunctionContext(
             functionDefinition.Name.Value, new Variables.LocalBindings(scope.Variables, parent: null, bindings), scope.Context.FunctionContext)
         {
-            PrefixBindings = bindings
+            PrefixBindings = bindings,
+            CallerSourceMemory = scope.Context.SourceMemory
         };
-        using var positionalParametersScope = scope.Variables.EnterPositionalParametersScope(
-            arguments,
-            PositionalParametersRestorePolicy.Always);
+        using var positionalParametersScope = scope.Variables.EnterFunctionPositionals(arguments);
         functionContext.CallerPositionals = positionalParametersScope;
         var functionScope = scope with
         {

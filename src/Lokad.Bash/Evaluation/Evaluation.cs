@@ -5524,7 +5524,7 @@ public sealed partial class Evaluation : IFileTester
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
                     ErrexitIgnored = scope.Context.ErrexitIgnored,
                     CallerSource = new SourceCallerFrame(scope.Context.FunctionContext?.Depth ?? 0,
-                        scope.Context.CallerSource, callerPositionals),
+                        scope.Context.CallerSource, callerPositionals, scope.Context.SourceMemory),
                     SourceMemory = sourceMemory
                 }
             };
@@ -6079,6 +6079,8 @@ public sealed partial class Evaluation : IFileTester
         public Variables.LocalBindings Locals { get; }
         /// <summary>Borrows the inactive argument frame while the invocation and its children run.</summary>
         internal Variables.PositionalParametersScope? CallerPositionals { get; set; }
+        /// <summary>Borrows the caller's diagnostic source while the invocation is active.</summary>
+        internal SourceMemory? CallerSourceMemory { get; init; }
         public Variables.CommandBindings? PrefixBindings { get; init; }
         internal bool BindingsRestoredForExit { get; set; }
         public IReadOnlySet<BindingName> PrefixNames => PrefixBindings?.PrefixNames ?? NoPrefixNames;
@@ -6133,6 +6135,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 PrefixBindings = callPrefixes,
                 CallerPositionals = CallerPositionals,
+                CallerSourceMemory = CallerSourceMemory,
                 SavedErrexit = SavedErrexit
             };
         }
@@ -6158,7 +6161,7 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>An active source invocation above the recorded function depth.</summary>
     internal sealed record SourceCallerFrame(int FunctionDepth, SourceCallerFrame? Enclosing,
-        Variables.PositionalParametersScope? CallerPositionals);
+        Variables.PositionalParametersScope? CallerPositionals, SourceMemory? CallerSourceMemory);
 
     /// <summary>Carries control-flow boundaries independently of function-local binding ownership.</summary>
     internal readonly struct EvaluationContext(int loopDepth, FunctionContext? functionContext, ReturnTargetKind returnTarget)

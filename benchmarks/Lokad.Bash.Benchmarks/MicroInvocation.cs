@@ -89,12 +89,12 @@ internal sealed class MicroInvocation : IDisposable
             case MicroKind.PositionalFrame:
                 for (var index = 0; index < _row.Scale; index++)
                 {
-                    using var frame = _variables.EnterPositionalParametersScope(_callee, PositionalParametersRestorePolicy.Always);
+                    using var frame = _variables.EnterFunctionPositionals(_callee);
                     checksum += _variables.PositionalParameters.Count;
                 }
                 return checksum;
             case MicroKind.Shift:
-                using (var frame = _variables.EnterPositionalParametersScope(_callee, PositionalParametersRestorePolicy.Always))
+                using (var frame = _variables.EnterFunctionPositionals(_callee))
                     for (var index = 0; index < _row.Scale; index++)
                     {
                         checksum += _variables.PositionalParameters.Count;

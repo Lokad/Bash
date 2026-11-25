@@ -152,7 +152,7 @@ public sealed partial class Evaluation
             scope.Variables.ClearPositionalReplacement();
         var restorePolicy = scope.Context.FunctionContext == null
             ? PositionalParametersRestorePolicy.UnlessReplaced : PositionalParametersRestorePolicy.Always;
-        using var positionalScope = argumentCount == 0 ? null : scope.Variables.EnterPositionalParametersScope(
+        using var positionalScope = argumentCount == 0 ? null : scope.Variables.EnterSourcePositionals(
             words, argumentStart, restorePolicy);
         return ApplyNegation(await ExecuteSourceAsync(commandName, path, scope, positionalScope).ConfigureAwait(false), negated);
 

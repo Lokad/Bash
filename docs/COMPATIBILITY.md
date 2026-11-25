@@ -1215,6 +1215,10 @@ can restore that mapping before EXIT.
 When ordinary errexit in a nested reader reaches EXIT before its command
 scopes unwind, the action restores descriptor mappings from between the outer
 and inner reader entries. Other descriptors retain their reached mappings.
+Function and source unwinds consume saved positional arguments in stack order.
+A source with arguments can keep a replacement made by `set --` at global
+scope. The action selects the return target and diagnostic filename separately
+from the positional arguments.
 
 An ordinary errexit failure inside a directly piped source or eval stage runs
 EXIT with status 1 while `PIPESTATUS` retains the reached command's status.

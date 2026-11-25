@@ -342,6 +342,71 @@ public sealed class TrapCommandUnitTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("false", "<exit:1:1:caller:unset>", "")]
+    [InlineData(": | false", "<exit:1:0 1:reader:unset>", "./sample.sh: ")]
+    public async Task NestedLoadedErrexitRestoresTheReturnTargetAndItsDiagnosticSource(
+        string failure, string expectedOutput, string diagnosticSource)
+    {
+        var script = $$"""
+            set -e
+            set -- caller
+            trap '{{PrintParserExitFrame}}; return 8' EXIT
+            eval 'source ./sample.sh reader 2>source-error' 2>eval-error
+            """;
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", $$"""
+            f() {
+                local x=local
+                {{failure}}
+                printf skipped
+            }
+            f reached 2>function-error
+
+            """);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal($"handler{diagnosticSource}line 1: return: can only `return' from a function or sourced script\n",
+            host.ReadFile("/eval-error"));
+        Assert.Empty(host.ReadFileBytes("/source-error"));
+        Assert.Empty(host.ReadFileBytes("/function-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("set -- from-reader", ":", "reached")]
+    [InlineData(":", "set -- from-function", "reader")]
+    [InlineData("set -- from-reader", "set -- from-function", "from-function")]
+    public async Task NestedLoadedErrexitHonorsGlobalArgumentReplacementsAcrossFunctionEntry(
+        string readerCommand, string functionCommand, string expectedArgument)
+    {
+        var script = $$"""
+            set -e
+            trap '{{PrintParserExitFrame}}' EXIT
+            eval 'source ./sample.sh reader 2>source-error' 2>eval-error
+            """;
+        await using var host = new TestHost();
+        host.AddFile("/sample.sh", $$"""
+            {{readerCommand}}
+            f() {
+                {{functionCommand}}
+                : | false
+                printf skipped
+            }
+            f reached 2>function-error
+
+            """);
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal($"<exit:1:0 1:{expectedArgument}:unset>", host.StandardOutput.TextContent);
+        Assert.Equal("handler", host.ReadFile("/eval-error"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ExitActionKeepsItsOwnErrexitStatusInADirectPipelineReader()
     {
