@@ -10,7 +10,7 @@ internal readonly record struct CommandReadDiagnostics(IReadOnlyList<HereDocumen
     internal bool IsEmpty => HereDocumentWarnings == null && CompoundItems == null && FunctionBraceLine == 0;
 }
 
-/// <summary>A complete script command unit or its terminal syntax failure.</summary>
+/// <summary>A complete script command unit or its syntax failure.</summary>
 internal abstract record CommandUnitParseResult
 {
     private CommandUnitParseResult() { }
@@ -21,12 +21,13 @@ internal abstract record CommandUnitParseResult
     /// <summary>A complete unit whose syntax and here-document bodies have been parsed.</summary>
     internal sealed record Parsed(ICommand Command) : CommandUnitParseResult;
 
-    /// <summary>A terminal syntax diagnostic with any complete prefix recognized at end of input.</summary>
+    /// <summary>A syntax diagnostic with any complete prefix recognized at end of input.</summary>
     internal sealed record Failed(ParserFailure Failure) : CommandUnitParseResult
     {
         internal SyntaxError Error => Failure.Error;
         internal ICommand? CompletedPrefix { get; init; }
         internal int DiagnosticLine { get; init; }
+        internal bool ResumesAfterArrayToken { get; init; }
         internal (UnclosedDelimiter Delimiter, int Line)? QuotedRecovery { get; init; }
     }
 }

@@ -675,3 +675,7 @@ the active reader. A directly invoked pipeline builtin restores inner readers
 before running EXIT within its outer reader. Ordinary errexit reports pending
 timers once, before the action. The
 enclosing descriptor and command owners still settle before completion returns.
+An unexpected compound-array token in a current-shell reader can discard
+its unit while leaving the reader active. A resumed unit uses the same
+source owner and a fresh unit allowance. Recovery advances past collected
+here-document bodies and retires the rejected unit's pending redirections.

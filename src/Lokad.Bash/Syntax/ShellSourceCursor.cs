@@ -794,6 +794,7 @@ internal sealed class ShellScanContext
 
     internal bool ReadsCommandString { get; init; }
     internal bool ReadQuotedRecovery { get; set; } = true;
+    internal bool ReadArrayRecovery { get; set; }
 
     internal FinalBackslash GetFinalBackslash(ShellSource source)
     {

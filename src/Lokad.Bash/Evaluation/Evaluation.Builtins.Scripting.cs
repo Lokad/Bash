@@ -369,6 +369,8 @@ public sealed partial class Evaluation
             // A completed unit can change errexit before the next parse.
             var stopAfterPrimaryDiagnostic = usesImmediateParserExit && _state.ErrexitEnabled && !scope.Context.ErrexitIgnored;
             scanContext.ReadQuotedRecovery = !stopAfterPrimaryDiagnostic;
+            scanContext.ReadArrayRecovery = (streamedRoot || sourceOrEval)
+                && _state.ForkKind == null && !stopAfterPrimaryDiagnostic;
             try
             {
                 if (!commands.MoveNext())
@@ -446,7 +448,7 @@ public sealed partial class Evaluation
                     var loadedParserStatus = failure.Kind == ParserFailureKind.SubstitutionGrammar
                         || publishesPipelineReaderStatus && !failure.ArithmeticForHeader.HasValue
                         ? BuiltinSyntaxErrorStatus : parserStatus;
-                    if (failure.IsDirectQuotedSubstitutionFailure
+                    if (failedUnit.ResumesAfterArrayToken || failure.IsDirectQuotedSubstitutionFailure
                         || publishesLoadedParserStatus || exitsLoadedReader && failure.ArithmeticForHeader.HasValue
                         || streamedRoot && (arrayDelimiterFailure || failure.ArithmeticForHeader.HasValue || reportsGrammarStatus))
                     {
@@ -454,6 +456,11 @@ public sealed partial class Evaluation
                         PreparePipelineStatusStorage(1);
                         scope.Variables.SetPipelineStatuses([publishedStatus], scope.Context, _cancellationToken);
                         _state.LastExitCode = publishedStatus;
+                    }
+                    if (failedUnit.ResumesAfterArrayToken)
+                    {
+                        result = result.WithExitCode(parserStatus);
+                        continue;
                     }
                     if (failedUnit.CompletedPrefix is { } prefix && !skipExecution)
                         command = prefix;

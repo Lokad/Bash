@@ -489,6 +489,10 @@ arithmetic `for` header in an unquoted substitution terminates with status 2. Wi
 enclosing double quote, the builtin returns the status of any complete command
 prefix in that unit, or 2 if the unit has no complete prefix. A recovered
 array delimiter error uses status 1 and ends a child shell running the builtin.
+An unexpected token in a literal compound array initializer discards its command
+unit. With effective errexit disabled in the current shell, the reader
+publishes status 1 and resumes at the next physical line or after any
+here-document body already collected from that line.
 For a substitution grammar error such as a pipe with a missing command,
 the parser publishes 257 in `PIPESTATUS` and shell completion uses its low byte, 1.
 A command-substitution child unwinds the builtin before EXIT and uses status 1.

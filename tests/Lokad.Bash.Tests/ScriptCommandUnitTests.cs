@@ -1253,4 +1253,85 @@ public sealed class ScriptCommandUnitTests
         Assert.Equal("before", host.StandardOutput.TextContent);
         Assert.Equal("line 3: unexpected EOF while looking for matching `)'\n", host.StandardError.TextContent);
     }
+
+    [Fact]
+    public async Task RejectedArrayTokenDiscardsTheUnitAndPublishesStatusBeforeTheNextLine()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            printf '<before>'
+            printf discarded; items=(one ; two); printf discarded
+            printf '<next:%s:%s>' "$?" "${PIPESTATUS[*]}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<before><next:1:1>", host.StandardOutput.TextContent);
+        Assert.Equal("syntax error near unexpected token `;'\n`printf discarded; items=(one ; two); printf discarded'\n",
+            host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task TestedSourceResumesAfterTheRejectedArrayTokenWithItsArguments()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", """
+            declare -a items=(one (\
+            (2)))
+            printf '<next:%s:%s:%s>' "$?" "${PIPESTATUS[*]}" "$1"
+            """);
+
+        var result = await host.RunAsync("""
+            set -e
+            set -- caller
+            source ./body reader || printf handled
+            printf '<caller:%s:%s>' "$?" "$1"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<next:1:1:reader><caller:0:caller>", host.StandardOutput.TextContent);
+        Assert.Equal("./body: line 2: syntax error near unexpected token `('\n./body: line 2: `(2)))'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ArrayTokenRecoveryKeepsACollectedCaptureDocumentOutsideTheNextUnit()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/body", """
+            items=("$(cat <<:)" (bad
+            printf collected
+            :
+            printf '<next:%s:%s>' "$?" "${PIPESTATUS[*]}"
+            """);
+
+        var result = await host.RunAsync("source ./body\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<next:1:1>", host.StandardOutput.TextContent);
+        Assert.Equal("./body: line 1: warning: command substitution: 1 unterminated here-document\n"
+            + "./body: line 3: syntax error near unexpected token `('\n./body: line 3: `items=(\"$(cat <<:)\" (bad'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task RejectedArrayTokenEndsASourcedChildBeforeItCanResume()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", "printf '<before>'\nitems=((1))\nprintf discarded\n");
+
+        var result = await host.RunAsync("""
+            (source ./body; printf discarded)
+            printf '<child:%s:%s>' "$?" "${PIPESTATUS[*]}"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<before><child:1:1>", host.StandardOutput.TextContent);
+        Assert.Equal("./body: line 2: syntax error near unexpected token `('\n./body: line 2: `items=((1))'\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
 }

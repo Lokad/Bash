@@ -177,7 +177,7 @@ public static class Parser
     }
 
     /// <summary>
-    /// Lazily returns complete top-level command units or a terminal syntax failure.
+    /// Lazily returns complete top-level command units or a syntax failure.
     /// Later syntax is checked only when requested; failures retain absolute byte offsets.
     /// </summary>
     internal static IEnumerable<CommandUnitParseResult> TryParseCommandUnits(ReadOnlyMemory<byte> input) =>
@@ -223,11 +223,15 @@ public static class Parser
                 // Array syntax rejects the whole unit, but a direct quoted item can still leave a delimiter to read.
                 var recoverQuotedSuffix = scanContext.ReadQuotedRecovery && (quotedFailure != null
                     || failure is { Kind: ParserFailureKind.ArrayQuotedSubstitutionForHeader, IsNestedSubstitution: false });
+                var nextUnit = scanContext.ReadArrayRecovery
+                    && failure is { Kind: ParserFailureKind.ArrayDelimiter, UnexpectedToken: { } rejected }
+                    ? tokenizer.ArrayRecoveryStart(rejected.ReadPosition) : input.Length;
                 yield return new CommandUnitParseResult.Failed(failure)
                 {
                     CompletedPrefix = prefix,
                     Locations = prefix != null ? tokenizer.Locations : null,
                     ReadDiagnostics = diagnostics,
+                    ResumesAfterArrayToken = nextUnit < input.Length,
                     DiagnosticLine = failure switch
                     {
                         { UnclosedDelimiter: { } captureEnd } =>
@@ -242,7 +246,10 @@ public static class Parser
                     QuotedRecovery = recoverQuotedSuffix && failure.ArithmeticForHeader is { } recovery
                         ? tokenizer.ReadQuotedRecoveryDelimiter(recovery.BodyEnd) : null
                 };
-                yield break;
+                if (nextUnit == input.Length)
+                    yield break;
+                tokenizer.ResumeCommandUnits(nextUnit);
+                continue;
             }
             if (command == null)
                 yield break;
@@ -1371,7 +1378,7 @@ public static class Parser
         List<CompoundArrayItem>? values = null;
         while (true)
         {
-            var token = tokenizer.NextTokenCore();
+            var token = openingOffset.HasValue ? tokenizer.NextCompoundArrayToken() : tokenizer.NextTokenCore();
             if (tokenizer.Error != null || tokenizer.QuotedEndOfInputFailure != null)
             {
                 tokenizer.MarkCompoundArrayFailure();
@@ -1392,7 +1399,10 @@ public static class Parser
                 continue;
             if (token.Kind is not (TokenKind.Word or TokenKind.OpenBrace or TokenKind.CloseBrace))
             {
-                tokenizer.RecordError("Unexpected token in array assignment.", tokenizer.Position);
+                if (openingOffset.HasValue)
+                    tokenizer.RecordUnexpectedArrayToken(token);
+                else
+                    tokenizer.RecordError("Unexpected token in array assignment.", tokenizer.Position);
                 break;
             }
             if (!tokenizer.TryGetOperandWord(token, out var wordToken))

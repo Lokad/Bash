@@ -53,6 +53,31 @@ internal sealed class Tokenizer
         _scanContext.ClearCommandUnitLookahead();
     }
 
+    internal int ArrayRecoveryStart(int offset)
+    {
+        var next = HereDocumentReadAhead.FindNextLineStart(_input, offset);
+        return _scanContext.HereDocumentReadAhead?.SkipBodies(_input, next) ?? next;
+    }
+
+    // Discard the failed unit's tokens and pending documents while keeping absolute line coordinates.
+    internal void ResumeCommandUnits(int position)
+    {
+        Position = ConsumedPosition = position;
+        _lastPhysicalNewline = position - 1;
+        _pushback.Clear();
+        HereDocuments = null;
+        _failure = null;
+        QuotedEndOfInputFailure = null;
+        _readingAhead = null;
+        _wordLookaheadEnd = -1;
+        _arithmeticFailureStart = -1;
+        _arithmeticFallbackAtFileEnd = false;
+        _continuedAtEndOfInput = false;
+        _spacingContinuedAtEndOfInput = false;
+        _wordEndsWithUnframedBackslash = false;
+        _redirectionLookaheadAtEndOfInput = false;
+    }
+
     internal void RecordFunctionBrace(int offset)
     {
         _functionBraceLine = GetLine(offset);
@@ -499,12 +524,30 @@ internal sealed class Tokenizer
     /// <summary>Recognizes an array opener and keeps adjacent incomplete arithmetic in the initializer grammar.</summary>
     internal bool HasArrayAssignmentOpener(Token assignment)
     {
-        if (PeekTokenCore().Kind == TokenKind.OpenParen)
+        var opener = ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), assignment.Source.End.Value);
+        // An adjacent parenthesis starts the initializer. Leave any following parenthesis
+        // to the item reader instead of looking ahead for the end of an arithmetic command.
+        var arrayOpener = TracksScriptDiagnostics && opener < _input.Length && _input[opener] == (byte)'(';
+        if (PeekTokenCore(arrayOpener ? ArrayTokenRole.Opener : ArrayTokenRole.None).Kind == TokenKind.OpenParen)
             return true;
         if (_arithmeticFailureStart >= 0
             && ShellSourceCursor.SkipLineContinuations(_input.AsSpan(), assignment.Source.End.Value) == _arithmeticFailureStart)
             MarkCompoundArrayFailure();
         return false;
+    }
+
+    internal void RecordUnexpectedArrayToken(Token token)
+    {
+        const string message = "Unexpected token in array assignment.";
+        if (!TracksScriptDiagnostics)
+        {
+            RecordError(message, Position);
+            return;
+        }
+        RecordFailure(new ParserFailure(new SyntaxError(message, Position), ParserFailureKind.ArrayDelimiter)
+        {
+            UnexpectedToken = GetUnexpectedSyntax(token)
+        });
     }
 
     private void RecordExpansionFailure(ParserFailure? failure, bool quoted, string missingDelimiter, int start) =>
@@ -881,7 +924,9 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Returns EOF after a recorded failure; the grammar checks Error before publishing syntax.</summary>
-    internal Token PeekTokenCore()
+    internal Token PeekTokenCore() => PeekTokenCore(ArrayTokenRole.None);
+
+    private Token PeekTokenCore(ArrayTokenRole arrayRole)
     {
         if (Error != null)
             return Token.EndOfInput();
@@ -890,7 +935,7 @@ internal sealed class Tokenizer
             return _pushback.Peek();
         }
 
-        var token = ReadToken(forHeader: false, out _);
+        var token = ReadToken(forHeader: false, arrayRole, out _);
         _pushback.Push(token);
         return token;
     }
@@ -908,10 +953,14 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Reads a token without throwing for source errors; EOF also terminates failed reads.</summary>
-    internal Token NextTokenCore() => Consume(ReadToken(forHeader: false, out _));
+    internal Token NextTokenCore() => Consume(ReadToken(forHeader: false, ArrayTokenRole.None, out _));
+
+    internal Token NextCompoundArrayToken() =>
+        Consume(ReadToken(forHeader: false, TracksScriptDiagnostics ? ArrayTokenRole.Item : ArrayTokenRole.None, out _));
 
     /// <summary>Reads the next token after a consumed for keyword, identifying arithmetic clause boundaries.</summary>
-    internal Token ReadForHeader(out ArithmeticForSeparators separators) => Consume(ReadToken(forHeader: true, out separators));
+    internal Token ReadForHeader(out ArithmeticForSeparators separators) =>
+        Consume(ReadToken(forHeader: true, ArrayTokenRole.None, out separators));
 
     private Token Consume(Token token)
     {
@@ -920,7 +969,9 @@ internal sealed class Tokenizer
         return token;
     }
 
-    private Token ReadToken(bool forHeader, out ArithmeticForSeparators separators)
+    private enum ArrayTokenRole { None, Opener, Item }
+
+    private Token ReadToken(bool forHeader, ArrayTokenRole arrayRole, out ArithmeticForSeparators separators)
     {
         separators = default;
         if (Error != null)
@@ -1001,6 +1052,18 @@ internal sealed class Tokenizer
 
             if (current == '(')
             {
+                if (arrayRole != ArrayTokenRole.None)
+                {
+                    if (arrayRole == ArrayTokenRole.Item)
+                    {
+                        // The adjacent arithmetic spelling reports its second opener here.
+                        var second = ShellSourceCursor.SkipLineContinuations(span, Position + 1);
+                        if (second < span.Length && span[second] == (byte)'(')
+                            start = Position = second;
+                    }
+                    Position++;
+                    return Located(Token.OpenParen());
+                }
                 var status = forHeader
                     ? ArithmeticExpansionScanner.ScanForHeader(_scanContext, _input, Position,
                         out var arithmeticEnd, out var expression, out separators, out var error)
@@ -1069,7 +1132,10 @@ internal sealed class Tokenizer
 
             if (span[Position] == (byte)'&')
             {
-                RecordError("Unsupported control operator.", Position);
+                if (arrayRole == ArrayTokenRole.Item)
+                    RecordUnexpectedArrayToken(new Token { Source = Position..(Position + 1) });
+                else
+                    RecordError("Unsupported control operator.", Position);
                 return Located(Token.EndOfInput());
             }
 
