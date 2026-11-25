@@ -356,6 +356,47 @@ public sealed class PatternTraversalTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void SubjectEncodingIsClassifiedByTheFirstActiveUtf8Pattern(bool malformedSubject)
+    {
+        byte[] subject = malformedSubject ? [0xc3, 0xa9, 0xff] : [0xc3, 0xa9];
+        var governor = new MemoryGovernor(16 * 1024);
+        var memory = new EvaluationMemory(governor);
+        bool? subjectHasMalformedUtf8 = null;
+        try
+        {
+            Assert.False(Match(ShellValue.FromText("?"), quoted: true));
+            Assert.Null(subjectHasMalformedUtf8);
+            Assert.False(Match(ShellValue.FromBytes(new byte[] { 0xff, (byte)'?' }), quoted: false));
+            Assert.Null(subjectHasMalformedUtf8);
+            Assert.Equal(!malformedSubject, Match(ShellValue.FromText("?"), quoted: false));
+            Assert.Equal(malformedSubject, subjectHasMalformedUtf8);
+            Assert.Equal(malformedSubject, Match(ShellValue.FromText("???"), quoted: false));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        bool Match(ShellValue pattern, bool quoted) =>
+            ShellPattern.MatchesWords([new ExpandedWord([new(pattern, isGlobQuoted: quoted)])],
+                subject, memory, CancellationToken.None, ref subjectHasMalformedUtf8);
+    }
+
+    [Fact]
+    public async Task CaseRetestKeepsItsOriginalSubjectEncodingAcrossVariableWrites()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "value=$'\\303\\251'; case \"$value\" in '?'|$'\\377'?) printf wrong;; "
+            + "?) printf scalar; value=$'\\303\\251\\377' ;;& "
+            + "??) printf wrong;; ?) printf ':retest';; esac\n"
+            + "case \"$value\" in ??) printf wrong;; ???) printf ':bytes';; esac");
+
+        Assert.Equal("scalar:retest:bytes", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void MalformedBytesSelectByteTraversalForActiveGlob(bool activeWildcard)
     {
         var governor = new MemoryGovernor(16 * 1024);

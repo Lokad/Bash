@@ -44,13 +44,26 @@ internal sealed class ShellPattern
     public static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
         EvaluationMemory memory, CancellationToken cancellationToken)
     {
+        bool? subjectHasMalformedUtf8 = null;
+        return MatchesWords(words, text, memory, cancellationToken, ref subjectHasMalformedUtf8);
+    }
+
+    /// <summary>Reuses the UTF-8 classification across comparisons with the same immutable subject.</summary>
+    public static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
+        EvaluationMemory memory, CancellationToken cancellationToken, ref bool? subjectHasMalformedUtf8)
+    {
         var (value, activity) = PrepareWords(words, memory, cancellationToken);
         var bytes = value.Bytes.Span;
         var mask = activity.AsSpan();
         if (IsLiteral(bytes, mask, cancellationToken))
             return text.SequenceEqual(bytes);
 
-        var byteCharacters = !System.Text.Unicode.Utf8.IsValid(bytes) || !System.Text.Unicode.Utf8.IsValid(text);
+        var byteCharacters = !System.Text.Unicode.Utf8.IsValid(bytes);
+        if (!byteCharacters)
+        {
+            subjectHasMalformedUtf8 ??= !System.Text.Unicode.Utf8.IsValid(text);
+            byteCharacters = subjectHasMalformedUtf8.Value;
+        }
         return TextGlobMatcher.MatchUtf8(bytes, in mask, text,
             requireEnd: true, byteCharacters, memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
     }

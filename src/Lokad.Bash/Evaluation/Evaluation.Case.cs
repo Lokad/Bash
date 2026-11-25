@@ -13,6 +13,7 @@ public sealed partial class Evaluation
         bool negated)
     {
         EvaluationMemory.Command? subjectMemory = Memory.BeginCommand(scope);
+        bool? subjectHasMalformedUtf8 = null;
         try
         {
             var subject = ExpandedWord.JoinValuesWithSpaces(
@@ -92,7 +93,8 @@ public sealed partial class Evaluation
                         .ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return caseCommand.Items.Count;
-                    if (ShellPattern.MatchesWords(expanded, subject.Bytes.Span, Memory, _cancellationToken))
+                    if (ShellPattern.MatchesWords(expanded, subject.Bytes.Span, Memory, _cancellationToken,
+                        ref subjectHasMalformedUtf8))
                         return index;
 
                     // Each alternative consumes its expanded pattern. Binding effects
