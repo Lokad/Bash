@@ -188,7 +188,7 @@ public sealed class ArithmeticArrayTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("<0>:<0>\n", result.StdOut);
-        Assert.Equal("warning: first: circular name reference\nwarning: first: circular name reference\n", result.StdErr);
+        Assert.Equal("line 4: warning: first: circular name reference\nline 4: warning: first: circular name reference\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

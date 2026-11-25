@@ -442,7 +442,7 @@ public sealed partial class Evaluation
         if (warn)
         {
             if (kind == IndexedInputTargetKind.CircularNameref)
-                await ReportCircularNameReferenceAsync(target).ConfigureAwait(false);
+                await ReportCircularNameReferenceAsync(target, scope).ConfigureAwait(false);
             else if (kind == IndexedInputTargetKind.UnassignedNameref)
                 await ReportRemovingNamerefAsync(target).ConfigureAwait(false);
         }

@@ -86,14 +86,15 @@ public sealed partial class Evaluation
                     if (!resolved)
                     {
                         // Compound RHS expansion precedes both lookup warnings and fallback creation.
-                        await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false);
+                        var warningPrefix = GetCommandDiagnosticPrefix(scope);
+                        await ReportCircularNameReferenceAsync(declaredName, warningPrefix).ConfigureAwait(false);
                         if (local)
-                            await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false); // Local binding creation.
+                            await ReportCircularNameReferenceAsync(declaredName, warningPrefix).ConfigureAwait(false); // Local binding creation.
                         else if (compoundArrayKind == ArrayAssignmentKind.Auto)
                         {
                             // Implicit array kind first attempts ordinary binding, then array lookup.
-                            await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false);
-                            await ReportCircularNameReferenceAsync(declaredName).ConfigureAwait(false);
+                            await ReportCircularNameReferenceAsync(declaredName, warningPrefix).ConfigureAwait(false);
+                            await ReportCircularNameReferenceAsync(declaredName, warningPrefix).ConfigureAwait(false);
                         }
                         if (!local || existingLocal)
                             targetVariables.RecreateDeclarationArray(name, kind);
@@ -414,9 +415,12 @@ public sealed partial class Evaluation
     private bool TryParseDeclarationReference(ShellSource source, out VariableReference reference)
         => VariableReference.TryParse(source, Memory, out reference);
 
-    internal Task ReportCircularNameReferenceAsync(BindingName name) =>
-        ReportExpansionDiagnosticAsync([ShellValue.FromText("warning")],
-            [GetDiagnosticName(name), ShellValue.FromText(": circular name reference")]);
+    internal Task ReportCircularNameReferenceAsync(BindingName name, ScopedEvaluation scope) =>
+        ReportCircularNameReferenceAsync(name, GetCommandDiagnosticPrefix(scope));
+
+    private Task ReportCircularNameReferenceAsync(BindingName name, SyntaxDiagnosticPrefix prefix) =>
+        WriteDiagnosticAsync([ShellValue.FromText("warning")], [GetDiagnosticName(name), ShellValue.FromText(": circular name reference")],
+            _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
 
     internal Task ReportRemovingNamerefAsync(BindingName name) =>
         ReportExpansionDiagnosticAsync([ShellValue.FromText("warning")],

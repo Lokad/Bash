@@ -362,7 +362,7 @@ internal static partial class WordExpansion
             async Task ReportCycleAsync(BindingName name, int count)
             {
                 for (var index = 0; index < count && scope.CanExpand; index++)
-                    await scope.Effects.ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+                    await scope.Effects.ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
             }
 
             bool AssignExpansion(VariableReference reference, ResolvedVariableReference target, ShellValue value)

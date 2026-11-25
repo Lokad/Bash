@@ -19,7 +19,7 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<value>\n", result.StdOut);
-        Assert.Equal("warning: first: circular name reference\nwarning: first: circular name reference\n", result.StdErr);
+        Assert.Equal("line 1: warning: first: circular name reference\nline 1: warning: first: circular name reference\n", result.StdErr);
     }
 
     [Theory]

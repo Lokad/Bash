@@ -163,6 +163,10 @@ replacing the binding. Function declarations warn instead; circular local reads
 and ordinary writes can select the global binding. A self-element target keeps
 its separate selector semantics. Assigning an unset nameref may create a cycle,
 and raw declaration inspection does not resolve that cycle.
+Circular nameref warnings report the reached command line and the current
+reader's filename, when present. Compound declarations report their lookup
+warnings after initializer expansion. A circular `readonly -n` assignment
+reports the lookup and assignment warnings and skips the attribute lookup.
 An ordinary local redeclaration through an existing local nameref can create
 a local for its whole-name referent. A readonly reference can select a writable
 referent. A readonly local in an enclosing function can be shadowed, and `-I`

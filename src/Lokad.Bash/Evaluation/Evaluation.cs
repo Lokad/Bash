@@ -1812,7 +1812,7 @@ public sealed partial class Evaluation : IFileTester
                 var resolvedPrefix = commandVars.TryResolveBinding(target, selectOwner: null, out var prefixBinding);
                 var circularPrefix = !resolvedPrefix;
                 if (circularPrefix)
-                    await ReportCircularNameReferenceAsync(target).ConfigureAwait(false);
+                    await ReportCircularNameReferenceAsync(target, assignmentScope).ConfigureAwait(false);
                 var elementNameref = resolvedPrefix && prefixBinding.Reference.Kind != VariableReferenceKind.Name;
                 var unsetNameref = resolvedPrefix && prefixBinding.IsUnsetNameref;
                 BindingName selectedName = resolvedPrefix ? prefixBinding.Name : target;
@@ -2383,7 +2383,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     // The flag only looks up a named operand, even with an array option.
                     if (!commandVars.TryResolveBinding(reference.Name, selectOwner: null, out _))
-                        await ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+                        await ReportCircularNameReferenceAsync(reference.Name, declarationScope).ConfigureAwait(false);
                     continue;
                 }
                 // Array flags affect assignment operands. A parsed compound initializer
@@ -2453,9 +2453,7 @@ public sealed partial class Evaluation : IFileTester
                         if (selectElementBinding)
                         {
                             if (circular)
-                                await ReportCommandDiagnosticAsync([ShellValue.FromText("warning")],
-                                    [GetDiagnosticName(sourceName), ShellValue.FromText(": circular name reference")], declarationScope)
-                                    .ConfigureAwait(false);
+                                await ReportCircularNameReferenceAsync(sourceName, declarationScope).ConfigureAwait(false);
                             if ((global || clearIndexedElement) && binding.Reference.Kind != VariableReferenceKind.Name)
                             {
                                 RecordOperandFailure();
@@ -2527,11 +2525,11 @@ public sealed partial class Evaluation : IFileTester
                     && targetVars.TryResolveBinding(name, selectOwner: null, out var wholeBinding) ? wholeBinding : null;
                 if (checksWholeBinding && selectedWholeBinding == null)
                 {
-                    await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+                    await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
                     if (local)
                     {
                         // Local creation performs its own lookup, then reuses a reference already local to this frame.
-                        await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+                        await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
                         circularLocalReference = existingLocal && arrayKind == ArrayAssignmentKind.Auto;
                     }
                     else if (arrayKind == ArrayAssignmentKind.Auto)
@@ -2540,11 +2538,11 @@ public sealed partial class Evaluation : IFileTester
                             && options.ExportChange == DeclarationAttributeChange.Clear && operand.Value == null)
                             continue;
                         // Ordinary binding cannot create through a cycle; this is a successful declaration no-op.
-                        await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+                        await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
                         if (operand.Value != null && setsNamedAttribute)
                         {
-                            if (options.ExportChange != DeclarationAttributeChange.Clear)
-                                await ReportCircularNameReferenceAsync(name).ConfigureAwait(false); // Attribute target lookup.
+                            if (options.ExportChange != DeclarationAttributeChange.Clear && !skipReadonlyAttribute)
+                                await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false); // Attribute target lookup.
                             RecordOperandFailure();
                         }
                         continue;
@@ -2570,10 +2568,9 @@ public sealed partial class Evaluation : IFileTester
                             await DiagnoseAsync(name, "nameref variable self references not allowed").ConfigureAwait(false);
                             continue;
                         }
-                        await WriteDiagnosticAsync([ShellValue.FromText(commandName)],
+                        await ReportCommandDiagnosticAsync([ShellValue.FromText(commandName)],
                             [ShellValue.FromText("warning: "), GetDiagnosticName(name), ShellValue.FromText(": circular name reference")],
-                            _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
-                            rejectsIntegerNamerefInitializer ? GetBuiltinDiagnosticPrefix(declarationScope.Context) : default)
+                            declarationScope)
                             .ConfigureAwait(false);
                         selfNameref = true;
                     }
@@ -3218,7 +3215,7 @@ public sealed partial class Evaluation : IFileTester
                 if (local && options.Nameref && operand.Value == null && prefixNames?.Contains(name) == true)
                     continue; // A valueless -n on a prefix does not create a function local.
                 if (selfNameref && namerefReference is { } assignedReference && assignedReference.Name == name)
-                    await ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+                    await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
                 var attributeBinding = referentAttributes ?? (elementAttributesApplied ? ordinaryElement : null)
                     ?? (local && !options.Nameref && targetVars.TryResolveBinding(name, null, out var localBinding)
                         ? localBinding : new VariableBinding(VariableReference.ForName(name), targetVars));

@@ -293,7 +293,7 @@ internal static partial class WordExpansion
         if (!scope.Variables.TryResolveBinding(name, selectOwner: null, out _)
             && scope.Context.TryResolveCircularBinding(name, scope.Variables, out var circularBinding))
         {
-            await scope.Effects.ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+            await scope.Effects.ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
             return await AssignSelectedAsync(circularBinding).ConfigureAwait(false);
         }
         switch (scope.Variables.GetNamerefAssignmentFailure(name, name, value, scope.Effects.Memory))
@@ -309,8 +309,8 @@ internal static partial class WordExpansion
                     if (fallback is Evaluation.LocalNamerefAssignment.Circular circular)
                     {
                         if (circular.LookupWarning is { } warning)
-                            await scope.Effects.ReportCircularNameReferenceAsync(warning).ConfigureAwait(false);
-                        await scope.Effects.ReportCircularNameReferenceAsync(name).ConfigureAwait(false);
+                            await scope.Effects.ReportCircularNameReferenceAsync(warning, scope).ConfigureAwait(false);
+                        await scope.Effects.ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
                         if (!scope.CanExpand)
                             return new(NamerefAssignmentAction.Fail, value);
                         // Retry the original binding globally, then follow its referent in the active scope.
@@ -549,9 +549,9 @@ internal static partial class WordExpansion
             {
                 if (use is ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign)
                 {
-                    await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+                    await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
                     if (use == ReferenceUse.ArithmeticAssign && scope.CanExpand)
-                        await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+                        await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
                     if (!scope.Context.TryResolveCircularBinding(reference.Name, targetVariables, out binding))
                         return null;
                     targetVariables = binding.Owner;
@@ -822,11 +822,11 @@ internal static partial class WordExpansion
     {
         if (variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
             return binding;
-        await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+        await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
         var found = scope.Context.TryResolveCircularBinding(reference.Name, variables, out binding);
         if (reference.Kind != VariableReferenceKind.Name && use != ReferenceUse.Length
             || reference.Kind == VariableReferenceKind.Name && use == ReferenceUse.Length && !found)
-            await scope.Effects.ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+            await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
         return found ? binding : null;
     }
 

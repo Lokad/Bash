@@ -9,8 +9,11 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class NamerefAssignmentFailureTestsEndToEnd
 {
-    private const string CircularFallbackWarnings = "warning: s: circular name reference\nwarning: s: circular name reference\n"
-        + "warning: s: circular name reference\nwarning: r: circular name reference\n";
+    private const string CircularDeclarationWarnings = "line 1: warning: s: circular name reference\nline 1: warning: s: circular name reference\n";
+    private const string CircularFallbackWarnings = CircularDeclarationWarnings
+        + "line 1: warning: s: circular name reference\nline 1: warning: r: circular name reference\n";
+    private const string LoadedCircularFallbackWarnings = CircularDeclarationWarnings
+        + "/script: line 1: warning: s: circular name reference\n/script: line 1: warning: r: circular name reference\n";
 
     [Fact]
     public async Task PrintfPublishesFormatCountBeforeRejectingAnUnsetElementDestination()
@@ -283,7 +286,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
             EndToEndHarness.BuildTree([("/script", body)]));
 
         Assert.Equal("<1>/<unset>", result.StdOut);
-        Assert.Equal(CircularFallbackWarnings, result.StdErr);
+        Assert.Equal(command == "source" ? LoadedCircularFallbackWarnings : CircularFallbackWarnings, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -335,7 +338,7 @@ public sealed class NamerefAssignmentFailureTestsEndToEnd
             EndToEndHarness.BuildTree([("/script", body)]));
 
         Assert.Equal("<1>/<0>/<old><other>", result.StdOut);
-        Assert.Equal(CircularFallbackWarnings, result.StdErr);
+        Assert.Equal(command == "source" ? LoadedCircularFallbackWarnings : CircularFallbackWarnings, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

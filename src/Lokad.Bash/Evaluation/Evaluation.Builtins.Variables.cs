@@ -538,9 +538,9 @@ public sealed partial class Evaluation
         }
         if (circular)
         {
-            await ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+            await ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
             if (kind == BuiltinAssignmentKind.Descriptor || kind == BuiltinAssignmentKind.PrintfCount && activeCycle)
-                await ReportCircularNameReferenceAsync(reference.Name).ConfigureAwait(false);
+                await ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
             if (HasPendingExpansionError || !BuiltinDiagnosticsOpen)
                 return BuiltinAssignmentResult.Failed;
             // Bash allocates the descriptor but leaves a circular local alias untouched.
