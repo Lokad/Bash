@@ -32,7 +32,7 @@ public sealed partial class Evaluation
 
     private static SyntaxDiagnosticPrefix GetNamedSourceDiagnosticPrefix(EvaluationContext context)
     {
-        var path = context.SourceMemory?.DiagnosticPath;
+        var path = context.DiagnosticPath;
         var coordinates = context.Coordinates;
         return path == null || coordinates.Locations == null ? default
             : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, coordinates.Line);

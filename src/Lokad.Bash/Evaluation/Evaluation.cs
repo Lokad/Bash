@@ -3787,7 +3787,7 @@ public sealed partial class Evaluation : IFileTester
         var coordinates = context.Coordinates;
         var line = coordinates.RedirectionOpenLine ?? coordinates.Line;
         var prefix = path != null && error.Kind != OperationErrorKind.Unknown && coordinates.Locations != null
-            ? new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line == 0 ? null : line) : default;
+            ? new SyntaxDiagnosticPrefix(context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line == 0 ? null : line) : default;
         return WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, path, error, prefix);
     }
 
@@ -3798,7 +3798,7 @@ public sealed partial class Evaluation : IFileTester
     internal async Task WriteEmptyDescriptorDiagnosticAsync(FileDescriptor descriptor, LogicalDescriptor? destination,
         bool reportDuplication, EvaluationContext context)
     {
-        var path = context.CallerSource?.Path;
+        var path = context.DiagnosticPath;
         var error = new OperationError("Bad file descriptor\n");
         if (reportDuplication)
         {
@@ -4538,19 +4538,20 @@ public sealed partial class Evaluation : IFileTester
                     if (start < token.CapturePayloadStart)
                         token = token with { Line = token.Line.Slice(token.CapturePayloadStart - start) };
                 }
-                await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
+                var path = scope.Context.DiagnosticPath;
+                await ReportUnexpectedSyntaxAsync(token, path, SyntaxDiagnosticOrigin.CommandSubstitution,
                     line, includeLine: !errexit).ConfigureAwait(false);
                 if (rejectedSelector.NeedsParameterDiagnostic && !errexit && word != null)
                 {
                     var descriptor = GetStdErrDescriptor();
-                    var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path,
+                    var prefix = new SyntaxDiagnosticPrefix(path,
                         scope.CompoundPrefixItems == null ? SyntaxDiagnosticOrigin.Script : SyntaxDiagnosticOrigin.ScriptLine,
                         Math.Max(1, scope.Context.Coordinates.Line));
                     var badSubstitution = ShellValue.FromText("bad substitution");
                     var rendered = ShellValue.FromBytes(spelling.ToMemory());
                     if (!quoted && rejectedSelector.NeedsCaptureEofDiagnostic)
                         await WriteSyntaxDiagnosticLineAsync(descriptor,
-                            new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution, line + 1),
+                            new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.CommandSubstitution, line + 1),
                             MissingCommandSubstitutionClose).ConfigureAwait(false);
                     if (quoted)
                         await WriteDiagnosticAsync(descriptor, [badSubstitution],
@@ -4608,7 +4609,7 @@ public sealed partial class Evaluation : IFileTester
 
     private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(EvaluationContext context, int line) =>
         context.Coordinates.Locations == null ? default
-            : new SyntaxDiagnosticPrefix(context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine, line);
+            : new SyntaxDiagnosticPrefix(context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line);
 
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
@@ -4979,11 +4980,11 @@ public sealed partial class Evaluation : IFileTester
             ? SyntaxDiagnosticOrigin.CommandSubstitution
             : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
         await ReportUnclosedDelimiterAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
-            scope.Context.CallerSource?.Path, origin).ConfigureAwait(false);
+            scope.Context.DiagnosticPath, origin).ConfigureAwait(false);
     }
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
-        ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.CallerSource?.Path,
+        ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.DiagnosticPath,
             useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope));
 
     private static SyntaxDiagnosticPrefix GetHereDocumentParameterDiagnosticPrefix(ScopedEvaluation scope) =>
@@ -4993,7 +4994,7 @@ public sealed partial class Evaluation : IFileTester
     {
         var line = scope.Context.Coordinates.HereDocumentWarningLine;
         return line != 0
-            ? new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine, line)
+            ? new SyntaxDiagnosticPrefix(scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line)
             : null;
     }
 
@@ -5397,7 +5398,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             // The source can outlive this invocation through its function definitions.
-            var diagnosticPath = sourceMemory.OwnDiagnosticPath(openedPath, currentSearchEntry);
+            sourceMemory.OwnDiagnosticPath(openedPath, currentSearchEntry);
             lookupMemory?.Dispose();
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
@@ -5407,7 +5408,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     GlobalPrefixes = scope.Context.GlobalPrefixes,
                     ErrexitIgnored = scope.Context.ErrexitIgnored,
-                    CallerSource = new SourceCallerFrame(diagnosticPath, scope.Context.FunctionContext?.Depth ?? 0,
+                    CallerSource = new SourceCallerFrame(scope.Context.FunctionContext?.Depth ?? 0,
                         scope.Context.CallerSource),
                     SourceMemory = sourceMemory
                 }
@@ -5442,10 +5443,7 @@ public sealed partial class Evaluation : IFileTester
             : new OperationError(directPath ? "No such file or directory\n" : exec ? "not found\n" : "command not found\n");
         var directExec = exec && directPath;
         var directory = directExec && !name.StartsWith('/') ? command.CurrentDirectory : null;
-        var context = scope.Context;
-        var sourcePrefix = context.Coordinates.Locations is null ? default
-            : new SyntaxDiagnosticPrefix(context.SourceMemory?.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine,
-                context.Coordinates.Line);
+        var sourcePrefix = GetCommandDiagnosticPrefix(scope);
         var namedExec = exec && !directPath;
         var prefix = namedExec ? "exec: " : string.Empty;
         var detail = namedExec && error.Kind == OperationErrorKind.IsDirectory ? cannotExecute : string.Empty;
@@ -6044,7 +6042,7 @@ public sealed partial class Evaluation : IFileTester
     internal enum ReturnTargetKind { None, Function, Source }
 
     /// <summary>An active source invocation above the recorded function depth.</summary>
-    internal sealed record SourceCallerFrame(string Path, int FunctionDepth, SourceCallerFrame? Enclosing);
+    internal sealed record SourceCallerFrame(int FunctionDepth, SourceCallerFrame? Enclosing);
 
     /// <summary>Carries control-flow boundaries independently of function-local binding ownership.</summary>
     internal readonly struct EvaluationContext(int loopDepth, FunctionContext? functionContext, ReturnTargetKind returnTarget)
@@ -6058,6 +6056,9 @@ public sealed partial class Evaluation : IFileTester
         public bool ErrexitIgnored { get; init; }
         public SourceMemory? SourceMemory { get; init; }
         internal CommandCoordinates Coordinates { get; init; }
+
+        /// <summary>The source that supplies the reached command's syntax and coordinates.</summary>
+        internal string? DiagnosticPath => SourceMemory?.DiagnosticPath;
 
         public EvaluationContext WithErrexitIgnored() => this with { ErrexitIgnored = true };
 

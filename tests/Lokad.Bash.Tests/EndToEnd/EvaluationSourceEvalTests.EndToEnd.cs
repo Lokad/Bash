@@ -59,6 +59,61 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(false, "line 4")]
+    [InlineData(true, "./definition: line 4")]
+    public async Task AssignmentDiagnosticsSwitchBackToTheCallerAfterAFunctionReturns(bool sourced, string location)
+    {
+        const string Definition = "\nf() {\n  local -r mark=kept\n  mark=changed\n}\n";
+        const string Calls = "f\nprintf 'call:%s;' \"$?\"\nreadonly mark=outer\nmark=changed\n"
+            + "printf 'continued:%s;' \"$?\"\n";
+        await using var host = EndToEndHarness.BuildTree([("/definition", Definition), ("/calls", Calls)]);
+        var script = (sourced ? "source ./definition\n" : Definition)
+            + "source ./calls 2>diagnostics\nprintf 'after:%s' \"$?\"\n";
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("call:1;continued:1;after:0", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal($"{location}: mark: readonly variable\n./calls: line 4: mark: readonly variable\n",
+            host.ReadFile("/diagnostics"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task EvalSyntaxDiagnosticsUseTheRetainedFunctionSource()
+    {
+        await using var host = EndToEndHarness.BuildTree([
+            ("/definition", "\n\nrun() {\neval 'printf first\n}\n'\n}\n")
+        ]);
+        var result = await EndToEndHarness.RunScriptAsync(
+            "source ./definition\nrun\nprintf 'end:%s' \"$?\"\n", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("firstend:2", result.StdOut);
+        Assert.Equal("./definition: eval: line 7: syntax error near unexpected token `}'\n"
+            + "./definition: eval: line 7: `}'\n", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("$(printf '%s' \"${missing:?required}\")")]
+    [InlineData("`printf '%s' \"${missing:?required}\"`")]
+    public async Task FunctionCaptureDiagnosticsUseTheRetainedDefinitionSource(string capture)
+    {
+        await using var host = EndToEndHarness.BuildTree([
+            ("/definition", "run() {\n  buffer=" + capture + "\n  printf '<%s:%s>' \"$?\" \"$buffer\"\n}\n"),
+            ("/calls", "run\n")
+        ]);
+        var result = await EndToEndHarness.RunScriptAsync("source ./definition\nsource ./calls\n", host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:>", result.StdOut);
+        Assert.Equal("./definition: line 2: missing: required\n", result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("export x=body", "body")]
     [InlineData("readonly x=body", "body")]
     [InlineData("unset x; export x=body", "body")]

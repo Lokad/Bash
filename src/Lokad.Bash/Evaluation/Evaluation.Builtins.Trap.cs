@@ -214,13 +214,14 @@ public sealed partial class Evaluation
             }
 
             // EXIT runs independently of its caller's tested-status suppression. Keep
-            // positional and flow targets, while copied action bytes own their syntax.
+            // the reached flow targets and diagnostic source while copying the action.
             var trapScope = scope with
             {
                 Context = new EvaluationContext(scope.Context.LoopDepth, function, returnTarget)
                 {
                     GlobalPrefixes = prefixes,
-                    CallerSource = callerSource
+                    CallerSource = callerSource,
+                    SourceMemory = scope.Context.SourceMemory
                 },
                 Timing = null,
                 ErrexitRedirections = null

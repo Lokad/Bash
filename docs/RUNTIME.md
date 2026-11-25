@@ -599,6 +599,12 @@ Each source command owns its immutable frame across execution and child
 cleanup. Child evaluations borrow the frame chain and preserve the order
 relative to their reconstructed function scopes. A retained function
 definition keeps its source bytes independently of any active invocation.
+Command diagnostics take their filename and coordinates from the reached
+syntax, so a retained function reports its definition source through a
+different caller. Eval and captures inherit the source of the reached
+command while an explicit source reader supplies its own filename.
+An EXIT action inherits the source active at termination through the
+unwind of local bindings.
 Explicit `Parser.Parse`/`Parser.TryParse` and prepared `Evaluation` execution retain
 whole-script validation. Recoverable arithmetic/assignment expansion failures end
 their current unit; unrecoverable failures and explicit exit stop the script.

@@ -150,6 +150,29 @@ public sealed class TrapCommandUnitTests
     }
 
     [Fact]
+    public async Task ExitActionDiagnosticKeepsTheTerminatingFunctionSourceAfterUnwind()
+    {
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        host.AddFile("/definition", "run() {\n  false\n}\n");
+        host.AddFile("/calls", "run\n");
+        const string Script = """
+            trap 'printf "%s" "${missing:?action}"' EXIT
+            set -e
+            source ./definition
+            source ./calls
+            """;
+
+        var result = await host.RunAsync(Script, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal("./definition: line 1: missing: action\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task ResetDuringExitKeepsTheSavedStatus()
     {
         var result = await EvaluationTestHelper.RunAsync("""

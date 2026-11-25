@@ -34,13 +34,11 @@ internal sealed class SourceMemory
     }
 
     /// <summary>Admits the reader path before publication through a root source owner.</summary>
-    internal string OwnDiagnosticPath(string path, bool prefixCurrentDirectory)
+    internal void OwnDiagnosticPath(string path, bool prefixCurrentDirectory)
     {
         var length = path.Length + (prefixCurrentDirectory ? 2L : 0L);
         SyntaxMemory.Grow(24L + 2L * length);
-        var spelling = prefixCurrentDirectory ? "./" + path : path;
-        DiagnosticPath = spelling;
-        return spelling;
+        DiagnosticPath = prefixCurrentDirectory ? "./" + path : path;
     }
 
     /// <summary>The caller must already hold a live reference while acquiring another.</summary>

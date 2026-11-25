@@ -54,7 +54,7 @@ public sealed partial class Evaluation
                 await ReportControlDiagnosticAsync([name], [message], scope).ConfigureAwait(false);
             else if (_builtinDiagnostics is not { Result.CanAcceptMore: false })
             {
-                var prefix = new SyntaxDiagnosticPrefix(scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ScriptLine,
+                var prefix = new SyntaxDiagnosticPrefix(scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine,
                     Math.Max(1, scope.Context.Coordinates.Line));
                 await WriteDiagnosticAsync(GetStdErrDescriptor(), [name], [message], _builtinDiagnostics, prefix).ConfigureAwait(false);
             }

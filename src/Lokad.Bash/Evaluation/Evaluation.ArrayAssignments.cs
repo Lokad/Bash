@@ -256,7 +256,7 @@ public sealed partial class Evaluation
         });
         _state.LastExitCode = status;
         if (failure.UnexpectedToken is { } token)
-            await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.ArrayAssignment,
+            await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ArrayAssignment,
                 line, includeLine: !ReaderErrexitEnabled(scope)).ConfigureAwait(false);
         else
             await ReportSyntaxErrorAsync(failure.Error).ConfigureAwait(false);
@@ -314,7 +314,7 @@ public sealed partial class Evaluation
             var token = Tokenizer.ReadUnexpectedWordToken(source, new ShellScanContext { SyntaxMemory = workspace });
             if (token == null)
                 return false;
-            await ReportUnexpectedSyntaxAsync(token, scope.Context.CallerSource?.Path, SyntaxDiagnosticOrigin.CommandSubstitution,
+            await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.CommandSubstitution,
                 GetCaptureDiagnosticLine(token, source.Bytes, lineOffset + line), includeLine: !errexit).ConfigureAwait(false);
             return true;
         }
