@@ -4250,7 +4250,7 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
         if (fatalKind is { } kind)
-            SetScopedExpansionFailure(kind, scope);
+            SetScopedExpansionFailure(new ExpansionFailure(kind), scope);
         _state.SetHereDocumentParameterError();
         return WriteExpansionFailureDiagnosticAsync(subject, message, GetHereDocumentParameterDiagnosticPrefix(scope), scope);
     }
@@ -4260,15 +4260,7 @@ public sealed partial class Evaluation : IFileTester
         ReadOnlySpan<ShellValue> message = [ShellValue.FromText("bad substitution")];
         if (hereDocument)
             return ReportHereDocumentParameterFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform);
-        if (_state.FatalExpansion.HasValue)
-            return Task.CompletedTask;
-        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.InvalidParameterTransform, 1)
-        {
-            UseInheritedPipelineExitAction = UsesInheritedPipelineExitAction(scope)
-        });
-        _state.LastExitCode = 1;
-        PublishExpansionPipelineStatus(1, scope);
-        return WriteDiagnosticAsync([subject], message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+        return ReportUnitExpansionFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform,
             GetCommandDiagnosticPrefix(scope));
     }
 
@@ -4367,8 +4359,8 @@ public sealed partial class Evaluation : IFileTester
         return WriteDiagnosticAsync(name, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
     }
 
-    internal void SetFatalExpansionError(ExpansionFailureKind kind)
-        => SetFatalExpansionError(new ExpansionFailure(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1));
+    internal void SetFatalExpansionError(ExpansionFailureKind kind) =>
+        SetFatalExpansionError(new ExpansionFailure(kind));
 
     private void SetFatalExpansionError(ExpansionFailure failure)
     {
@@ -4405,32 +4397,35 @@ public sealed partial class Evaluation : IFileTester
             return Task.CompletedTask;
 
         // Publish status while the reached lexical scope is still active.
-        SetScopedExpansionFailure(kind, scope);
+        SetScopedExpansionFailure(new ExpansionFailure(kind)
+        {
+            UseInheritedPipelineExitAction = kind == ExpansionFailureKind.InvalidParameterTransform
+                && !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope)
+        }, scope);
         _state.LastExitCode = 1;
         PublishExpansionPipelineStatus(1, scope);
         return WriteExpansionFailureDiagnosticAsync(subject, message, prefix, scope);
     }
 
-    private void SetScopedExpansionFailure(ExpansionFailureKind kind, ScopedEvaluation scope)
+    private void SetScopedExpansionFailure(ExpansionFailure failure, ScopedEvaluation scope)
     {
-        if (kind == ExpansionFailureKind.RequiredParameter)
-            SetFatalExpansionError(new ExpansionFailure(kind, 1)
+        if (failure.IsTerminalParameterFailure)
+            failure = failure with
             {
                 UnwindsLoadedReader = scope.InNestedCommandUnits && !_state.ErrexitEnabled
-            });
-        else
-            SetFatalExpansionError(kind);
+            };
+        SetFatalExpansionError(failure);
     }
 
     private Task WriteExpansionFailureDiagnosticAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
         SyntaxDiagnosticPrefix prefix, ScopedEvaluation scope)
     {
         var write = WriteDiagnosticAsync(subject, message, _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
-        return scope.Timing != null && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter } failure
+        return scope.Timing != null && _state.FatalExpansion is { IsTerminalParameterFailure: true } failure
             && (failure.UnwindsLoadedReader || _state.ErrexitEnabled)
-            ? SettleTimingAfterRequiredParameterAsync(write, scope, failure.UnwindsLoadedReader) : write;
+            ? SettleTimingAfterParameterFailureAsync(write, scope, failure.UnwindsLoadedReader) : write;
 
-        static async Task SettleTimingAfterRequiredParameterAsync(Task diagnostic, ScopedEvaluation active, bool unwindsReader)
+        static async Task SettleTimingAfterParameterFailureAsync(Task diagnostic, ScopedEvaluation active, bool unwindsReader)
         {
             await diagnostic.ConfigureAwait(false);
             if (unwindsReader)

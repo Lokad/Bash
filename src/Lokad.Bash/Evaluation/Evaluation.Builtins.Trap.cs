@@ -256,8 +256,8 @@ public sealed partial class Evaluation
             traps.EndExit();
             // Later command finalization reads the fatal status as the result unwinds.
             _state.FatalExpansion = kind == ExitTrapKind.Expansion
-                && failure is { Kind: ExpansionFailureKind.RequiredParameter } required
-                    ? required with { ExitCode = result.ExitCode } : failure;
+                && failure is { IsTerminalParameterFailure: true } parameterFailure
+                    ? parameterFailure with { ExitCode = result.ExitCode } : failure;
             _state.LastExitCode = result.ExitCode;
         }
 

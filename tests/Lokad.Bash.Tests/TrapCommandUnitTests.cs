@@ -18,16 +18,21 @@ public sealed class TrapCommandUnitTests
         "printf \"<exit:%s:%s:%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\" \"$1\" \"${x-unset}\"; printf handler >&2";
 
     [Theory]
-    [InlineData(false, "<exit:1:1:reader:unset>", "timed\n", "timed\n", "handler")]
-    [InlineData(true, "<exit:1:1:inner:unset>", "handler", "", "")]
-    public async Task RequiredParameterExitSelectsTheReaderAndSettlesItsTimers(
-        bool errexit, string output, string reachedSuffix, string invocationTiming, string readerOutput)
+    [InlineData(false, false, "<exit:1:1:reader:unset>", "timed\n", "timed\n", "handler")]
+    [InlineData(true, false, "<exit:1:1:inner:unset>", "handler", "", "")]
+    [InlineData(false, true, "<exit:1:1:reader:unset>", "timed\n", "timed\n", "handler")]
+    [InlineData(true, true, "<exit:1:1:inner:unset>", "handler", "", "")]
+    public async Task TerminalParameterFailureSelectsTheReaderAndSettlesItsTimers(
+        bool errexit, bool invalidTransform, string output, string reachedSuffix, string invocationTiming, string readerOutput)
     {
-        const string Diagnostic = "./inner.sh: line 1: missing: required\n";
+        var expansion = invalidTransform ? "${value@Z}" : "${missing:?required}";
+        var diagnostic = invalidTransform ? "./inner.sh: line 1: ${value@Z}: bad substitution\n"
+            : "./inner.sh: line 1: missing: required\n";
         var script = (errexit ? "set -e" : "set +e") + """
 
             set -- outer
             TIMEFORMAT=timed
+            value=present
             label=value source ./sample.sh reader 2>reader-error
             printf skipped
             """;
@@ -37,10 +42,7 @@ public sealed class TrapCommandUnitTests
             await using var host = new TestHost { MemoryBudget = governor };
             host.AddFile("/sample.sh", $"trap '{PrintParserExitFrame}; return 8' EXIT\n"
                 + "time { source ./inner.sh inner 2>invocation-error; } 2>outer-error\nprintf skipped\n");
-            host.AddFile("/inner.sh", """
-                time { : "${missing:?required}"; } 2>reached-error
-                printf skipped
-                """);
+            host.AddFile("/inner.sh", $"time {{ : \"{expansion}\"; }} 2>reached-error\nprintf skipped\n");
             using var owner = governor.CreateScope();
             var result = prepared
                 ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
@@ -49,7 +51,7 @@ public sealed class TrapCommandUnitTests
             Assert.Equal(8, result.ExitCode);
             Assert.Equal(output, host.StandardOutput.TextContent);
             Assert.Empty(host.StandardError.Content.ToArray());
-            Assert.Equal(Diagnostic + reachedSuffix, host.ReadFile("/reached-error"));
+            Assert.Equal(diagnostic + reachedSuffix, host.ReadFile("/reached-error"));
             Assert.Equal(invocationTiming, host.ReadFile("/invocation-error"));
             Assert.Empty(host.ReadFileBytes("/outer-error"));
             Assert.Equal(readerOutput, host.ReadFile("/reader-error"));
@@ -57,6 +59,27 @@ public sealed class TrapCommandUnitTests
             owner.Dispose();
             Assert.Equal(0, governor.ReservedBytes);
         }
+    }
+
+    [Theory]
+    [InlineData("set +e", 0, "<parent:1:1 0>", "<exit:0:0>")]
+    [InlineData("set -e", 1, "", "<exit:1:1 0>")]
+    public async Task InvalidTransformationInStageRedirectionRunsTheParentExitAction(
+        string option, int status, string stdout, string actionOutput)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(option + """
+
+            value=present
+            trap 'printf "<exit:%s:%s>" "$?" "${PIPESTATUS[*]}" >&2' EXIT
+            : 2>"${value@Z}" | :
+            printf "<parent:%s:%s>" "$?" "${PIPESTATUS[*]}"
+            """, CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(stdout, host.StandardOutput.TextContent);
+        Assert.Equal("line 4: ${value@Z}: bad substitution\n" + actionOutput, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]

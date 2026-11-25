@@ -1105,11 +1105,14 @@ it reports `cannot assign in this way` before expanding its operand.
 These failures discard the current command unit. With errexit disabled,
 the next unit of the root, eval or source reader sees status 1 and
 `PIPESTATUS=(1)`. A required-parameter failure reports its expanded
-message with the reached reader location and terminates that reader. With
-errexit disabled, EXIT runs at the outer loaded reader after its inner scopes
-unwind. A command-substitution child unwinds the reader invocation before
-EXIT. With errexit enabled, EXIT uses the reached scope and skips pending
-timing reports.
+message with the reached reader location and terminates that reader. An invalid
+transformation of a present value reports `bad substitution` and takes the same
+reader exit path. With errexit disabled, EXIT runs at the outer loaded reader
+after its inner scopes unwind. A command-substitution child unwinds the reader
+invocation before EXIT. With errexit enabled, EXIT uses the reached scope and skips pending
+timing reports. In pipeline stage preparation, an invalid transformation can
+reach the inherited action during argument expansion. Redirection expansion
+runs after that action has been reset.
 An indirect read of a missing element is also unset when its base variable
 exists, including a declaration without a value. A missing base variable,
 an uninitialized nameref or an invalid indirect name reports an expansion

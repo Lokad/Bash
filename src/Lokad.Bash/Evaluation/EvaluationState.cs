@@ -51,13 +51,19 @@ internal enum ExpansionFailureKind
 
 internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int ExitCode)
 {
+    internal ExpansionFailure(ExpansionFailureKind kind)
+        : this(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1) { }
+
+    internal bool IsTerminalParameterFailure =>
+        Kind is ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.InvalidParameterTransform;
+
     // A local option scope may be restored before the loaded script reader handles the failure.
     internal bool CanResumeUntestedUnit { get; init; }
 
     // Argument expansion in a direct pipeline stage precedes the child boundary that resets EXIT.
     internal bool UseInheritedPipelineExitAction { get; init; }
 
-    // A required parameter with errexit off exits through the active loaded readers.
+    // A terminal parameter failure with errexit off exits through the active loaded readers.
     internal bool UnwindsLoadedReader { get; init; }
 }
 
