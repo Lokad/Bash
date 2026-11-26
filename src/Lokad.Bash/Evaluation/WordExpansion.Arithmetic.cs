@@ -250,16 +250,11 @@ internal static partial class WordExpansion
             async ValueTask<ArithmeticError?> WriteAsync(ArithmeticReference selected, ArithmeticTarget binding, long value)
             {
                 var reference = selected.Syntax;
-                // Unlike a direct element operand, a whole-name nameref selects again for its write.
-                var resolved = default(VariableBinding);
-                var hasBinding = reference.Kind != VariableReferenceKind.Name
-                    || scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out resolved);
-                var elementNameref = reference.Kind == VariableReferenceKind.Name && hasBinding
-                    && resolved.Reference.Kind != VariableReferenceKind.Name;
-                var circularNameref = reference.Kind == VariableReferenceKind.Name
-                    && !hasBinding;
+                // A reached read can require a new write selection after the RHS runs.
                 if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read
-                    && (binding.Location == null || elementNameref || circularNameref))
+                    && (binding.Location == null || reference.Kind == VariableReferenceKind.Name
+                        && (!scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var resolved)
+                            || resolved.Reference.Kind != VariableReferenceKind.Name)))
                     binding = await SelectAsync(selected, ArithmeticReferenceUse.Assign).ConfigureAwait(false);
                 if (!scope.CanExpand)
                 {

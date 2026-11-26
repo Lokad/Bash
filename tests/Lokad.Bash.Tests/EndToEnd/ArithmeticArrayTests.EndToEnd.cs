@@ -476,6 +476,22 @@ public sealed class ArithmeticArrayTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("=", "<0>/<2>/<10 7 30>")]
+    [InlineData("+=", "<0>/<3>/<10 20 17>")]
+    public async Task ChainedNamerefAssignmentSelectsItsWriteAfterTheRightHandSide(string operation, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            a=(10 20 30); i=0; declare -n tail='a[i++]' head=tail
+            ((head{{operation}}(i+=1,7)))
+            printf "<%s>/<%s>/<%s>" "$?" "$i" "${a[*]}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ArithmeticArrays_BoundNestedSelectorEvaluation(bool exceedsLimit)
