@@ -143,6 +143,18 @@ public sealed class AnsiCQuotedWordTests
     }
 
     [Theory]
+    [InlineData("\\", "\\")]
+    [InlineData("\\0ignored", "")]
+    public void ValueDecoder_PreservesLiteralRunsAfterTheFirstEscape(string suffix, string expectedSuffix)
+    {
+        var run = new string('x', 4096) + "\rλ";
+        var source = ShellSource.FromText("\\t" + run + "\\q" + run + suffix);
+        var expected = ShellValue.FromText("\t" + run + "\\q" + run + expectedSuffix);
+
+        Assert.Equal(expected, ShellEscapeDecoder.DecodeAnsiCValue(source.AsSpan()));
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("\\q\\xg\\")]
     public void UnchangedLiteralOwnsOneExactCopy(string suffix)

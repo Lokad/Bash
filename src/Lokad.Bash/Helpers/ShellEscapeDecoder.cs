@@ -66,8 +66,11 @@ public static class ShellEscapeDecoder
                 if (source[index] != (byte)'\\' || index + 1 == source.Length)
                 {
                     var textStart = index++;
-                    while (index < source.Length && source[index] != (byte)'\\')
-                        index++;
+                    if (index < source.Length && source[index] != (byte)'\\')
+                    {
+                        var nextSlash = source[(index + 1)..].IndexOf((byte)'\\');
+                        index = nextSlash < 0 ? source.Length : index + 1 + nextSlash;
+                    }
                     output.Append(source[textStart..index]);
                     continue;
                 }
