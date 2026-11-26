@@ -649,7 +649,12 @@ internal sealed class EvaluationState
             ? coordinates.Offset + body.StartLine : coordinates.Line;
         SetFunctionBinding(new FunctionBinding(functionDefinition, attributes, context.SourceMemory, memory)
         {
-            Coordinates = coordinates with { FunctionBodyLine = bodyLine, CompoundOpenLine = coordinates.RedirectionOpenLine }
+            Coordinates = coordinates with
+            {
+                FunctionBodyLine = bodyLine,
+                CompoundOpenLine = coordinates.RedirectionOpenLine,
+                UnitReadLine = 0
+            }
         });
         return true;
     }

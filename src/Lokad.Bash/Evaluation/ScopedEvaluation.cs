@@ -6,6 +6,9 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Relates the active syntax tree's lines to the current script invocation.</summary>
 internal readonly record struct CommandCoordinates(CommandLocations? Locations, int Offset, int Line, int EndLine)
 {
+    /// <summary>The line reached by the reader for the whole command unit.</summary>
+    internal int UnitReadLine { get; init; }
+    internal int LastWordLine { get; init; }
     internal int RedirectionDiagnosticLine { get; init; }
     internal int? RedirectionOpenLine { get; init; }
     internal int CompoundHereDocumentLine { get; init; }
@@ -28,6 +31,7 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
             _ => location.StartLine
         }),
         EndLine = Offset + location.EndLine,
+        LastWordLine = Offset + (location.LastWordLine != 0 ? location.LastWordLine : location.EndLine),
         RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine,
         RedirectionOpenLine = command switch
         {

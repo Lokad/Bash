@@ -1388,8 +1388,12 @@ Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an
 ordinary variable.
 
-An invalid loop variable or function definition name reports the parsed
-command's source location through the active stderr descriptor.
+Invalid loop variable and function definition names use the reader's completed
+unit line through the active stderr descriptor. A retained function uses its
+body opening line for an invalid loop name and the definition header for an
+invalid nested definition. A subshell enters a reader at its closing line.
+`eval` counts these diagnostics from the last command word before trailing
+redirections, and modern captures use their rendered reader layout.
 
 An unhandled errexit status runs EXIT with the reached positional parameters and
 loop or return target. An ordinary failure restores function locals and temporary

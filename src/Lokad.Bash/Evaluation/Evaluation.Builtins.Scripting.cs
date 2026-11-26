@@ -351,6 +351,8 @@ public sealed partial class Evaluation
             ScriptExecutionKind.Source or ScriptExecutionKind.Trap => 0,
             _ => scope.Context.Coordinates.Offset
         };
+        var readerLineOffset = kind == ScriptExecutionKind.Eval
+            ? Math.Max(1, scope.Context.Coordinates.LastWordLine) - 1 : lineOffset;
 
         var result = EvaluationResult.FromExitCode(0);
         var scanContext = new ShellScanContext
@@ -380,7 +382,10 @@ public sealed partial class Evaluation
                 var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
                 var readDiagnostics = commands.Current.ReadDiagnostics;
                 var unitCoordinates = BeginCommandUnit(
-                    new CommandCoordinates(commands.Current.Locations, lineOffset, lineOffset + 1, lineOffset + 1));
+                    new CommandCoordinates(commands.Current.Locations, lineOffset, lineOffset + 1, lineOffset + 1)
+                    {
+                        UnitReadLine = commands.Current.UnitReadLine == 0 ? 0 : readerLineOffset + commands.Current.UnitReadLine
+                    });
                 ApplyReadFunctionBraceLine(lineOffset, readDiagnostics.FunctionBraceLine);
                 if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 {

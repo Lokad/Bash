@@ -6,6 +6,10 @@ namespace Lokad.Bash.Syntax;
 /// <summary>LF coordinates in the source from which a command runs.</summary>
 internal readonly record struct CommandLocation(int StartLine, int CommandLine, int EndLine)
 {
+    /// <summary>Line reached at the end of the reader unit, stored on its first located command.</summary>
+    internal int UnitReadLine { get; init; }
+    /// <summary>Line where the final command word ends when redirections can extend the command.</summary>
+    internal int LastWordLine { get; init; }
     /// <summary>Diagnostic line for a redirection immediately after an initial word.</summary>
     internal int RedirectionDiagnosticLine { get; init; }
     /// <summary>Overrides the command line when reporting a failed redirection open.</summary>
@@ -38,6 +42,24 @@ internal struct SourceLineCursor(int start)
 /// <summary>Parser-owned locations that use node identity and leave public AST equality intact.</summary>
 internal sealed class CommandLocations
 {
+    internal static ICommand UnitLocationAnchor(ICommand command)
+    {
+        while (true)
+        {
+            var inner = command switch
+            {
+                ListCommand list => list.Left,
+                NegatedCommand negated => negated.Inner,
+                TimedCommand timed => timed.Inner,
+                PipelineCommand pipeline => pipeline.Left,
+                _ => null
+            };
+            if (inner == null)
+                return command;
+            command = inner;
+        }
+    }
+
     private ICommand? _first;
     private CommandLocation _firstLocation;
     private Dictionary<ICommand, CommandLocation>? _entries;

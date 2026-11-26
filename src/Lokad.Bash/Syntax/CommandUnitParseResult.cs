@@ -17,6 +17,7 @@ internal abstract record CommandUnitParseResult
 
     internal CommandLocations? Locations { get; init; }
     internal CommandReadDiagnostics ReadDiagnostics { get; init; }
+    internal int UnitReadLine { get; init; }
 
     /// <summary>A complete unit whose syntax and here-document bodies have been parsed.</summary>
     internal sealed record Parsed(ICommand Command) : CommandUnitParseResult;

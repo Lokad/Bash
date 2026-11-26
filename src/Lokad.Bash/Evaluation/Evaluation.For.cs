@@ -15,7 +15,11 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (!forCommand.InvalidName.IsEmpty)
-            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(forCommand.InvalidName, scope)).ConfigureAwait(false);
+        {
+            var coordinates = scope.Context.Coordinates;
+            var line = coordinates.UnitReadLine != 0 ? coordinates.UnitReadLine : coordinates.FunctionBodyLine;
+            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(forCommand.InvalidName, scope, line)).ConfigureAwait(false);
+        }
         BindingName name = forCommand.Name;
         if (!name.IsIdentifier)
             return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(GetDiagnosticName(name), scope)).ConfigureAwait(false);

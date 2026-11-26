@@ -13,6 +13,7 @@ public sealed record ListCommand : ICommand
     private ICommand _right;
     private ListTraversal? _traversal;
     private bool _startsCommandUnit;
+    private bool _startsReaderUnit;
 
     public ICommand Left { get => _left; init { _left = value; _traversal = null; } }
     public ListOperator Operator { get => _operator; init { _operator = value; _traversal = null; } }
@@ -20,6 +21,8 @@ public sealed record ListCommand : ICommand
 
     /// <summary>The right operand begins a new complete unit in a prepared root script.</summary>
     internal bool StartsCommandUnit { get => _startsCommandUnit; init { _startsCommandUnit = value; _traversal = null; } }
+    /// <summary>The right operand advances the capture reader's diagnostic coordinate.</summary>
+    internal bool StartsReaderUnit { get => _startsReaderUnit; init { _startsReaderUnit = value; _traversal = null; } }
     internal bool HasNewlineConnector { get; init; }
     internal Range SeparatorSource { get; init; }
 

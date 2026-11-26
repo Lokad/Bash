@@ -206,6 +206,37 @@ public sealed class EvaluationForTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvalidLoopNameUsesTheCompletedUnitLine(bool prepared)
+    {
+        const string script = ":\nfor 'x' in one; do\n  printf body\ndone; : \\\n argument\n"
+            + "printf 'after:%s' \"$LINENO\"\n";
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, status);
+        Assert.Equal("after:6", host.StandardOutput.TextContent);
+        Assert.Equal("line 5: `'x'': not a valid identifier\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task InvalidLoopNameInEvalUsesTheLastWordBeforeTrailingRedirections()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(":\neval \"for 'x' in value; do\n :\ndone\" 2>log \\\n >out\nprintf after\n",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("after", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 6: `'x'': not a valid identifier\n", host.ReadFile("/log"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task DisplayedFunctionRetainsItsInvalidLoopNameUntilInvocation()
     {
@@ -217,7 +248,7 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("ready:1", host.StandardOutput.TextContent);
-        Assert.Equal("line 3: `\"name\"': not a valid identifier\n", host.StandardError.TextContent);
+        Assert.Equal("line 2: `\"name\"': not a valid identifier\n", host.StandardError.TextContent);
         Assert.Contains("for \"name\" in one;", host.ReadFile("/display"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -243,7 +274,7 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("status:1 value:<>", result.StdOut);
-        Assert.Equal("line 1: `bad-name': not a valid identifier\n", result.StdErr);
+        Assert.Equal("line 4: `bad-name': not a valid identifier\n", result.StdErr);
     }
 
     [Fact]

@@ -34,7 +34,7 @@ public sealed partial class Evaluation
             scope = scope with { Context = scope.Context.WithErrexitIgnored() };
 
         if (scope.Context.Coordinates.FunctionBraceBeforeUnit == null && command is not ListCommand)
-            scope = BeginPreparedCommandUnit(scope);
+            scope = BeginPreparedCommandUnit(scope, command, beginsExecutionUnit: true);
         var coordinates = scope.Context.Coordinates;
         var lineScope = default(Variables.LineNumberScope);
         var locationCommand = _pipelineStageSource is { } source && IsPipelineStageCommand(command) ? source : command;
@@ -168,7 +168,9 @@ public sealed partial class Evaluation
                 case FunctionDefinition functionDefinition:
                     if (functionDefinition.Name.Syntax.HasFlag(FunctionNameSyntax.Invalid))
                     {
-                        await ReportInvalidIdentifierAsync(functionDefinition.Name.Value, scope).ConfigureAwait(false);
+                        await ReportInvalidIdentifierAsync(functionDefinition.Name.Value, scope,
+                            scope.Context.Coordinates.UnitReadLine)
+                            .ConfigureAwait(false);
                         return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
                     }
                     if (!_state.TryRegisterFunction(functionDefinition, scope.Context, Memory))
@@ -238,7 +240,9 @@ public sealed partial class Evaluation
                     }
 
                     if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
-                        unitScope = BeginPreparedCommandUnit(listScope);
+                        unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
+                    else if (step.StartsReaderUnit)
+                        unitScope = BeginPreparedCommandUnit(unitScope, step.Command, beginsExecutionUnit: false);
                     var currentScope = step.ErrexitIgnored
                         ? unitScope with { Context = unitScope.Context.WithErrexitIgnored() } : unitScope;
                     result = await EvaluateCommandAsync(step.Command, currentScope, negated: false).ConfigureAwait(false);
@@ -267,10 +271,17 @@ public sealed partial class Evaluation
         }
     }
 
-    private ScopedEvaluation BeginPreparedCommandUnit(ScopedEvaluation scope) => scope with
+    private ScopedEvaluation BeginPreparedCommandUnit(ScopedEvaluation scope, ICommand command, bool beginsExecutionUnit)
     {
-        Context = scope.Context.WithCoordinates(BeginCommandUnit(scope.Context.Coordinates))
-    };
+        var coordinates = scope.Context.Coordinates;
+        if (coordinates.Locations is { } locations
+            && locations.TryGet(CommandLocations.UnitLocationAnchor(command), out var location)
+            && location.UnitReadLine != 0)
+            coordinates = coordinates with { UnitReadLine = coordinates.Offset + location.UnitReadLine };
+        if (beginsExecutionUnit)
+            coordinates = BeginCommandUnit(coordinates);
+        return scope with { Context = scope.Context.WithCoordinates(coordinates) };
+    }
 
     private CommandCoordinates BeginCommandUnit(CommandCoordinates coordinates) => coordinates with
     {

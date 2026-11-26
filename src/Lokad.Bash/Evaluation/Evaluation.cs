@@ -775,7 +775,10 @@ public sealed partial class Evaluation : IFileTester
         var (childVars, childContext) = scope.ForkBindings();
         var coordinates = childContext.Coordinates;
         if (coordinates.Locations?.TryGet(subshellCommand, out var location) == true)
-            childContext = childContext.WithCoordinates(coordinates with { CompoundOpenLine = coordinates.Offset + location.EndLine });
+        {
+            var closingLine = coordinates.Offset + location.EndLine;
+            childContext = childContext.WithCoordinates(coordinates with { CompoundOpenLine = closingLine, UnitReadLine = closingLine });
+        }
         var exitBoundary = SubshellExitBoundary(scope);
         var inheritedExitBindings = exitBoundary.KeepsReachedBindings ? null
             : parentState.CaptureInheritedExitBindings(scope.PipelineExitReader.RedirectionDepth, Memory);
@@ -5329,8 +5332,12 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private Task ReportInvalidIdentifierAsync(ShellValue identifier, ScopedEvaluation scope) =>
-        ReportCommandDiagnosticAsync([ShellValue.FromText("`"), identifier, ShellValue.FromText("'")],
-            [ShellValue.FromText("not a valid identifier")], scope);
+        ReportInvalidIdentifierAsync(identifier, scope, line: 0);
+
+    private Task ReportInvalidIdentifierAsync(ShellValue identifier, ScopedEvaluation scope, int line) =>
+        WriteDiagnosticAsync([ShellValue.FromText("`"), identifier, ShellValue.FromText("'")],
+            [ShellValue.FromText("not a valid identifier")], _builtinDiagnostics, ClosedStderrHandling.AttemptWrite,
+            GetCommandDiagnosticPrefix(scope.Context, line != 0 ? line : scope.Context.Coordinates.Line));
 
     /// <summary>Emits an expansion diagnostic without changing the caller's expansion status.</summary>
     internal Task ReportExpansionDiagnosticAsync(ShellValue name, ShellValue message) =>

@@ -7,12 +7,13 @@ namespace Lokad.Bash.Syntax;
 internal sealed class ListTraversal
 {
     // List commands mark branches. Every executable step holds a non-list command.
-    internal readonly struct Step(ICommand command, int endExclusive, bool errexitIgnored, bool startsCommandUnit)
+    internal readonly struct Step(ICommand command, int endExclusive, bool errexitIgnored, bool startsCommandUnit, bool startsReaderUnit)
     {
         public ICommand Command { get; } = command;
         public int EndExclusive { get; } = endExclusive;
         public bool ErrexitIgnored { get; } = errexitIgnored;
         public bool StartsCommandUnit { get; } = startsCommandUnit;
+        public bool StartsReaderUnit { get; } = startsReaderUnit;
     }
 
     public IReadOnlyList<Step> Steps { get; }
@@ -25,18 +26,21 @@ internal sealed class ListTraversal
         var pending = new Stack<(ICommand Command, bool Ignored, Preparation Phase, int Branch)>();
         pending.Push((root, false, Preparation.Visit, 0));
         var startsCommandUnit = false;
+        var startsReaderUnit = false;
         while (pending.TryPop(out var item))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (item.Phase == Preparation.Finish)
             {
-                steps[item.Branch] = new Step(item.Command, steps.Count, errexitIgnored: false, startsCommandUnit: false);
+                steps[item.Branch] = new Step(item.Command, steps.Count, errexitIgnored: false,
+                    startsCommandUnit: false, startsReaderUnit: false);
                 continue;
             }
             if (item.Phase == Preparation.Right)
             {
                 var list = (ListCommand)item.Command;
                 startsCommandUnit |= list.StartsCommandUnit;
+                startsReaderUnit |= list.StartsReaderUnit;
                 if (list.Operator != ListOperator.Sequence)
                 {
                     var branch = steps.Count;
@@ -55,8 +59,9 @@ internal sealed class ListTraversal
             }
             else
             {
-                steps.Add(new Step(item.Command, endExclusive: 0, item.Ignored, startsCommandUnit));
+                steps.Add(new Step(item.Command, endExclusive: 0, item.Ignored, startsCommandUnit, startsReaderUnit));
                 startsCommandUnit = false;
+                startsReaderUnit = false;
             }
         }
         Steps = steps;

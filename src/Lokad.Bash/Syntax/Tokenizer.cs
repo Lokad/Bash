@@ -122,9 +122,10 @@ internal sealed class Tokenizer
     }
 
     internal void RecordLocation(ICommand command, int startLine, int commandLine) =>
-        RecordLocation(command, startLine, commandLine, 0, 0);
+        RecordLocation(command, startLine, commandLine, 0, 0, 0);
 
-    internal void RecordLocation(ICommand command, int startLine, int commandLine, int redirectionDiagnosticLine, int redirectionOpenLine)
+    internal void RecordLocation(ICommand command, int startLine, int commandLine, int redirectionDiagnosticLine,
+        int redirectionOpenLine, int lastWordLine)
     {
         if (!TrackCommandLocations)
             return;
@@ -133,12 +134,24 @@ internal sealed class Tokenizer
             {
                 RedirectionDiagnosticLine = redirectionDiagnosticLine,
                 RedirectionOpenLine = redirectionOpenLine,
-                FunctionBraceLine = command is FunctionDefinition ? FunctionBraceLine : 0
+                FunctionBraceLine = command is FunctionDefinition ? FunctionBraceLine : 0,
+                LastWordLine = lastWordLine
             }, _scanContext.SyntaxMemory);
     }
 
     internal void RecordReadDiagnostics(ICommand command, CommandReadDiagnostics diagnostics) =>
         (Locations ??= new CommandLocations()).SetReadDiagnostics(command, diagnostics, _scanContext.SyntaxMemory);
+
+    internal int CompletedUnitReadLine => GetLine(Math.Max(0, Position - 1));
+
+    internal void RecordUnitReadLine(ICommand command)
+    {
+        if (Locations is not { } locations)
+            return;
+        var anchor = CommandLocations.UnitLocationAnchor(command);
+        if (locations.TryGet(anchor, out var location) && location.UnitReadLine == 0)
+            locations.Update(anchor, location with { UnitReadLine = CompletedUnitReadLine });
+    }
 
     internal void RecordRedirectedCommandLocation(RedirectedCommand command, int startLine)
     {
@@ -148,7 +161,7 @@ internal sealed class Tokenizer
         if (command.Body is ArithmeticCommand or ConditionalCommand or SubshellCommand or ArithmeticForCommand
             && Locations?.TryGet(command.Body, out var body) == true)
             openLine = command.Body is ArithmeticForCommand ? body.CommandLine : body.EndLine;
-        RecordLocation(command, startLine, startLine, 0, openLine);
+        RecordLocation(command, startLine, startLine, 0, openLine, 0);
         if (command.Body is SubshellCommand
             || !command.Redirections.Any(redirection => redirection.Kind is RedirectionKind.HereDocument or RedirectionKind.HereDocumentStripTabs))
             return;
@@ -166,7 +179,7 @@ internal sealed class Tokenizer
         if (_compoundHereDocuments == null || Locations == null)
             return;
         // Position follows the last byte consumed while reading the command unit.
-        var line = GetLine(Math.Max(0, Position - 1));
+        var line = CompletedUnitReadLine;
         foreach (var command in _compoundHereDocuments)
         {
             if (Locations.TryGet(command, out var location))

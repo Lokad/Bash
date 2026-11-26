@@ -212,9 +212,12 @@ internal static class FunctionDefinitionFormatter
                     if (edge == LocationEdge.ReaderEnd)
                         readerDepth--;
                     if (lines != null && locations?.TryGet(command, out var location) == true)
-                        locations.Update(command, edge == LocationEdge.FirstElement
-                            ? location with { CommandLine = lines.Line }
-                            : location with { EndLine = lines.Line });
+                        locations.Update(command, edge switch
+                        {
+                            LocationEdge.FirstElement => location with { CommandLine = lines.Line },
+                            LocationEdge.LastWord => location with { LastWordLine = lines.Line },
+                            _ => location with { EndLine = lines.Line }
+                        });
                     break;
                 case Step.Word(var word):
                     if (!AppendWordParts(word.Parts, 0)) return false;
@@ -242,9 +245,10 @@ internal static class FunctionDefinitionFormatter
                         // A separator inside a compound still belongs to its enclosing reader unit.
                         if (readerDepth == 0 && (newline || pendingDocuments))
                         {
-                            CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
+                            var readLine = lines.Line - (pendingDocuments ? 1 : 0);
+                            CompleteCompoundDocumentLocations(readLine);
                             if (functionDepth == 0)
-                                CompleteCapturedUnit();
+                                CompleteCapturedUnit(readLine);
                         }
                         if (followsFlushedDocuments && !newline && functionDepth == 0)
                             lines.RecordOmittedSeparator(separator);
@@ -477,7 +481,8 @@ internal static class FunctionDefinitionFormatter
                         unitFirstCommand ??= command;
                     if (lines != null && locations?.TryGet(command, out var physical) == true)
                     {
-                        locations.Update(command, new CommandLocation(lines.Line, lines.Line, lines.Line));
+                        locations.Update(command, new CommandLocation(lines.Line, lines.Line, lines.Line)
+                            { UnitReadLine = physical.UnitReadLine });
                         var opensReader = command is GroupCommand or SubshellCommand or IfCommand or CaseCommand
                             or ForCommand or ArithmeticForCommand or WhileCommand or UntilCommand;
                         if (opensReader)
@@ -497,13 +502,17 @@ internal static class FunctionDefinitionFormatter
                     switch (command)
                     {
                         case SimpleCommand simple:
-                            PrepareWork(Math.Max(1, checked(2 * (simple.Words.Count + simple.Assignments.Count))) + (capture ? 1 : 0));
+                            var trackLastWord = capture && simple.Redirections.Count != 0 && simple.Words.Count != 0;
+                            PrepareWork(Math.Max(1, checked(2 * (simple.Words.Count + simple.Assignments.Count)))
+                                + (capture ? 1 : 0) + (trackLastWord ? 1 : 0));
                             var hasCommandElements = simple.Words.Count != 0 || simple.Assignments.Count != 0;
                             work.Push(new Step.Redirections(simple.Redirections, !displayRedirections || hasCommandElements,
                                 capture && !hasCommandElements ? simple : null));
                             var commandLineWordIndex = Math.Min(simple.Words.Count - 1, 1);
                             for (var index = simple.Words.Count - 1; index >= 0; index--)
                             {
+                                if (trackLastWord && index == simple.Words.Count - 1)
+                                    work.Push(new Step.Location(simple, LocationEdge.LastWord));
                                 if (capture && index == commandLineWordIndex && simple.Assignments.Count == 0)
                                     work.Push(new Step.Location(simple, LocationEdge.FirstElement));
                                 work.Push(simple.DeclarationAssignments.TryGetValue(simple.Words[index], out var assignment)
@@ -656,15 +665,21 @@ internal static class FunctionDefinitionFormatter
         {
             var pendingDocuments = hereDocuments.Count != 0;
             if (!FlushDocumentLine()) return false;
-            CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
-            CompleteCapturedUnit();
+            var readLine = lines.Line - (pendingDocuments ? 1 : 0);
+            CompleteCompoundDocumentLocations(readLine);
+            CompleteCapturedUnit(readLine);
             return true;
         }
 
-        void CompleteCapturedUnit()
+        void CompleteCapturedUnit(int readLine)
         {
             if (unitFirstCommand is { } first && lines != null && locations != null)
+            {
                 lines.RecordUnitFunctionBrace(locations, first);
+                var anchor = CommandLocations.UnitLocationAnchor(first);
+                if (locations.TryGet(anchor, out var location) && location.UnitReadLine != 0)
+                    locations.Update(anchor, location with { UnitReadLine = readLine });
+            }
             unitFirstCommand = null;
         }
         return !inlineSource || hereDocuments.Count == 0 || Append("\n") && FlushHereDocuments();
@@ -1074,7 +1089,7 @@ internal static class FunctionDefinitionFormatter
         internal void Adjust(int lineBreaks) => Line += lineBreaks;
     }
 
-    private enum LocationEdge { FirstElement, CommandEnd, ReaderEnd }
+    private enum LocationEdge { FirstElement, LastWord, CommandEnd, ReaderEnd }
 
     /// <summary>Deferred syntax output; line steps also flush the current command line's here-documents.</summary>
     private abstract record Step

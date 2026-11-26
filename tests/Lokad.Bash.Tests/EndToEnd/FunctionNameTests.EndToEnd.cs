@@ -80,6 +80,28 @@ public sealed class FunctionNameTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Fact]
+    public async Task InvalidNamesInSeparateCaptureUnitsEachUseTheirRenderedReaderLine()
+    {
+        var result = await EvaluationTestHelper.RunAsync(":\ntext=$(\n  for 'x' in value; do\n    :\n  done\n"
+            + "  function 'y' {\n    :\n  }\n  :\n)\nprintf '<%s>' \"$text\"\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<>", result.StdOut);
+        Assert.Equal("line 13: `'x'': not a valid identifier\nline 17: `'y'': not a valid identifier\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task InvalidNamesInAFunctionSubshellUseTheClosingLine()
+    {
+        var result = await EvaluationTestHelper.RunAsync(":\nf(){\n (\n  for 'x' in value; do\n   :\n  done\n"
+            + "  function 'y' {\n   :\n  }\n )\n}\nf\n");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("line 10: `'x'': not a valid identifier\nline 10: `'y'': not a valid identifier\n", result.StdErr);
+    }
+
     [Theory]
     [InlineData("a=b() { :; }")]
     [InlineData("a[1]=x() { :; }")]
