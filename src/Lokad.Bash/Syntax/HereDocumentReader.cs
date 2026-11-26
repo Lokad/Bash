@@ -84,11 +84,8 @@ internal sealed class HereDocumentReader
         return true;
     }
 
-    /// <summary>Shares literal delimiter bytes and expansion policy with definition output.</summary>
-    internal static ShellSource GetHereDocumentDelimiter(Word word, out bool allowExpansion) =>
-        GetHereDocumentDelimiter(word, null, out allowExpansion);
-
-    private static ShellSource GetHereDocumentDelimiter(Word word, MemoryCapacity? memory, out bool allowExpansion)
+    /// <summary>Prepares the delimiter bytes and expansion policy for body collection.</summary>
+    internal static ShellSource GetHereDocumentDelimiter(Word word, MemoryCapacity? memory, out bool allowExpansion)
     {
         if (word.Parts is [var single])
         {

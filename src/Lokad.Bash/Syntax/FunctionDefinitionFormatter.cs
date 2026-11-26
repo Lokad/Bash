@@ -816,13 +816,21 @@ internal static class FunctionDefinitionFormatter
                 flushedHereDocuments = true;
             while (hereDocuments.TryDequeue(out var redirection))
             {
-                foreach (var part in redirection.Target.Parts)
-                    if (!output.TryAppend(part.GetUnexpandedValue().Bytes.Span)) return false;
+                if (!AppendUnexpandedParts(redirection.Target)) return false;
                 var delimiter = redirection.HereDocumentDelimiter
                     ?? throw new InvalidOperationException("A here-document requires its delimiter syntax.");
-                var literal = redirection.DelimiterSyntax?.Value ?? HereDocumentReader.GetHereDocumentDelimiter(delimiter, out _);
-                if (!output.TryAppend(literal.AsSpan()) || !Append("\n")) return false;
+                var written = redirection.DelimiterSyntax is { } syntax
+                    ? output.TryAppend(syntax.Value.AsSpan()) : AppendUnexpandedParts(delimiter);
+                if (!written || !Append("\n")) return false;
             }
+            return true;
+        }
+
+        bool AppendUnexpandedParts(Word word)
+        {
+            var parts = word.Parts;
+            for (var index = 0; index < parts.Count; index++)
+                if (!output.TryAppend(parts[index].GetUnexpandedValue().Bytes.Span)) return false;
             return true;
         }
 

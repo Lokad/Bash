@@ -17,7 +17,7 @@ public sealed class ParserHereDocumentTests
         var source = ShellSource.FromBytes(new byte[] { 0xff, (byte)'\r' });
         var word = new Word([WordPart.FromSource(kind, source)]);
 
-        var delimiter = HereDocumentReader.GetHereDocumentDelimiter(word, out var allowExpansion);
+        var delimiter = HereDocumentReader.GetHereDocumentDelimiter(word, memory: null, out var allowExpansion);
 
         Assert.True(delimiter.Bytes.Equals(source.Bytes));
         Assert.Equal(expands, allowExpansion);
@@ -29,7 +29,7 @@ public sealed class ParserHereDocumentTests
         var literal = WordPart.FromValue(WordPartKind.Escaped, ShellValue.FromBytes(new byte[] { 0xff }));
         var word = new Word([WordPart.FromText(WordPartKind.Unquoted, "E"), literal]);
 
-        var delimiter = HereDocumentReader.GetHereDocumentDelimiter(word, out var allowExpansion);
+        var delimiter = HereDocumentReader.GetHereDocumentDelimiter(word, memory: null, out var allowExpansion);
 
         Assert.Equal(new byte[] { (byte)'E', 0xff }, delimiter.Bytes.ToArray());
         Assert.False(allowExpansion);

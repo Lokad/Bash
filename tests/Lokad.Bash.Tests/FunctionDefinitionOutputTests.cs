@@ -202,6 +202,41 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Equal(bufferSize, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RenderingWritesMultipartHereDocumentDelimitersWithoutStaging(bool export)
+    {
+        const int bufferSize = 32 * 1024;
+        var first = new string('a', 4096);
+        var second = new string('b', 4096);
+        var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(
+            $"f() {{ : <<{first}'{second}'\n$x\n{first}{second}\n}}\n").Commands));
+        var budget = new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes);
+        using var display = export ? null : new ByteMemoryBuilder(bufferSize, budget);
+        using var exported = export ? new BoundedByteMemoryBuilder(bufferSize, bufferSize, budget) : null;
+
+        Render();
+        AllocationAssert.SustainedReuse(Render, iterations: 32, maximumBytes: 32 * 4096);
+        var rendered = exported?.ToMemory() ?? display?.ToMemory() ?? ReadOnlyMemory<byte>.Empty;
+        Assert.Contains("\n$x\n" + first + second + "\n", Utf8Text.Decode(rendered), StringComparison.Ordinal);
+
+        void Render()
+        {
+            if (exported != null)
+            {
+                exported.Reset(bufferSize);
+                Assert.True(FunctionDefinitionFormatter.TryAppendExport(definition, exported));
+            }
+            else
+            {
+                Assert.NotNull(display);
+                display.Truncate(0);
+                Assert.True(FunctionDefinitionFormatter.TryAppend(definition, display));
+            }
+        }
+    }
+
     [Fact]
     public void LongDescriptorNameEncodingReleasesItsScratchOnRefusal()
     {
@@ -460,6 +495,7 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ cat <<END\n$x\nEND\n\n}", "f () \n{ \n    cat <<END\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<ONE | cat <<'TWO'\nfirst\nONE\nsecond\nTWO\n\n}", "f () \n{ \n    cat <<ONE |\nfirst\nONE\n  cat <<'TWO'\nsecond\nTWO\n\n}\n")]
     [InlineData("f(){ cat <<END\nx\nEND\necho after;\n}", "f () \n{ \n    cat <<END\nx\nEND\n\n    echo after\n}\n")]
+    [InlineData("f(){ cat <<E'ND'\n$x\nEND\n}", "f () \n{ \n    cat <<E'ND'\n$x\nEND\n\n}\n")]
     [InlineData("f(){ (cat <<END\nbody\nEND\n); printf '%s' after; }",
         "f () \n{ \n    ( cat <<END\nbody\nEND\n )\n    printf '%s' after\n}\n")]
     [InlineData("f(){ { { cat <<END\nbody\nEND\n}; :; }; printf '%s' after; }",
