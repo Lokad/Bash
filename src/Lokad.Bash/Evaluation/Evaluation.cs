@@ -1873,7 +1873,7 @@ public sealed partial class Evaluation : IFileTester
                             value = WordExpansion.AppendAssignmentValue(previous, value, assignmentScope);
                     }
 
-                    if (!commandVars.TrySetScalar(name, value, memory: null, commandPrefix: true))
+                    if (!commandVars.TrySetScalar(name, value, Memory, assignment.Operator))
                     {
                         if (commandVars.IsReadonly(name))
                             await ReportCommandDiagnosticAsync([assignment.Target.ToValue()],
@@ -1889,9 +1889,8 @@ public sealed partial class Evaluation : IFileTester
                     Memory.PrepareListCapacity(declarationPrefixOrder, 1);
                     declarationPrefixOrder.Add(name);
                 }
-                // The temporary binding drops the integer attribute after preparing its value.
-                if (commandVars.IsIntegerBinding(name))
-                    commandVars.SetIntegerBinding(name, false);
+                // Append preparation can use the previous binding's attributes. The temporary value drops them.
+                commandVars.UpdateBindingAttributes(name, BindingAttributes.None, BindingAttributes.Integer | BindingAttributes.Case);
                 commandVars.SetExported(name, true);
             }
             return null;

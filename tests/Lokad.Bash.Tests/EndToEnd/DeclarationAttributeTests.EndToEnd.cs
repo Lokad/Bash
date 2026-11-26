@@ -561,6 +561,23 @@ public sealed class DeclarationAttributeTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("declare -u v=outer; v=ab eval 'declare -p v; v=mIx; declare -p v'; declare -p v",
+        "declare -x v=\"ab\"\ndeclare -x v=\"mIx\"\ndeclare -u v=\"OUTER\"\n")]
+    [InlineData("declare -u v=outer; v+=Ab v+=cD eval 'declare -p v'; declare -p v",
+        "declare -x v=\"OUTERABcD\"\ndeclare -u v=\"OUTER\"\n")]
+    [InlineData("declare -au v=(outer second); declare -n ref=v; ref=ab eval 'declare -p v'; declare -p v",
+        "declare -x v=\"ab\"\ndeclare -au v=([0]=\"OUTER\" [1]=\"SECOND\")\n")]
+    [InlineData("declare -l v=outer; v=Ab export v; declare -p v", "declare -xl v=\"ab\"\n")]
+    public async Task TemporaryPrefixesUseCaseAttributesForAppendAndPersistentPublication(string script, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("readonly -n r=v\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r",
         "[0:0]declare -- r=\"v\"\n", "")]
     [InlineData("v=old; declare -n r=v\nreadonly -n r=new\nprintf '[%s:%s]' \"$?\" \"${PIPESTATUS[*]}\"; declare -p r v",

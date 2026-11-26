@@ -1,5 +1,6 @@
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
@@ -9,6 +10,52 @@ namespace Lokad.Bash.Tests;
 
 public sealed class PrefixScopeOwnershipTests
 {
+    [Fact]
+    public async Task ConvertedPrefixAppendBytesStayAdmittedThroughRedirection()
+    {
+        const int length = 4096;
+        var syntax = Parser.Parse("declare -u value=q; value+=$1 eval 'echo -n \"$value\"' >out");
+        var expected = new byte[length + 1];
+        expected.AsSpan().Fill((byte)'A');
+        expected[0] = (byte)'Q';
+        expected[^1] = 0xff;
+        var unchanged = expected[1..];
+        var changed = (byte[])unchanged.Clone();
+        changed.AsSpan(..^1).Fill((byte)'a');
+
+        var unchangedBytes = await ObservePrefixAsync(unchanged);
+        var convertedBytes = await ObservePrefixAsync(changed);
+        Assert.True(convertedBytes >= unchangedBytes + length,
+            $"The converted operand needs its own backing. Observed {convertedBytes} bytes with conversion and {unchangedBytes} without it.");
+
+        async Task<long> ObservePrefixAsync(byte[] input)
+        {
+            var state = new Eval(syntax);
+            state.ReplacePositionalParameters([ShellValue.FromBytes(input)]);
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            state.Memory.Budget = owner;
+            var descriptor = new FileDescriptor(9);
+
+            var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep());
+            var bytes = state.Memory.Workspace.Bytes;
+            open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+            var write = Assert.IsType<WriteOperation>(await state.GetNextStep());
+            Assert.Equal(descriptor, write.FileDescriptor);
+            Assert.Equal(expected, write.Content.ToArray());
+            write.SetResult(DescriptorWriteResult.Open);
+            var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
+            Assert.Equal(descriptor, close.Descriptor);
+            close.SetResult(null);
+            Assert.Null(await state.GetNextStep());
+            Assert.Equal(0, state.LastExitCode);
+            Assert.Equal(ShellValue.FromText("Q"), state.Variables["value"]);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return bytes;
+        }
+    }
+
     [Fact]
     public void ReachedBindingsDetachArraysAttributesAndHiddenNames()
     {

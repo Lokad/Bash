@@ -337,6 +337,8 @@ reached fields directly to that list.
 With newline and escape processing disabled, echo can borrow a single operand
 through redirection and the awaited write. Concatenated or decoded output
 retains its own buffer until command completion.
+Temporary assignment prefixes admit case-converted value bytes in the command
+workspace through redirection, invocation and restoration.
 Field splitting owns one reusable scratch buffer for pending bytes and one
 quote-run list. It completes fields at their boundaries and reuses the segment
 builder list. Word assembly can retain a compact immutable segment with a

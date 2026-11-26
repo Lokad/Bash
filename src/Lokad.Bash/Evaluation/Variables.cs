@@ -859,7 +859,7 @@ public sealed partial class Variables
                 var index = reference.Kind == VariableReferenceKind.Element ? reference.Subscript.ToValue() : ShellValue.FromText("0");
                 if (kind == ArrayAssignmentKind.Auto)
                 {
-                    variables.SetAssignedScalar(resolved, operand.Value, memory);
+                    variables.SetAssignedScalar(resolved, operand.Value, memory, prefixOperator: null);
                     return true;
                 }
                 // Without an initializer, a selector declares the array type but is not evaluated.
@@ -1007,7 +1007,7 @@ public sealed partial class Variables
         else if (slot is AssociativeSlot)
             _ = TrySetResolvedArrayElement(resolved, AssociativeArrayKey.Zero, value, memory);
         else
-            return SetAssignedScalar(resolved, value, memory);
+            return SetAssignedScalar(resolved, value, memory, prefixOperator: null);
         return HasAttribute(resolved, BindingAttributes.Case) && TryGetExpansionValue(resolved, out var stored)
             ? stored : value;
     }
@@ -1017,17 +1017,17 @@ public sealed partial class Variables
     /// </summary>
     public bool TrySetScalar(BindingName name, ShellValue value) => TrySetScalar(name, value, memory: null);
 
-    internal bool TrySetScalar(BindingName name, ShellValue value, EvaluationMemory? memory, bool commandPrefix = false)
+    internal bool TrySetScalar(BindingName name, ShellValue value, EvaluationMemory? memory) =>
+        TrySetScalar(name, value, memory, prefixOperator: null);
+
+    internal bool TrySetScalar(BindingName name, ShellValue value, EvaluationMemory? memory, AssignmentOperator? prefixOperator)
     {
         if (!TryResolveWritableName(name, out var resolved))
             return false;
 
         if (resolved.IsEmpty)
             return IsUnsetNameref(name) && TryInitializeUnsetNameref(name, value, memory);
-        if (commandPrefix && TryGetBinding(resolved, out var slot) && slot is LineNumberSlot)
-            ReplaceValue(resolved, new ScalarSlot(value));
-        else
-            SetAssignedScalar(resolved, value, memory);
+        SetAssignedScalar(resolved, value, memory, prefixOperator);
         return true;
     }
 
@@ -1067,7 +1067,7 @@ public sealed partial class Variables
             if (target.IsUnset)
                 return TrySetScalar(name, value, memory);
         }
-        SetAssignedScalar(name, value, memory);
+        SetAssignedScalar(name, value, memory, prefixOperator: null);
         return true;
     }
 
@@ -1108,10 +1108,17 @@ public sealed partial class Variables
         SetResolvedScalar(resolved, slot, value);
     }
 
-    private ShellValue SetAssignedScalar(BindingName resolved, ShellValue value, EvaluationMemory? memory)
+    private ShellValue SetAssignedScalar(BindingName resolved, ShellValue value, EvaluationMemory? memory,
+        AssignmentOperator? prefixOperator)
     {
         TryGetBinding(resolved, out var slot);
-        value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, value, memory);
+        if (prefixOperator.HasValue && slot is LineNumberSlot)
+        {
+            ReplaceValue(resolved, new ScalarSlot(value));
+            return value;
+        }
+        if (prefixOperator != AssignmentOperator.Replace)
+            value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, value, memory);
         SetResolvedScalar(resolved, slot, value);
         return value;
     }

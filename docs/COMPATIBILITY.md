@@ -318,6 +318,11 @@ original key spelling. Integer attributes take precedence when evaluating an
 assigned value. Case conversion uses the invariant UTF-8 character profile
 and copies malformed bytes verbatim.
 
+Replacement prefixes for a command use the supplied value bytes. The first
+append can apply the caller binding's case attribute. The temporary value drops
+that attribute for later prefixes and assignments within the command. A saved
+binding keeps its attributes through restoration and persistent publication.
+
 In parameter case conversion, an omitted pattern or a pattern expansion
 that produces no fields selects every character the operator considers.
 An explicitly quoted empty pattern or an empty aggregate field supplied
