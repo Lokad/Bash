@@ -147,6 +147,32 @@ public sealed class HereInputLifetimeTests
     }
 
     [Theory]
+    [InlineData(false, "tail")]
+    [InlineData(true, "70000")]
+    public async Task HereDocumentRecoveryRetainsTheEarlierInputThroughItsLastReader(bool consumed, string expected)
+    {
+        var script = ": seed\nread -r skipped <<FIRST <<LAST\n" + new string('x', 70000) + "\nFIRST\nX$(!)Y\nLAST\n"
+            + (consumed ? "IFS= read -r value; printf '%s' \"${#value}\"" : "printf tail");
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(8 * 1024 * 1024);
+            await using var host = new TestHost { MemoryBudget = governor };
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            RunResult result;
+            using (var owner = governor.CreateScope())
+                result = prepared
+                    ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(script)), host, owner, deadline.Token)
+                    : await host.RunAsync(script, deadline.Token);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Contains("syntax error near unexpected token `)'", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]

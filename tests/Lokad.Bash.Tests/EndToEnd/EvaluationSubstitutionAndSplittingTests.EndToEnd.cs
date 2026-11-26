@@ -219,6 +219,61 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         }
     }
 
+    [Theory]
+    [InlineData("read -r value")]
+    [InlineData("{ :; }")]
+    [InlineData("value=ready")]
+    public async Task RejectedHereDocumentKeepsOnlyTheReachedRedirection(string command)
+    {
+        var script = ": seed\n" + command + " 2>errors <<EOF 3>late\nX$(!)Y\nEOF\nprintf after >&2\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.EndsWith("after", host.ReadFile("/errors"));
+            Assert.False(await EndToEndHarness.FileExistsAsync(host, "/late"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("source")]
+    [InlineData("eval")]
+    public async Task RejectedHereDocumentPreservesWithinTheLoadedInvocation(string builtin)
+    {
+        const string reader = "read -r value 2>errors <<EOF\nX$(!)Y\nEOF\nprintf inside >&2\n";
+        var invocation = builtin == "source" ? "source ./reader" : "eval " + ShellArgumentEscaping.EscapeArgument(reader);
+        var script = invocation + " 2>invocation\nprintf parent >&2\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (builtin == "source")
+                host.AddFile("/reader", reader);
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("parent", host.StandardError.TextContent);
+            Assert.EndsWith("inside", host.ReadFile("/errors"));
+            Assert.Empty(host.ReadFile("/invocation"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedHereDocumentKeepsTheCapturedChildsExitMapping()
+    {
+        const string script = "captured=$(trap 'printf child >&2' EXIT\nread -r value 2>errors <<EOF\nX$(!)Y\nEOF\n"
+            + "printf skipped\n)\nprintf '<%s|%s>' \"$?\" \"$captured\"; printf parent >&2\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|>", host.StandardOutput.TextContent);
+            Assert.Equal("parent", host.StandardError.TextContent);
+            Assert.EndsWith("child", host.ReadFile("/errors"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     private static async Task<int> RunSubstitutionFixtureAsync(string script, TestHost host, bool prepared) => prepared
         ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
         : (await host.RunAsync(script, CancellationToken.None)).ExitCode;

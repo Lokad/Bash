@@ -90,6 +90,70 @@ public sealed class DescriptorOwnershipLifetimeTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveredHereDocumentSettlesReplacementsAtTheLastReference(bool keepsAlias)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new RecordingCloseHost { MemoryBudget = owner };
+        FileDescriptor[]? closedBeforeMarker = null;
+        host.BeforeWritableOpen = path =>
+        {
+            if (path.Path == "/marker") closedBeforeMarker = host.Closed.ToArray();
+        };
+        var alias = keepsAlias ? " 4>&3" : "";
+        var useAlias = keepsAlias ? "printf alias >&4; exec 4>&-\n" : "";
+        var script = "exec 3>initial" + alias + "\nread -r value 3>replacement <<EOF\nX$(!)Y\nEOF\n"
+            + "printf marker >marker\n" + useAlias + "printf kept >&3\n";
+        var result = await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(keepsAlias ? "alias" : "", host.ReadFile("/initial"));
+        Assert.Equal("kept", host.ReadFile("/replacement"));
+        Assert.Equal(3, host.Opened.Count);
+        Assert.NotNull(closedBeforeMarker);
+        Assert.Equal(keepsAlias ? [] : new[] { host.Opened[0] }, closedBeforeMarker);
+        Assert.Equal(keepsAlias ? new[] { host.Opened[2], host.Opened[0], host.Opened[1] }
+            : new[] { host.Opened[0], host.Opened[2], host.Opened[1] }, host.Closed);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task CancellationAwaitsTheHereDocumentReplacementClose()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var host = new PendingCloseHost { MemoryBudget = owner };
+        const string script = "exec 3>initial\nread -r value 3>replacement <<EOF\nX$(!)Y\nEOF\nprintf unreached\n";
+        var running = new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, cancellation.Token);
+        try
+        {
+            await host.Entered.Task.WaitAsync(deadline.Token);
+            Assert.Equal(2, host.Opened.Count);
+            Assert.Equal(host.Opened[0], host.ClosingHandle);
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+        }
+        finally
+        {
+            host.Release.TrySetResult();
+        }
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(deadline.Token));
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(2, host.Closes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("", "")]
     [InlineData(" 7>&99", "line 1: 99: Bad file descriptor\n")]
     public async Task ConsumedHandleClosesBeforeTheNextCommandBegins(string laterRedirection, string error)
@@ -230,15 +294,17 @@ public sealed class DescriptorOwnershipLifetimeTests
         return frames.GetType().GetMethod("Peek")?.Invoke(frames, null) ?? throw new InvalidOperationException();
     }
 
-    private sealed class PendingCloseHost : TestHost
+    private sealed class PendingCloseHost : RecordingCloseHost
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Closes { get; private set; }
+        public FileDescriptor ClosingHandle { get; private set; }
 
         public override async Task<OperationError?> CloseDescriptorAsync(FileDescriptor descriptor)
         {
             Closes++;
+            ClosingHandle = descriptor;
             Entered.TrySetResult();
             await Release.Task;
             return await base.CloseDescriptorAsync(descriptor);
@@ -251,7 +317,7 @@ public sealed class DescriptorOwnershipLifetimeTests
         }
     }
 
-    private sealed class RecordingCloseHost : TestHost, IBashHost
+    private class RecordingCloseHost : TestHost, IBashHost
     {
         public List<FileDescriptor> Opened { get; } = [];
         public List<FileDescriptor> Closed { get; } = [];

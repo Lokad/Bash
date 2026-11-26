@@ -631,6 +631,10 @@ status to the enclosing list. With errexit active in the current reader,
 EXIT runs with status 2 and the redirections already applied there. An
 unexpected token inside a nested substitution can terminate the reader
 and publish its grammar status even with errexit disabled.
+When a rejected here-document discards a command unit, earlier redirections
+remain active in the shell or enclosing redirect that owns them. An open,
+alias or close after the rejected document never runs. A child can use its
+own reached mappings in EXIT, and its parent retains the original bindings.
 The diagnostic uses the reached command-unit boundary, including when
 the capture's rendered layout supplies that boundary. A previously
 defined function uses the opening line of its body. Arithmetic and

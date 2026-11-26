@@ -25,7 +25,7 @@ internal sealed class RedirectionEvaluation
     private readonly bool _reportMoveRestorationFailure;
     /// <summary> Stores descriptors opened during redirection evaluation, in open order. </summary>
     private readonly DescriptorHandleOwner _openedDescriptors = new();
-    /// <summary>Stores replaced handles in encounter order when the scope will be preserved.</summary>
+    /// <summary>Stores replaced handles in encounter order when the scope may be preserved.</summary>
     private readonly OrderedDescriptorSet? _replacedHandles;
     /// <summary> Stores logical descriptors explicitly targeted by the redirections. </summary>
     private readonly HashSet<LogicalDescriptor> _touchedDescriptors = new();
@@ -38,14 +38,14 @@ internal sealed class RedirectionEvaluation
         IReadOnlyList<Redirection> redirections,
         DescriptorTable descriptorTable,
         RedirectionOrigin origin,
-        bool preserveBindings,
+        bool trackReplacedHandles,
         bool reportMoveRestorationFailure)
     {
         _redirections = redirections;
         _descriptorTable = descriptorTable;
         _origin = origin;
         _reportMoveRestorationFailure = reportMoveRestorationFailure;
-        _replacedHandles = preserveBindings ? new OrderedDescriptorSet() : null;
+        _replacedHandles = trackReplacedHandles ? new OrderedDescriptorSet() : null;
     }
 
     /// <summary>

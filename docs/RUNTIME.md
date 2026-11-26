@@ -492,6 +492,11 @@ nameref elements. Their closes are temporary unless `exec` preserves them.
 Trailing subshell redirections expand within the child bindings. The child
 keeps their descriptor frame through its EXIT handler and closes its own
 handles before returning to the parent.
+For a rejected here-document that discards the current shell's command unit,
+the active setup commits its earlier descriptor changes through their
+existing restoration boundaries. A capturing or loaded child can keep them
+through its EXIT action. The same transfer and retirement path used by
+`exec` handles replacements and remaining aliases.
 
 Commandless isolated redirections reuse command-scoped bindings and the
 ordinary restorable descriptor frame. They borrow visible variables and
