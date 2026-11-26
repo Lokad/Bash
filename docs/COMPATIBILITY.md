@@ -1495,7 +1495,8 @@ string, and `@k` supplies keys and values as fields. A quoted `[@]@k` preserves
 empty value fields. Quoted `[*]@k` joins pairs using the first character of `IFS`.
 Associative transformations use the same byte key order as other aggregates and
 declarations. Reusable quoting preserves bytes and renders invalid UTF-8 with
-octal escapes.
+octal escapes. In reusable single-quote form, a lone apostrophe is spelled
+`\'`.
 
 `test`/`[` preserve bytes in string equality, ordering and length predicates. Their
 zero-to-four argument rules precede the `!`, parenthesis, `-a` and `-o` expression
@@ -1584,7 +1585,9 @@ reached source location and stderr mapping.
 still contribute to `%n` and the output length limit. Later conversions
 retain their normal diagnostic and count-assignment effects.
 `%q` and `%Q` use ANSI-C spelling for nonprinting or malformed bytes.
-Their `#` flag selects single-quoted spelling for printable bytes.
+Their backslash form protects commas so the quoted result can be reused in a
+brace list. Their `#` flag selects the Bash 5.3 single-quote form for printable
+bytes.
 
 `unset` follows the same help status and output rules. Leading option groups
 are scanned in order. An earlier invalid option reports usage, and `--`

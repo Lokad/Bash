@@ -839,8 +839,7 @@ internal sealed class ConditionalParser : IDisposable
             }
             if (edit.Kind == SpellingEditKind.Omit)
                 return true;
-            return bytes.SequenceEqual("'"u8) ? output.TryAppend("\\'"u8)
-                : ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, bytes);
+            return ShellArgumentEscaping.TryAppendBashSingleQuoted(output, bytes);
         }
     }
 

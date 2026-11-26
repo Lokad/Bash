@@ -474,6 +474,9 @@ public sealed class PrintfFormattingTests : IDisposable
 
     [Theory]
     [InlineData("%q", "a b", "a\\ b")]
+    [InlineData("%q", "a,b", "a\\,b")]
+    [InlineData("%.2q", "a,b", "a\\")]
+    [InlineData("%.2Q", "a,b", "a\\,")]
     [InlineData("%q", "a\nb", "$'a\\nb'")]
     [InlineData("%q", "a\u0001b", "$'a\\001b'")]
     // Bash 5.3 alternate quoting still uses ANSI-C syntax for nonprinting bytes.

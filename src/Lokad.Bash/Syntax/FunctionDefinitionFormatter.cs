@@ -418,9 +418,7 @@ internal static class FunctionDefinitionFormatter
                         // Body collection marks a protected delimiter by storing a literal body.
                         if (displayHereDocumentDelimiters && redirection.Target.Parts is [{ Kind: WordPartKind.SingleQuoted }])
                         {
-                            if (!output.TryAppend((byte)'\'')
-                                || !AppendHereDocumentDelimiterValue(redirection, delimiterWord, singleQuoted: true)
-                                || !output.TryAppend((byte)'\'')) return false;
+                            if (!AppendHereDocumentDelimiterValue(redirection, delimiterWord, singleQuoted: true)) return false;
                         }
                         else
                             PushStep(redirection.DelimiterSyntax is { } syntax
@@ -708,7 +706,7 @@ internal static class FunctionDefinitionFormatter
                     // ANSI-C quoting keeps embedded apostrophes in one literal part on import.
                     WordPartKind.SingleQuoted when (format == Format.Export || importValidation) && content.Contains((byte)'\'') =>
                         ShellArgumentEscaping.TryAppendQuoted(output, content, ShellQuoteStyle.AnsiC),
-                    WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, content),
+                    WordPartKind.SingleQuoted => ShellArgumentEscaping.TryAppendBashSingleQuoted(output, content),
                     WordPartKind.DoubleQuoted => output.TryAppend(content),
                     WordPartKind.Escaped => Append("\\") && output.TryAppend(content),
                     WordPartKind.CommandSubstitution or WordPartKind.CommandSubstitutionQuoted
@@ -847,10 +845,35 @@ internal static class FunctionDefinitionFormatter
             return true;
         }
 
-        bool AppendHereDocumentDelimiterValue(Redirection redirection, Word delimiter, bool singleQuoted) =>
-            redirection.DelimiterSyntax is { } syntax
-                ? AppendLiteralBytes(syntax.Value.AsSpan(), singleQuoted)
-                : AppendUnexpandedParts(delimiter, singleQuoted);
+        bool AppendHereDocumentDelimiterValue(Redirection redirection, Word delimiter, bool singleQuoted)
+        {
+            if (redirection.DelimiterSyntax is { } syntax)
+                return singleQuoted
+                    ? ShellArgumentEscaping.TryAppendBashSingleQuoted(output, syntax.Value.AsSpan())
+                    : AppendLiteralBytes(syntax.Value.AsSpan(), singleQuoted: false);
+            if (singleQuoted && FindSingleDelimiterPart(delimiter.Parts) is { } part)
+                return ShellArgumentEscaping.TryAppendBashSingleQuoted(output, part.GetUnexpandedValue().Bytes.Span);
+            return (!singleQuoted || output.TryAppend((byte)'\''))
+                && AppendUnexpandedParts(delimiter, singleQuoted)
+                && (!singleQuoted || output.TryAppend((byte)'\''));
+
+            WordPart? FindSingleDelimiterPart(IReadOnlyList<WordPart> parts)
+            {
+                if (parts is [var single])
+                    return single;
+                WordPart? selected = null;
+                foreach (var candidate in parts)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (candidate.GetUnexpandedValue().IsEmpty)
+                        continue;
+                    if (selected != null)
+                        return null;
+                    selected = candidate;
+                }
+                return selected;
+            }
+        }
 
         bool AppendUnexpandedParts(Word word, bool singleQuoted)
         {

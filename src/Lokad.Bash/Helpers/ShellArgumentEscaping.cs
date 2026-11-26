@@ -132,7 +132,7 @@ public static class ShellArgumentEscaping
             style = style == ShellQuoteStyle.AssociativeKey ? ShellQuoteStyle.DoubleQuoted : ShellQuoteStyle.SingleQuoted;
         }
         if (style == ShellQuoteStyle.SingleQuoted)
-            return TryAppendLiteralSingleQuoted(output, input);
+            return TryAppendBashSingleQuoted(output, input);
         if (style == ShellQuoteStyle.DoubleQuoted)
             return output.TryAppend((byte)'"') && AppendDoubleQuotedContent(output, input) && output.TryAppend((byte)'"');
         if (style != ShellQuoteStyle.Backslash)
@@ -141,7 +141,8 @@ public static class ShellArgumentEscaping
         var runStart = 0;
         for (var index = 0; index < input.Length; index++)
         {
-            if (IsShellSafe(input, index))
+            // A reusable word can be inserted into a brace list.
+            if (input[index] != (byte)',' && IsShellSafe(input, index))
                 continue;
 
             if (!AppendLiteralRun(output, input[runStart..index]) || !AppendBackslashEscape(output, input[index]))
@@ -247,6 +248,12 @@ public static class ShellArgumentEscaping
 
     internal static long GetLiteralSingleQuotedLength(ReadOnlySpan<byte> literal) =>
         2L + literal.Length + 3L * literal.Count((byte)'\'');
+
+    internal static long GetBashSingleQuotedLength(ReadOnlySpan<byte> literal) =>
+        literal is [(byte)'\''] ? 2 : GetLiteralSingleQuotedLength(literal);
+
+    internal static bool TryAppendBashSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal) =>
+        literal is [(byte)'\''] ? target.TryAppend("\\'"u8) : TryAppendLiteralSingleQuoted(target, literal);
 
     /// <summary>Quotes literal bytes without introducing ANSI-C syntax; false leaves an incomplete suffix.</summary>
     public static bool TryAppendLiteralSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal) =>

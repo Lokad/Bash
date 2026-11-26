@@ -211,6 +211,17 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
+    public async Task PrintfQuotedCommaRemainsOneBraceAlternative()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            """printf -v quoted '%q%n' 'left,right' size; eval 'printf "<%s>" {'"$quoted"',tail}'; printf ':%s' "$size" """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<left,right><tail>:11", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
     public async Task Evaluation_PrintfBuiltin_DoubleDashAllowsDashPrefixedFormat()
     {
         var result = await EvaluationTestHelper.RunAsync("printf -- '-%s' value");

@@ -6,6 +6,17 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationParameterOperatorTestsEndToEnd
 {
+    [Fact]
+    public async Task ParameterQuotesUseTheShortApostropheSpellingAndReplayIt()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            """v=$'\x27'; q=${v@A}; v=reset; eval "$q"; printf '<%s:%s:%s>' "$q" "${v@Q}" "$v" """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<v=\\':\\':'>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     // Pattern operations preserve shell bytes and allow later operands to execute.
     [Theory]
     [InlineData("a=$'\\377'", "${a%%x}", "FF6166746572")]

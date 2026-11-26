@@ -254,6 +254,21 @@ public sealed class FunctionDefinitionOutputTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Theory]
+    [InlineData("\\'")]
+    [InlineData("\"\"\\'\"\"")]
+    public async Task FunctionListingsReuseSingleApostropheWordsAndDelimiters(string delimiter)
+    {
+        var source = "f(){ printf '<%s>' $'\\x27'; read -r x <<" + delimiter + "\nbody\n'\nprintf '<%s>' \"$x\"; }\n";
+        var result = await EvaluationTestHelper.RunAsync(source
+            + "declare -f f\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nf\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("f () \n{ \n    printf '<%s>' \\';\n    read -r x <<\\'\nbody\n'\n\n    printf '<%s>' \"$x\"\n}\n<'><body>",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public void LongDescriptorNameEncodingReleasesItsScratchOnRefusal()
     {

@@ -150,15 +150,13 @@ public sealed partial class Evaluation
                 return DescriptorWriteResult.Open;
             var name = ShellTraps.GetNameBytes(condition);
             var handlerBytes = handler.Bytes.Span;
-            var loneApostrophe = handlerBytes.SequenceEqual("'"u8);
-            // A lone apostrophe has a dedicated spelling in Bash's trap listing.
-            var quotedLength = loneApostrophe ? "\\'"u8.Length : ShellArgumentEscaping.GetLiteralSingleQuotedLength(handlerBytes);
+            var quotedLength = ShellArgumentEscaping.GetBashSingleQuotedLength(handlerBytes);
             var length = "trap -- "u8.Length + quotedLength + 1 + name.Length + 1;
             if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
             using var output = new BoundedByteMemoryBuilder((int)length, (int)length, Memory.Budget);
             if (!output.TryAppend("trap -- "u8)
-                || !(loneApostrophe ? output.TryAppend("\\'"u8) : ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, handlerBytes))
+                || !ShellArgumentEscaping.TryAppendBashSingleQuoted(output, handlerBytes)
                 || !output.TryAppend((byte)' ')
                 || !output.TryAppend(name)
                 || !output.TryAppend((byte)'\n'))
