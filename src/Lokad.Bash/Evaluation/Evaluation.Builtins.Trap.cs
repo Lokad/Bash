@@ -252,7 +252,7 @@ public sealed partial class Evaluation
             };
             var handler = readerDepth > scope.PipelineExitReader.RedirectionDepth
                 ? await EvaluateWithReaderRedirectionsAsync(trapScope, readerUnwind).ConfigureAwait(false)
-                : await EvaluateCopiedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap).ConfigureAwait(false);
+                : await EvaluateExpandedCommandUnitsAsync([action], 0, trapScope, ScriptExecutionKind.Trap).ConfigureAwait(false);
             // A discarded action leaves the pending exit status in effect.
             if (!handler.DiscardsCommandUnit && (handler.Flow is FlowControlKind.Exit or FlowControlKind.Return)
                 && (_state.FatalExpansion == null
@@ -329,7 +329,7 @@ public sealed partial class Evaluation
             using var memory = Memory.BeginCommand(active);
             var table = _state.CaptureLoadedExitTable(unwind, Memory);
             if (table == null)
-                return await EvaluateCopiedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
+                return await EvaluateExpandedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
 
             // The enclosing command scopes still own the borrowed handles through the action.
             _state.PushRedirectionTable(table, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), Memory);
@@ -338,7 +338,7 @@ public sealed partial class Evaluation
             OperationError? closeError;
             try
             {
-                handler = await EvaluateCopiedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
+                handler = await EvaluateExpandedCommandUnitsAsync([action], 0, active, ScriptExecutionKind.Trap).ConfigureAwait(false);
             }
             finally
             {

@@ -123,7 +123,7 @@ public sealed partial class Evaluation
             if (first == words.Count)
                 return ApplyNegation(EvaluationResult.FromExitCode(0), negated);
 
-            var result = await EvaluateCopiedCommandUnitsAsync(words, first, scope, ScriptExecutionKind.Eval)
+            var result = await EvaluateExpandedCommandUnitsAsync(words, first, scope, ScriptExecutionKind.Eval)
                 .ConfigureAwait(false);
             return ApplyNegation(result, negated);
         }
@@ -257,8 +257,8 @@ public sealed partial class Evaluation
     private enum ScriptExecutionKind { Root, LegacyCapture, Source, Eval, ArrayReaderCallback, Trap }
     private const int BuiltinSyntaxErrorStatus = 257;
 
-    /// <summary>Copies eval/trap input into an owner retained by any syntax that survives execution.</summary>
-    private async Task<EvaluationResult> EvaluateCopiedCommandUnitsAsync(
+    /// <summary>Admits eval/trap source through execution and any surviving syntax.</summary>
+    private async Task<EvaluationResult> EvaluateExpandedCommandUnitsAsync(
         IReadOnlyList<ShellValue> words, int start, ScopedEvaluation scope, ScriptExecutionKind kind)
     {
         // Expansion is complete. Include a space between every pair of operands,
@@ -277,14 +277,25 @@ public sealed partial class Evaluation
         {
             if (scope.Context.DiagnosticPath is { } diagnosticPath)
                 sourceMemory.OwnDiagnosticPath(diagnosticPath, prefixCurrentDirectory: false);
-            using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
-            for (var index = start; index < words.Count; index++)
+            ShellSource source;
+            if (words.Count - start == 1 && words[start].TryGetCompactArrayCapacity(out var capacity) && capacity == length)
             {
+                // The reader's own reservation survives the original value's scope.
                 CheckCancellation();
-                if (index > start) builder.Append((byte)' ');
-                builder.Append(words[index].Bytes);
+                _ = sourceMemory.Budget.Reserve(capacity);
+                source = ShellSource.FromBytes(words[start].Bytes);
             }
-            var source = ShellSource.FromBytes(builder.DetachSnapshot());
+            else
+            {
+                using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
+                for (var index = start; index < words.Count; index++)
+                {
+                    CheckCancellation();
+                    if (index > start) builder.Append((byte)' ');
+                    builder.Append(words[index].Bytes);
+                }
+                source = ShellSource.FromBytes(builder.DetachSnapshot());
+            }
             return await EvaluateCommandUnitsAsync(source,
                 scope with { Context = scope.Context.WithSourceMemory(sourceMemory) }, kind).ConfigureAwait(false);
         }

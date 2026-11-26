@@ -350,19 +350,29 @@ public sealed class SourceMemoryLifetimeTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task EvalRetainsOnlyTheCopiedSourceUntilFunctionRetirement(bool multipleOperands)
+    [InlineData("exact")]
+    [InlineData("slice")]
+    [InlineData("joined")]
+    public async Task EvalRetainsOnlyAdmittedSourceUntilFunctionRetirement(string form)
     {
         const string definition = "f(){ printf active; }\n#";
         const int sourceLength = PaddingBytes + 1;
+        var multipleOperands = form == "joined";
         var payload = new string('x', sourceLength - definition.Length - (multipleOperands ? 2 : 0));
         var evalOperands = multipleOperands ? """ "$definition" '' "$payload" """ : """ "$script" """;
-        var evaluation = new Eval(Parser.Parse("eval --" + evalOperands + "; printf loaded; f; unset -f f; printf retired"));
+        var evaluation = new Eval(Parser.Parse("eval --" + evalOperands
+            + "; unset script definition payload; printf loaded; f; unset -f f; printf retired"));
         if (multipleOperands)
         {
             evaluation.SetVariable("definition", ShellValue.FromText(definition));
             evaluation.SetVariable("payload", ShellValue.FromText(payload));
+        }
+        else if (form == "slice")
+        {
+            const int offset = 64;
+            var backing = new byte[sourceLength + 2 * offset];
+            Encoding.UTF8.GetBytes(definition + payload, backing.AsSpan(offset, sourceLength));
+            evaluation.SetVariable("script", ShellValue.FromBytes(backing.AsMemory(offset, sourceLength)));
         }
         else
             evaluation.SetVariable("script", ShellValue.FromText(definition + payload));

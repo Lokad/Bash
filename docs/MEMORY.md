@@ -427,11 +427,12 @@ execution and cleanup. Shared definitions and attribute copies share this coarse
 source owner. Replacement, unset and settled temporary namespaces release their
 references; the last user refunds the scope. Prepared root namespaces remain owned
 by the caller's evaluation scope. The source owner also admits the displayed path
-used by failed redirection opens. Eval and trap admit one exact-sized backing
-buffer from the expanded operands and separators. Eval, traps and array reader
-callbacks retain the displayed path with their copied input. That independent
-source owner leaves the caller's source buffer free to retire. Each command unit
-has a coarse syntax owner
+used by failed redirection opens. Eval and trap admit exact-sized source backing.
+A single expanded operand with exact-sized immutable backing can share that
+array with the reader. Other input is copied with the required separators.
+Eval, traps and array reader callbacks retain the displayed path with their
+input. The independent source owner keeps its admission while the caller's
+source can retire. Each command unit has a coarse syntax owner
 retaining its input owner. Completed units refund their metadata unless surviving
 definitions or active users retain it; one early definition does not keep every
 later unit's scratch alive. Completed command units, deferred captures and imported
