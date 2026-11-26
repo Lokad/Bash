@@ -520,6 +520,8 @@ public static class Parser
                     : bodyFailure.InSubstitution();
                 if (error.UnexpectedToken is { } unexpected)
                     error = error with { UnexpectedToken = unexpected with { CapturePayloadStart = start } };
+                if (error.ArithmeticForHeader is { } header && context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
+                    error = error with { ArithmeticForHeader = header with { CaptureLine = tokenizer.GetLine(header.Start) } };
                 if (error.ConditionalEndOfInput is { CaptureLineOffset: null } conditionalEnd)
                     error = error with
                     {

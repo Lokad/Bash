@@ -369,7 +369,7 @@ internal static partial class WordExpansion
         ScopedEvaluation scope, ShellScanContext? captures, bool quoteSegment) =>
         ReportWordSyntaxAsync(word, segment, ParameterSyntaxFailure(missingBrace), scope, captures, quoteSegment);
 
-    private enum WordSyntaxFailure { BadSubstitution, MissingBrace, MissingArithmeticParenthesis }
+    private enum WordSyntaxFailure { BadSubstitution, MissingBrace, MissingArithmeticParenthesis, MissingBacktick }
 
     private static WordSyntaxFailure ParameterSyntaxFailure(bool missingBrace) =>
         missingBrace ? WordSyntaxFailure.MissingBrace : WordSyntaxFailure.BadSubstitution;
@@ -408,11 +408,14 @@ internal static partial class WordExpansion
         {
             WordSyntaxFailure.MissingBrace => [ShellValue.FromText("no closing `}' in "), spelling],
             WordSyntaxFailure.MissingArithmeticParenthesis => [ShellValue.FromText("no closing `)' in "), spelling],
+            WordSyntaxFailure.MissingBacktick => [ShellValue.FromText("no closing \"`\" in "), spelling],
             _ => [badSubstitution]
         };
-        return hereDocument
+        if (!hereDocument)
+            return scope.Effects.ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
+        return failure == WordSyntaxFailure.MissingArithmeticParenthesis
             ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
-            : scope.Effects.ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
+            : scope.Effects.ReportHereDocumentWordSyntaxAsync(subject, message, scope, missingBrace: failure == WordSyntaxFailure.MissingBrace);
     }
 
     // Lexical assignment operands still go through ordinary field processing.
@@ -865,8 +868,12 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument
                     && legacyStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid)
                 {
-                    await scope.Effects.RejectHereDocumentSubstitutionAsync(legacyStatus, legacyError, content, scope,
-                        interruptedCapture: false).ConfigureAwait(false);
+                    if (legacyStatus == ShellScanStatus.Incomplete)
+                        await ReportWordSyntaxAsync(content.Slice(index).ToValue(), WordSyntaxFailure.MissingBacktick, scope,
+                            hereDocument: true).ConfigureAwait(false);
+                    else
+                        await scope.Effects.RejectHereDocumentSubstitutionAsync(legacyStatus, legacyError, content, scope,
+                            interruptedCapture: false).ConfigureAwait(false);
                     return null;
                 }
                 if (syntax?.IsBraceExpanded == true && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)

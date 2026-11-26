@@ -464,6 +464,137 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         }
     }
 
+    private const string MalformedArithmeticHeader = "$(for (( ; ; ; )); do :; done)";
+    private const string UnclosedBacktickBody = "prefix `printf sample";
+    private const string UnclosedParameterBody = "prefix ${v:-sample";
+    private const string InspectDocumentStatus = "printf '<%s|%s>' \"$?\" \"${PIPESTATUS[*]-unset}\"\n";
+
+    [Theory]
+    [InlineData(MalformedArithmeticHeader, 2, "`;' unexpected", " ; ; ; ", 0)]
+    [InlineData("$(for (( 1 )); do :; done)", 2, "arithmetic expression required", " 1 ", 0)]
+    [InlineData("head\n$(\nfor (( ; ; ; )); do :; done)", 3, "`;' unexpected", " ; ; ; ", 0)]
+    [InlineData("head\n${v:-$(\nfor (( ; ; ; )); do :; done)}", 3, "`;' unexpected", " ; ; ; ", 0)]
+    [InlineData("$(\n:\n: $(\nfor (( ; ; ; )); do :; done)\n)", 5, "`;' unexpected", " ; ; ; ", 2)]
+    public async Task HereDocumentCaptureReportsArithmeticHeaderAtTheReachedLine(string body, int line, string reason,
+        string expression, int status)
+    {
+        var script = ": <<DOC\n" + body + "\nDOC\n" + InspectDocumentStatus;
+        var prefix = $"command substitution: line {line}: syntax error: ";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(status, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(status == 0 ? "<1|unset>" : "", host.StandardOutput.TextContent);
+            Assert.Equal(prefix + reason + "\n" + prefix + $"`(({expression}))'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(UnclosedBacktickBody + "\nlast", "bad substitution: no closing \"`\" in `printf sample\nlast\n\n")]
+    [InlineData("first\n" + UnclosedBacktickBody + "\\\nlast", "bad substitution: no closing \"`\" in `printf samplelast\n\n")]
+    [InlineData("first \\`literal `printf sample", "bad substitution: no closing \"`\" in `printf sample\n\n")]
+    [InlineData("prefix ${v:-`printf sample}", "bad substitution: no closing `}' in prefix ${v:-`printf sample}\n\n")]
+    [InlineData("${a:-${b:-`printf sample}}", "bad substitution: no closing `}' in ${a:-${b:-`printf sample}}\n\n")]
+    public async Task HereDocumentWordSyntaxReportsTheReachedSpelling(string body, string diagnostic)
+    {
+        var script = ": <<DOC; printf skipped\n" + body + "\nDOC\n" + ReportLineAndStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<2|1>", host.StandardOutput.TextContent);
+            Assert.Equal("line 1: " + diagnostic, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(UnclosedBacktickBody, "<1|1>")]
+    [InlineData(UnclosedParameterBody, "<1|1>")]
+    [InlineData(MalformedArithmeticHeader, "<7|7>")]
+    public async Task HereDocumentWordSyntaxReplacesThePreviousStatusOnRecovery(string body, string expected)
+    {
+        var script = "(exit 7)\n: <<DOC; printf skipped\n" + body + "\nDOC\n" + InspectDocumentStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(UnclosedBacktickBody, "<1|1>", 1, "line 3: bad substitution: no closing \"`\" in `printf sample\n\n")]
+    [InlineData(UnclosedParameterBody, "<1|0>", 1, "line 3: bad substitution: no closing `}' in prefix ${v:-sample\n\n")]
+    [InlineData("${probe", "<1|1>", 1, "line 3: ${probe\n: bad substitution\n")]
+    [InlineData(MalformedArithmeticHeader, "<2|0>", 2, "command substitution: line 4: syntax error: `;' unexpected\n")]
+    public async Task HereDocumentSyntaxSelectsErrexitStatusBeforeExitAction(string body, string expected, int status,
+        string diagnostic)
+    {
+        var script = "set -e\ntrap " + ShellArgumentEscaping.EscapeArgument(InspectDocumentStatus.TrimEnd('\n'))
+            + " EXIT\n: <<DOC\n" + body + "\nDOC\nprintf skipped\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(status, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(diagnostic, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(UnclosedBacktickBody)]
+    [InlineData(UnclosedParameterBody)]
+    public async Task TestedSourceRecoversFromHereDocumentWordSyntax(string body)
+    {
+        const string invocation = "set -e\nif . ./reader; then printf then; else printf else; fi\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/reader", ": <<DOC; printf skipped\n" + body + "\nDOC\n" + ReportLineAndStatus);
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(invocation, host, prepared));
+            Assert.Equal("<2|1>then", host.StandardOutput.TextContent);
+            Assert.StartsWith("./reader: line 1: bad substitution: ", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(UnclosedBacktickBody)]
+    [InlineData(UnclosedParameterBody)]
+    public async Task HereDocumentWordRecoveryRestoresTheReachedDiagnosticDescriptor(string body)
+    {
+        var script = "trap 'printf exit >&2' EXIT\n: 2>errors <<DOC\n" + body + "\nDOC\n" + InspectDocumentStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|1>", host.StandardOutput.TextContent);
+            Assert.Equal("exit", host.StandardError.TextContent);
+            Assert.StartsWith("line 2: bad substitution: ", host.ReadFile("/errors"));
+            Assert.EndsWith("\n\n", host.ReadFile("/errors"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedHereDocumentArithmeticHeaderPublishesBeforeCaptureExitAction()
+    {
+        var script = "v=$(trap " + ShellArgumentEscaping.EscapeArgument(InspectDocumentStatus.TrimEnd('\n'))
+            + " EXIT\n(exit 7)\n: 2>errors <<DOC\n" + MalformedArithmeticHeader + "\nDOC\n)\nprintf '%s' \"$v\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|1>", host.StandardOutput.TextContent);
+            Assert.Contains("syntax error: `;' unexpected", host.ReadFile("/errors"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     private const string InspectTemporaryPrefix = "probe=temp declare -p probe\n";
     private const string InspectFieldSeparators = "set -- left right; printf '[%s|%s]' \"$IFS\" \"$*\"";
 

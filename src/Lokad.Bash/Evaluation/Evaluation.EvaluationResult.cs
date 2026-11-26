@@ -22,6 +22,7 @@ public partial class Evaluation
         ArrayReaderLoopFailure,
         CompoundInitializerSyntax,
         HereDocumentSyntax,
+        HereDocumentWordSyntax,
         NestedPipelineReader
     }
 
@@ -75,9 +76,11 @@ public partial class Evaluation
         public bool DiscardsCommandUnit => Cause == ExitCause.ExtraArguments || DiscardsLoadedCommandUnit;
 
         /// <summary>Lets an active source or eval reader resume after its rejected unit.</summary>
-        public bool DiscardsLoadedCommandUnit => Cause is ExitCause.CompoundInitializerSyntax or ExitCause.HereDocumentSyntax;
+        public bool DiscardsLoadedCommandUnit => Cause == ExitCause.CompoundInitializerSyntax || DiscardsHereDocumentUnit;
 
-        public bool DiscardsHereDocumentUnit => Cause == ExitCause.HereDocumentSyntax;
+        public bool DiscardsHereDocumentUnit => Cause is ExitCause.HereDocumentSyntax or ExitCause.HereDocumentWordSyntax;
+
+        public bool ResetsReaderStatus => Cause == ExitCause.HereDocumentWordSyntax;
 
         /// <summary>A reached simple command can leave its reader at an earlier line than the completed unit.</summary>
         public int ReaderLineAdjustment(int unitEndLine) => RejectedCommandLine != 0 && unitEndLine != 0
@@ -143,8 +146,12 @@ public partial class Evaluation
         public static EvaluationResult DiscardCompoundInitializerUnit() =>
             Exit(1) with { Cause = ExitCause.CompoundInitializerSyntax };
 
-        public static EvaluationResult DiscardHereDocumentUnit(int exitCode, int rejectedCommandLine) =>
-            Exit(exitCode) with { Cause = ExitCause.HereDocumentSyntax, RejectedCommandLine = rejectedCommandLine };
+        public static EvaluationResult DiscardHereDocumentUnit(int exitCode, int rejectedCommandLine, bool resetsReaderStatus) =>
+            Exit(exitCode) with
+            {
+                Cause = resetsReaderStatus ? ExitCause.HereDocumentWordSyntax : ExitCause.HereDocumentSyntax,
+                RejectedCommandLine = rejectedCommandLine
+            };
 
         public static EvaluationResult InvalidLoopCount(int exitCode) =>
             Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };

@@ -295,7 +295,10 @@ internal static class BracedParameterScanner
                     errorIndex = cursor.Position;
                     if (phase != ScanPhase.Expansion)
                         incompleteFailure = incomplete.Failure;
-                    if (incomplete.Kind == ShellNestedExpansionKind.Command && lateSelectorEnd < 0)
+                    var unclosedHereDocumentBacktick = phase == ScanPhase.Expansion
+                        && context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument
+                        && incomplete.Failure?.UnclosedDelimiter?.Delimiter == '`';
+                    if (incomplete.Kind == ShellNestedExpansionKind.Command && lateSelectorEnd < 0 && !unclosedHereDocumentBacktick)
                     {
                         error = incompleteFailure;
                         return BracedParameterScanStatus.UnterminatedCommandSubstitution;

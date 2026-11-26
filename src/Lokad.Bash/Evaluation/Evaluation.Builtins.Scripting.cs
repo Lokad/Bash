@@ -671,11 +671,11 @@ public sealed partial class Evaluation
 
     private ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(
         ScopedEvaluation scope, EvaluationResult result, bool loadedReader) =>
-        RecoverDiscardedCommandUnitAsync(scope, resetStatus: loadedReader && result.DiscardsHereDocumentUnit);
+        RecoverDiscardedCommandUnitAsync(scope, resetStatus: result.ResetsReaderStatus || loadedReader && result.DiscardsHereDocumentUnit);
 
     private async ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope, bool resetStatus)
     {
-        // A loaded reader handling rejected syntax resets the previous status.
+        // Loaded readers and word syntax failures can reset a previously nonzero status.
         var status = _state.LastExitCode.GetValueOrDefault();
         if (status != 0 && !resetStatus)
             return EvaluationResult.FromExitCode(status);

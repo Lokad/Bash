@@ -74,7 +74,10 @@ internal enum ExpansionErrorKind
     General,
     HereDocumentSyntax,
     HereDocumentReaderSyntax,
+    HereDocumentArithmeticHeader,
     HereDocumentNestedSyntax,
+    HereDocumentWordSyntax,
+    HereDocumentMissingBrace,
     HereDocumentParameter
 }
 

@@ -80,7 +80,8 @@ public sealed class CommandSubstitutionSyntaxTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1:prior", host.StandardOutput.TextContent);
-        Assert.Equal("here-document: syntax error: Arithmetic for header requires two semicolons.\n",
+        Assert.Equal("command substitution: line 3: syntax error: arithmetic expression required\n"
+            + "command substitution: line 3: syntax error: `((i=7))'\n",
             host.StandardError.TextContent);
         Assert.Empty(host.CaptureEntries());
         Assert.Equal(0, host.OpenFileCount);

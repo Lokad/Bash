@@ -1152,7 +1152,10 @@ An arithmetic `for` header requires exactly two unquoted semicolons outside
 shell expansions. A malformed separator count is a syntax error before any
 clause or loop body runs. The command-unit reader distinguishes a missing
 separator from an extra separator and quotes the normalized header on the
-next diagnostic line. A capture that runs out of closing parentheses during
+next diagnostic line. Within an expanded here-document, a rejected capture header
+reports the line in its capture and includes the expression when errexit is
+disabled. A rejected nested capture header terminates the active reader.
+A capture that runs out of closing parentheses during
 separator scanning consumes the remaining header spelling for that scan.
 An empty condition or one containing only spaces
 and tabs is true. If the condition contains only spaces, tabs and one or
@@ -1438,6 +1441,12 @@ in a here-document, the reader resumes line numbering from the reached command
 line. Diagnostics and `LINENO` use this adjustment in the remaining input. A
 loaded reader or EXIT action tracks its own adjustment. Functions keep their
 definition coordinates, and a failure there leaves the caller's line count intact.
+An unclosed backtick reports its suffix from the opening delimiter. An unclosed
+parameter operand reports the document spelling. These word syntax failures
+discard the unit, unwind its redirections and publish status 1 on recovery.
+On errexit, EXIT runs with the reached descriptors. A missing brace exits with
+status 1 while retaining the prior `PIPESTATUS` through EXIT. An unclosed
+backtick publishes status 1 before EXIT.
 Parenthesized captures project the command coordinate into the rendered body layout.
 Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an

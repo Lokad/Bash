@@ -43,7 +43,11 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 }
 
 /// <summary>The reached header spelling and location used by the command-unit reader.</summary>
-internal readonly record struct ArithmeticForHeaderError(ShellSource Expression, int Start, int BodyEnd, bool HasExtraSeparator);
+internal readonly record struct ArithmeticForHeaderError(ShellSource Expression, int Start, int BodyEnd, bool HasExtraSeparator)
+{
+    /// <summary>The header line within the capture whose parser rejected it.</summary>
+    internal int CaptureLine { get; init; }
+}
 
 /// <summary>Byte slices and reader position for a reached token diagnostic.</summary>
 internal sealed record UnexpectedSyntax(ShellSource Token, ShellSource Line, int ReadPosition)
