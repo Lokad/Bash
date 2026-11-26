@@ -302,8 +302,10 @@ Bracket terminal lookahead is stack-only state for the current match or atom
 preparation pass. Small and unrevisited valid brackets use stack-only membership.
 Revisited wide brackets prepare normalized membership within the current match.
 The evaluator admits storage through its workspace and retires the temporary usage
-on completion, refusal or cancellation. Suffix offsets retain their existing
-command owner.
+on completion, refusal or cancellation. Suffix traversal derives offsets directly
+for one-byte atoms when the pattern contains no active opening bracket. Patterns
+with variable-width atoms or active opening brackets retain their admitted offset
+table in the command owner.
 
 Pathname component ranges borrow the admitted pattern and quote mask. The command
 admits the lookup and output forms of the literal prefix before creating them.

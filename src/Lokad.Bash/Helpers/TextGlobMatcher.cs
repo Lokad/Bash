@@ -114,13 +114,18 @@ public static class TextGlobMatcher
         Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, atoms, PatternTraversal.Reverse, memory),
             new GlobInput(text, byteCharacters, reverse: true), requireEnd: false, shortest, cancellationToken, out _, out length);
 
-    /// <summary>Prepares original atom offsets once, retaining bracket expressions as indivisible atoms.</summary>
+    /// <summary>Prepares reverse atom offsets when they cannot be derived from the byte positions.</summary>
+    /// <remarks>An empty result means one byte per atom. Active opening brackets use the offset table.</remarks>
     internal static ReadOnlyMemory<int> PrepareUtf8Atoms(ReadOnlySpan<byte> pattern, in GlobMaskSpan mask,
         bool byteCharacters, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (pattern.Length >= Array.MaxLength)
             throw new ByteMemoryBuilder.LimitExceededException();
+        if ((byteCharacters || pattern.IndexOfAnyExceptInRange((byte)0, (byte)127) < 0)
+            && mask.IndexOfActiveByte(pattern, "["u8, cancellationToken) < 0)
+            return default;
+
         var input = new GlobInput(pattern, byteCharacters, reverse: false);
         var count = 0;
         var scan = default(BracketScan);
@@ -602,10 +607,14 @@ public static class TextGlobMatcher
             _traversal = traversal;
             _memory = memory;
         }
-        public int Length => (Reverse ? _atoms.Length : _source.Length) + (Search ? 1 : 0);
+        public int Length => (Reverse && !_atoms.IsEmpty ? _atoms.Length : _source.Length) + (Search ? 1 : 0);
         public bool IsSearchStar(int position) => Search && position == 0;
-        private int Original(int position) => Reverse ? _atoms[_atoms.Length - 1 - position + (Search ? 1 : 0)]
-            : position - (Search ? 1 : 0);
+        private int Original(int position)
+        {
+            if (!Reverse)
+                return position - (Search ? 1 : 0);
+            return _atoms.IsEmpty ? _source.Length - 1 - position : _atoms[_atoms.Length - 1 - position];
+        }
         public int this[int position] => IsSearchStar(position) ? '*' : _source[Original(position)];
         public bool IsActive(int position, int value) => this[position] == value
             && (IsSearchStar(position) || _mask[Original(position)] == GlobMask.Active);
@@ -622,6 +631,8 @@ public static class TextGlobMatcher
             var original = Original(position);
             if (Reverse)
             {
+                if (_atoms.IsEmpty)
+                    return false;
                 var following = _atoms.Length - position;
                 var endOfAtom = following == _atoms.Length ? _source.Length : _atoms[following];
                 if (endOfAtom == original + 1)

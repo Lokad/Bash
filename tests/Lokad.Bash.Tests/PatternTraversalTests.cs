@@ -596,13 +596,43 @@ public sealed class PatternTraversalTests
         var bytes = Encoding.UTF8.GetBytes(new string('a', 262_144) + "b");
         try
         {
-            var pattern = ShellPattern.FromUnescaped(ShellValue.FromText("a*b"), new GlobMask(ReadOnlyMemory<byte>.Empty), memory, CancellationToken.None);
+            var pattern = ShellPattern.FromUnescaped(ShellValue.FromText("[a]*b"), new GlobMask(ReadOnlyMemory<byte>.Empty), memory, CancellationToken.None);
+            var before = memory.Workspace.Bytes;
             Assert.True(pattern.TryMatchSuffix(bytes, shortest: false, CancellationToken.None, out var start));
             Assert.Equal(0, start);
+            Assert.True(memory.Workspace.Bytes > before);
             var reserved = governor.ReservedBytes;
             Assert.True(pattern.TryMatchSuffix(bytes, shortest: true, CancellationToken.None, out start));
             Assert.Equal(bytes.Length - 2, start);
             Assert.Equal(reserved, governor.ReservedBytes);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("b", false)]
+    [InlineData("[b]", false)]
+    [InlineData("b", true)]
+    public void SuffixWithOneByteAtomsFitsWithoutAnOffsetTable(string ending, bool malformedUtf8)
+    {
+        var governor = new MemoryGovernor(8 * 1024);
+        var memory = new EvaluationMemory(governor);
+        var bytes = Encoding.UTF8.GetBytes("*" + new string('a', 4096) + ending);
+        if (malformedUtf8)
+            bytes[1] = 0xff;
+        var activity = new byte[bytes.Length];
+        activity.AsSpan().Fill(GlobMask.Active);
+        if (ending[0] == '[')
+            activity[bytes.Length - ending.Length] = 0;
+
+        try
+        {
+            var pattern = ShellPattern.FromUnescaped(ShellValue.FromBytes(bytes), new GlobMask(activity), memory, CancellationToken.None);
+            var before = memory.Workspace.Bytes;
+            Assert.True(pattern.TryMatchSuffix(bytes.AsSpan(1), shortest: true, CancellationToken.None, out var start));
+            Assert.Equal(0, start);
+            Assert.Equal(before, memory.Workspace.Bytes);
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, governor.ReservedBytes);
@@ -619,7 +649,7 @@ public sealed class PatternTraversalTests
             var memory = new EvaluationMemory(admission);
             try
             {
-                var pattern = ShellPattern.FromUnescaped(ShellValue.FromText("*" + new string('a', 4096) + "b"),
+                var pattern = ShellPattern.FromUnescaped(ShellValue.FromText("*[ab]" + new string('a', 4096) + "b"),
                     new GlobMask(ReadOnlyMemory<byte>.Empty), memory, cancellation.Token);
                 if (cancel)
                 {
