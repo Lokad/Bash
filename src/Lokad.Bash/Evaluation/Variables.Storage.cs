@@ -11,6 +11,8 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Variables
 {
+    private const int BindingTableEntryBytes = 48;
+
     // One entry owns both the binding kind and its attributes. Views below never own values.
     private readonly Dictionary<BindingName, VariableSlot> _bindings = new();
     // Command launches enumerate exports, not every shell local. StoreBinding maintains this derived index.
@@ -124,17 +126,24 @@ public sealed partial class Variables
         ResetGetoptsPosition(name);
     }
 
-    private void StoreBinding(BindingName name, VariableSlot slot)
+    private void StoreBinding(BindingName name, VariableSlot slot) => StoreBinding(name, slot, slot.Attributes);
+
+    private void StoreBinding(BindingName name, VariableSlot slot, BindingAttributes attributes)
     {
-        if (slot is AttributeSlot && slot.Attributes == BindingAttributes.None)
+        if (slot is AttributeSlot && attributes == BindingAttributes.None)
         {
             ClearBinding(name);
             return;
         }
+        var exported = (attributes & BindingAttributes.Exported) != 0;
+        PreparePrefixTableEntry(name);
+        if (exported && _commandSource?.PrefixCollectionMemory is { } collections)
+            collections.PrepareSetCapacity(_exportedIndex, name, BindingNameSetEntryBytes);
         using var memory = TrackBindingMemory(name);
+        slot.Attributes = attributes;
         _bindings[name] = slot;
         _bindingCapacity = Math.Max(_bindingCapacity, _bindings.Count);
-        if ((slot.Attributes & BindingAttributes.Exported) != 0)
+        if (exported)
             _exportedIndex.Add(name);
         else
             _exportedIndex.Remove(name);
@@ -148,6 +157,7 @@ public sealed partial class Variables
 
     private void ClearBindingSlot(BindingName name)
     {
+        PreparePrefixTableEntry(name);
         using var memory = TrackBindingMemory(name);
         ResetGetoptsPosition(name);
         if (_commandSource == null)
@@ -157,6 +167,13 @@ public sealed partial class Variables
             _bindings[name] = new MissingSlot();
             _bindingCapacity = Math.Max(_bindingCapacity, _bindings.Count);
         }
+    }
+
+    private void PreparePrefixTableEntry(BindingName name)
+    {
+        if (_commandSource?.PrefixCollectionMemory is { } collections
+            && _bindings.Count == _bindings.EnsureCapacity(0) && !_bindings.ContainsKey(name))
+            collections.PrepareDictionaryCapacity(_bindings, BindingTableEntryBytes);
     }
 
     /// <summary>Clears export attributes while preserving the fork's values and other attributes.</summary>
@@ -260,8 +277,7 @@ public sealed partial class Variables
         var attributes = (slot.Attributes | set) & ~clear;
         if (slot.Attributes == attributes)
             return;
-        slot.Attributes = attributes;
-        StoreBinding(name, slot);
+        StoreBinding(name, slot, attributes);
     }
 
     internal ShellValue ConvertAssignmentCase(BindingName name, ShellValue value, EvaluationMemory? memory) =>
@@ -285,8 +301,7 @@ public sealed partial class Variables
             if (!enabled) return;
             slot = new AttributeSlot();
         }
-        slot.Attributes = enabled ? slot.Attributes | attribute : slot.Attributes & ~attribute;
-        StoreBinding(name, slot);
+        StoreBinding(name, slot, enabled ? slot.Attributes | attribute : slot.Attributes & ~attribute);
     }
 
     /// <summary>Removes a value kind, retaining attributes that belong to the name.</summary>

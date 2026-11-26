@@ -139,15 +139,37 @@ public sealed class MemoryCapacity : IDisposable
         if (dictionary.Count < previous)
             return;
 
+        var (target, replacement) = AdmitIndexGrowth(previous, bytesPerEntry);
+        var capacity = dictionary.EnsureCapacity(target);
+        FinishIndexGrowth(previous, capacity, replacement, bytesPerEntry);
+    }
+
+    /// <summary>Admits replacement backing before adding a missing item to a full set.</summary>
+    internal void PrepareSetCapacity<T>(HashSet<T> set, T item, long bytesPerEntry)
+    {
+        var previous = set.EnsureCapacity(0);
+        if (set.Count < previous || set.Contains(item))
+            return;
+
+        var (target, replacement) = AdmitIndexGrowth(previous, bytesPerEntry);
+        var capacity = set.EnsureCapacity(target);
+        FinishIndexGrowth(previous, capacity, replacement, bytesPerEntry);
+    }
+
+    private (int Target, long Replacement) AdmitIndexGrowth(int previous, long bytesPerEntry)
+    {
         var target = (int)Math.Min(int.MaxValue, Math.Max(3L, 2L * previous));
         // Account for prime rounding and the previous index until EnsureCapacity returns.
-        var replacement = IndexBackingBytes(2L * target + 1);
+        var replacement = IndexBackingBytes(2L * target + 1, bytesPerEntry);
         Grow(replacement);
-        var capacity = dictionary.EnsureCapacity(target);
-        Resize(Bytes - replacement - IndexBackingBytes(previous) + IndexBackingBytes(capacity));
-
-        long IndexBackingBytes(long count) => count == 0 ? 0 : checked(64L + bytesPerEntry * count);
+        return (target, replacement);
     }
+
+    private void FinishIndexGrowth(int previous, int capacity, long replacement, long bytesPerEntry) =>
+        Resize(Bytes - replacement - IndexBackingBytes(previous, bytesPerEntry) + IndexBackingBytes(capacity, bytesPerEntry));
+
+    private static long IndexBackingBytes(long count, long bytesPerEntry) =>
+        count == 0 ? 0 : checked(64L + bytesPerEntry * count);
 
     /// <summary>Returns large amounts of unused credit after a batch has relinquished its storage.</summary>
     public void TrimExcess()

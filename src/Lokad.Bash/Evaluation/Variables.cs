@@ -41,7 +41,7 @@ public sealed partial class Variables
     private const int ValueHeaderBytes = 32;
     private const int ValueCapacityMultiplier = 2;
     private const int BindingOverheadBytes = 128;
-    private const int BindingNameSetEntryBytes = 40;
+    internal const int BindingNameSetEntryBytes = 40;
     // Four backing positions per selected name cover hash-table growth and replacement overlap.
     internal const int BindingNameSelectionBytes = 4 * BindingNameSetEntryBytes;
     private const int PositionalEntryBytes = 32;

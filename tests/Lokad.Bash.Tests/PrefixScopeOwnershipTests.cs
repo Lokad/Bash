@@ -11,6 +11,79 @@ namespace Lokad.Bash.Tests;
 public sealed class PrefixScopeOwnershipTests
 {
     [Fact]
+    public async Task RefusedWidePrefixPreparationLeavesTheRedirectionUnopened()
+    {
+        var prefixes = string.Join(' ', Enumerable.Range(0, 256).Select(index => $"v{index:D4}=value"));
+        var state = new Eval(Parser.Parse("marker=0\nfirst=$((marker=7)) " + prefixes + " : >out\n"));
+        var governor = new MemoryGovernor(32 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var refusal = Assert.IsType<WriteOperation>(await state.GetNextStep());
+        Assert.Equal(FileDescriptor.StdErr, refusal.FileDescriptor);
+        Assert.Contains("shared memory budget exhausted", ShellValue.FromBytes(refusal.Content).ToUtf8String());
+        refusal.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await state.GetNextStep());
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(ShellValue.FromText("7"), state.Variables["marker"]);
+        Assert.DoesNotContain((BindingName)"first", state.Variables.Keys);
+        Assert.DoesNotContain((BindingName)"v0000", state.Variables.Keys);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RefusedPrefixIndexGrowthPreservesExistingEntries(bool export)
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        using var collections = new MemoryCapacity(governor, 0);
+        var value = ShellValue.FromText("value");
+        try
+        {
+            var caller = Variables.CreateEmpty();
+            var command = Variables.CreateCommandScope(caller, memory, CancellationToken.None, collections);
+            foreach (BindingName name in new BindingName[] { "first", "second", "third" })
+            {
+                Assert.True(command.TrySetScalar(name, value));
+                command.SetExported(name, true);
+            }
+            if (export)
+                Assert.True(command.TrySetScalar("fourth", value));
+
+            collections.ReleaseUnusedCapacity();
+            memory.ReleaseUnusedCapacity();
+            using (governor.Reserve(governor.LimitBytes - governor.ReservedBytes))
+            {
+                Assert.Throws<MemoryBudgetExceededException>(() => AddFourth());
+                Assert.Equal(export, command.HasBinding("fourth"));
+                Assert.False(command.IsExported("fourth"));
+                Assert.Equal(3, command.ExportedNames.Count);
+                command.SetExported("first", true);
+            }
+
+            AddFourth();
+            Assert.Equal(value, command.Scalars["fourth"]);
+            Assert.Equal(export, command.IsExported("fourth"));
+            Assert.Empty(caller.Scalars);
+
+            void AddFourth()
+            {
+                if (export)
+                    command.SetExported("fourth", true);
+                else
+                    Assert.True(command.TrySetScalar("fourth", value));
+            }
+        }
+        finally { memory.Finish(retainVariables: false); }
+        collections.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task ConvertedPrefixAppendBytesStayAdmittedThroughRedirection()
     {
         const int length = 4096;

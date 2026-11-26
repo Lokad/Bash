@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -11,7 +12,10 @@ public sealed partial class Variables
     private CommandSource? _commandSource;
 
     /// <summary>The surrounding command owns this borrow and all reached-binding copies.</summary>
-    private sealed record CommandSource(Variables Variables, EvaluationMemory Memory, CancellationToken CancellationToken);
+    private sealed record CommandSource(Variables Variables, EvaluationMemory Memory, CancellationToken CancellationToken)
+    {
+        internal MemoryCapacity? PrefixCollectionMemory { get; set; }
+    }
 
     /// <summary>An absent command binding hides the caller's binding without changing the caller.</summary>
     private sealed class MissingSlot : VariableSlot
@@ -24,19 +28,32 @@ public sealed partial class Variables
     /// binding is admitted on first detachment. Positional values stay borrowed; this scope must not
     /// escape the surrounding command. A full Clone still creates independent child state.
     /// </summary>
-    internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken)
+    internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken) =>
+        CreateCommandScope(caller, memory, cancellationToken, prefixCollectionMemory: null);
+
+    /// <summary>Admits temporary binding and export-index growth during prefix preparation.</summary>
+    internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken,
+        MemoryCapacity? prefixCollectionMemory)
     {
         cancellationToken.ThrowIfCancellationRequested();
         memory.Charge(1024);
         cancellationToken.ThrowIfCancellationRequested();
         return new Variables
         {
-            _commandSource = new CommandSource(caller, memory, cancellationToken),
+            _commandSource = new CommandSource(caller, memory, cancellationToken)
+                { PrefixCollectionMemory = prefixCollectionMemory },
             _positional = caller._positional,
             _argumentZero = caller._argumentZero,
             _getoptsCursor = caller._getoptsCursor,
             CachedFieldSeparators = caller.CachedFieldSeparators
         };
+    }
+
+    /// <summary>Ends prefix preparation while the caller retains its collection allowance.</summary>
+    internal void CompletePrefixPreparation()
+    {
+        if (_commandSource is { } source)
+            source.PrefixCollectionMemory = null;
     }
 
     private bool TryGetBinding(BindingName name, [NotNullWhen(true)] out VariableSlot? slot) =>

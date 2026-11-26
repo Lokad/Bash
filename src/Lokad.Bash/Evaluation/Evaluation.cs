@@ -1286,10 +1286,16 @@ public sealed partial class Evaluation : IFileTester
         var commandVars = scope.Variables;
         var commandAssignmentsSuccessful = true;
         var prefixNames = simpleCommand.Assignments.Count == 0 ? null : new HashSet<BindingName>();
+        using var prefixCollections = prefixNames == null ? null : new MemoryCapacity(Memory.Budget, 0);
         var mayDeferPrefixPromotion = prefixNames != null && scope.Context.FunctionContext == null
             && declaration is { Options.PromotesTemporaryBindings: true };
         List<BindingName>? declarationPrefixOrder = mayDeferPrefixPromotion && simpleCommand.Assignments.Count > 1 ? [] : null;
         var assignmentError = await AwaitWordExpansionAsync(PrepareAssignmentsAsync()).ConfigureAwait(false);
+        if (prefixCollections != null)
+        {
+            commandVars.CompletePrefixPreparation();
+            prefixCollections.ReleaseUnusedCapacityOnPublication();
+        }
         if (assignmentError.HasValue)
             return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
 
@@ -1786,11 +1792,12 @@ public sealed partial class Evaluation : IFileTester
 
         async Task<int?> PrepareAssignmentsAsync()
         {
-            if (prefixNames == null)
+            if (prefixNames == null || prefixCollections == null)
                 return null;
 
             // Copy reached bindings only; actual RHS writes still use the existing caller target.
-            commandVars = global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(scope.Variables, Memory, _cancellationToken);
+            commandVars = global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(
+                scope.Variables, Memory, _cancellationToken, prefixCollections);
             var assignmentScope = scope with
             {
                 Variables = commandVars,
@@ -1884,6 +1891,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                 }
 
+                prefixCollections.PrepareSetCapacity(prefixNames, name, global::Lokad.Bash.Evaluation.Variables.BindingNameSetEntryBytes);
                 if (prefixNames.Add(name) && declarationPrefixOrder != null)
                 {
                     Memory.PrepareListCapacity(declarationPrefixOrder, 1);

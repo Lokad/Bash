@@ -220,6 +220,11 @@ during detachment leaves the caller binding intact.
 Compound command prefixes keep expanded field groups through a single copy
 into their parenthesized scalar value and refund the grouping list before
 installing the binding.
+Prefix preparation admits the binding table, its export index and the set of
+reached prefix names as their backing grows. It returns unused growth credit
+before redirection and keeps the live backing charged through invocation. The
+restoration path admits its saved binding store before temporary bindings
+replace caller bindings.
 
 `read` retains reusable line and logical record buffers within its size limit.
 Custom-delimited record scratch stays charged through dispatch and normalization.
