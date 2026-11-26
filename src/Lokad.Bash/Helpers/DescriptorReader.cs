@@ -142,10 +142,10 @@ public static class DescriptorReader
                         destination.Buffer.Append(bytes.Span[..length], exactCapacity: reachedEof);
                         content = destination.Buffer.ToMemory()[start..];
                     }
+                    else if (destinationBudget == null || (sourceDestination != null && buffer.CanRetain))
+                        content = buffer.Retain(length);
                     else
-                        content = destinationBudget == null
-                            ? buffer.Retain(length)
-                            : ScopedMemory.Copy(bytes[..length], destinationBudget);
+                        content = ScopedMemory.Copy(bytes[..length], destinationBudget);
                 }
                 catch { offsetsMemory?.Dispose(); throw; }
                 buffer.Consume(length);

@@ -40,6 +40,8 @@ public readonly struct DescriptorReadBuffer : IDisposable
     /// <summary>The outcome at the end of the offered data, independent of consumption.</summary>
     public ByteReadResult Result { get; }
 
+    internal bool CanRetain => _canRetain;
+
     /// <summary>Retains an immutable prefix past disposal, copying only when the provider reuses its storage.</summary>
     public ReadOnlyMemory<byte> Retain(int length)
     {

@@ -38,6 +38,41 @@ public sealed class BoundedReadTests
     }
 
     [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task OnlySourceCanRetainAnImmutableBatchWithAnExplicitDestination(bool sourceRead, bool canRetain)
+    {
+        const int OffsetBytes = 32 + sizeof(int);
+        ReadOnlyMemory<byte> input = new byte[] { 0xff, 13, 10, (byte)'b', 13 };
+        var reusesHostBytes = sourceRead && canRetain;
+        var expectedBytes = OffsetBytes + (reusesHostBytes ? 0 : input.Length);
+        var memory = new MemoryGovernor(expectedBytes);
+        using var budget = memory.CreateScope();
+        using var output = ByteMemoryBuilder.CreateUnaccounted(2).Append("#\n"u8);
+        var owner = new DescriptorReadBufferOwner(consumed => Assert.Equal(input.Length, consumed), budget);
+
+        var batch = sourceRead
+            ? await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, new SourceLineDestination(output, 64), CancellationToken.None)
+            : await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, CancellationToken.None);
+
+        Assert.Equal(reusesHostBytes, owner.WasRetained);
+        Assert.Equal(reusesHostBytes, batch.Content.Equals(input));
+        Assert.Equal(input.ToArray(), batch.Content.ToArray());
+        Assert.Equal([3], batch.LineStartOffsets);
+        Assert.True(batch.ReachedEoF);
+        Assert.Equal(input.Length, owner.Position);
+        Assert.Equal("#\n"u8.ToArray(), output.ToMemory().ToArray());
+        Assert.Equal(expectedBytes, memory.PeakBytes);
+        budget.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner source, DescriptorReadRequest _, CancellationToken __) =>
+            ValueTask.FromResult(source.Borrow(input, ByteReadResult.Success(input.Length, reachedEoF: true), canRetain));
+    }
+
+    [Theory]
     [InlineData(1, 2, 1)]
     [InlineData(2, 2, 2)]
     [InlineData(3, 2, 3)]

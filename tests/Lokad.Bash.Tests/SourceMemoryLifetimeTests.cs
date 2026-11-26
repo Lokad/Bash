@@ -122,7 +122,7 @@ public sealed class SourceMemoryLifetimeTests
     [InlineData(4096, false, true)]
     [InlineData(16384, false, true)]
     [InlineData(4096, true, true)]
-    public async Task FragmentedSourceCopiesBatchesOnlyWhenTheParserBufferNeedsGrowth(int finalBytes, bool cancel, bool sizeKnown)
+    public async Task FragmentedSourceAdmitsOnlyOffsetsForImmutableReadBatches(int finalBytes, bool cancel, bool sizeKnown)
     {
         var governor = new MemoryGovernor(1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
@@ -174,9 +174,9 @@ public sealed class SourceMemoryLifetimeTests
         var fits = inputBytes <= initialCapacity;
         const int BatchOffsetsBytes = 32 + 127 * sizeof(int);
         const int FinalOffsetBytes = 32 + sizeof(int);
-        Assert.Equal(new long[] { BatchOffsetsBytes, first.Length }, firstAdmissions);
+        Assert.Equal(new long[] { BatchOffsetsBytes }, firstAdmissions);
         Assert.Equal(new long[] { BatchOffsetsBytes }, middleAdmissions);
-        Assert.Equal(fits ? new long[] { FinalOffsetBytes } : new long[] { FinalOffsetBytes, finalBytes }, finalAdmissions);
+        Assert.Equal(new long[] { FinalOffsetBytes }, finalAdmissions);
         Assert.Equal(new long[] { 0, initialCapacity, initialCapacity }, sourceBytesAtRead);
         var retained = fits ? initialCapacity : inputBytes;
         Assert.Equal(cancel ? 0 : retained, liveSourceBytes);
