@@ -304,7 +304,8 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
         using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
         var memory = new EvaluationMemory(setup);
-        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+        var names = new HashSet<BindingName> { "x" };
+        using var bindings = new Variables.CommandBindings(caller, prepared, names, memory, CancellationToken.None);
         var saved = bindings.SavedVariables.IndexedArrays["x"];
 
         Assert.True(caller.TryUnset("x"));
@@ -312,6 +313,7 @@ public sealed partial class FunctionPrefixBindingTests
 
         Assert.Same(saved, caller.IndexedArrays["x"]);
         Assert.False(bindings.Contains("x"));
+        Assert.Contains((BindingName)"x", names);
         Assert.False(bindings.SavedVariables.HasBinding("x"));
         Assert.True(caller.TrySetArrayElement("x", default(IndexedArrayIndex), ShellValue.FromText("changed")));
         bindings.Dispose();
@@ -319,6 +321,93 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(saved.TryGet(default, out var value));
         Assert.Equal(ShellValue.FromText("changed"), value);
         Assert.Equal(2, saved.Count);
+    }
+
+    [Fact]
+    public void PrefixMembershipBorrowsPreparedNamesUntilAnExposureNeedsAPrivateSet()
+    {
+        var caller = Variables.CreateEmpty();
+        var prepared = Variables.CreateEmpty();
+        var names = new HashSet<BindingName> { "first", "second", "third" };
+        var original = ShellValue.FromText("original");
+        var temporary = ShellValue.FromText("temporary");
+        foreach (var name in names)
+        {
+            Assert.True(caller.TrySetScalar(name, original));
+            Assert.True(prepared.TrySetScalar(name, temporary));
+        }
+        var governor = new MemoryGovernor(64 * 1024);
+        using var setup = governor.CreateScope();
+        var memory = new EvaluationMemory(setup);
+        using (var bindings = new Variables.CommandBindings(caller, prepared, names, memory, CancellationToken.None))
+        {
+            var forwarding = ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(bindings);
+            Assert.Same(names, bindings.PrefixNames);
+            Assert.Same(names, forwarding.PrefixNames);
+
+            memory.ReleaseUnusedCapacity();
+            using var hold = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
+            bindings.ExposeBinding("first", bindings.SavedVariables);
+            var owned = bindings.PrefixNames;
+            Assert.NotSame(names, owned);
+            Assert.Same(owned, forwarding.PrefixNames);
+            Assert.False(forwarding.PrefixNames.Contains("first"));
+            Assert.True(forwarding.PrefixNames.Contains("second"));
+            Assert.Equal(original, caller.Scalars["first"]);
+            Assert.Equal(temporary, caller.Scalars["second"]);
+
+            bindings.ExposeBinding("second", bindings.SavedVariables);
+            Assert.Same(owned, bindings.PrefixNames);
+            Assert.Single(forwarding.PrefixNames);
+            Assert.True(caller.TrySetScalar("first", temporary));
+        }
+        Assert.Equal(3, names.Count);
+        Assert.Equal(temporary, caller.Scalars["first"]);
+        Assert.Equal(original, caller.Scalars["second"]);
+        Assert.Equal(original, caller.Scalars["third"]);
+        setup.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ParentAndChildExposeIndependentPrefixNames(bool exposeBeforeFork)
+    {
+        var caller = Variables.CreateEmpty();
+        var prepared = Variables.CreateEmpty();
+        var names = new HashSet<BindingName> { "first", "second", "third" };
+        var original = ShellValue.FromText("original");
+        var temporary = ShellValue.FromText("temporary");
+        foreach (var name in names)
+        {
+            Assert.True(caller.TrySetScalar(name, original));
+            Assert.True(prepared.TrySetScalar(name, temporary));
+        }
+        using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
+        var memory = new EvaluationMemory(setup);
+        using var parent = new Variables.CommandBindings(caller, prepared, names, memory, CancellationToken.None);
+        if (exposeBeforeFork)
+            parent.ExposeBinding("third", parent.SavedVariables);
+        var child = caller.Clone();
+        using var childBindings = parent.Fork(child);
+        Assert.Equal(!exposeBeforeFork, childBindings.Contains("third"));
+
+        childBindings.ExposeBinding("first", childBindings.SavedVariables);
+        parent.ExposeBinding("second", parent.SavedVariables);
+        Assert.True(parent.Contains("first"));
+        Assert.True(childBindings.Contains("second"));
+        Assert.Equal(temporary, caller.Scalars["first"]);
+        Assert.Equal(temporary, child.Scalars["second"]);
+
+        parent.Dispose();
+        Assert.True(childBindings.Contains("second"));
+        Assert.True(child.TrySetScalar("first", temporary));
+        childBindings.Dispose();
+        Assert.Equal(original, caller.Scalars["first"]);
+        Assert.Equal(temporary, child.Scalars["first"]);
+        Assert.Equal(original, child.Scalars["second"]);
+        Assert.Equal(3, names.Count);
     }
 
     [Theory]

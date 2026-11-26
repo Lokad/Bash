@@ -15,7 +15,7 @@ public sealed partial class Evaluation
         IReadOnlyList<ShellValue> arguments,
         ScopedEvaluation scope,
         Variables commandVars,
-        IReadOnlySet<BindingName>? prefixNames,
+        HashSet<BindingName>? prefixNames,
         bool negated)
     {
         var functionDefinition = function.Definition;

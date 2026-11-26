@@ -125,16 +125,18 @@ internal readonly record struct ScopedEvaluation(
         Context.Fork(Variables, Effects.Memory, Effects.CancellationToken);
 
     /// <summary>The current simple command owns the prefix-name set, adding names as their bindings are prepared.</summary>
-    internal readonly record struct ExpansionBindings(Variables Variables, IReadOnlySet<BindingName> PrefixNames)
+    internal readonly record struct ExpansionBindings(Variables Variables, IReadOnlySet<BindingName> PreparedPrefixNames)
     {
+        private Variables.CommandBindings? SavedPrefixes { get; init; }
+        internal IReadOnlySet<BindingName> PrefixNames => SavedPrefixes?.PrefixNames ?? PreparedPrefixNames;
         internal bool PreparingPrefixes { get; init; }
         /// <summary>The receiving store contains saved prefix bindings.</summary>
-        internal bool OnlyPrefixNames { get; init; }
+        internal bool OnlyPrefixNames => SavedPrefixes != null;
         /// <summary>Element writes in a declaration selector reach an existing caller binding or remain temporary.</summary>
         internal bool DeclarationSelector { get; init; }
 
         internal static ExpansionBindings ForSavedPrefixes(Variables.CommandBindings bindings) =>
-            new(bindings.SavedVariables, bindings.PrefixNames) { OnlyPrefixNames = true };
+            new(bindings.SavedVariables, bindings.PrefixNames) { SavedPrefixes = bindings };
     }
 
     public ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)

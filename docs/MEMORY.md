@@ -225,6 +225,10 @@ reached prefix names as their backing grows. It returns unused growth credit
 before redirection and keeps the live backing charged through invocation. The
 restoration path admits its saved binding store before temporary bindings
 replace caller bindings.
+An installed invocation borrows the prepared set of prefix names. It admits
+space for a private set during installation and makes that copy only when an
+exposure needs to retain a subset. Child forks keep their own restoration
+membership and saved bindings.
 
 `read` retains reusable line and logical record buffers within its size limit.
 Custom-delimited record scratch stays charged through dispatch and normalization.

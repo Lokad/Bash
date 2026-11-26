@@ -263,19 +263,24 @@ public sealed partial class Variables
     /// </summary>
     internal sealed class CommandBindings : IDisposable
     {
+        private static readonly HashSet<BindingName> EmptyPrefixes = [];
+
         private readonly Variables _owner;
-        private readonly HashSet<BindingName> _prefixes;
+        private HashSet<BindingName> _prefixes;
+        private bool _ownsPrefixNames;
         private readonly Variables _saved;
         private readonly Variables _retained;
         private readonly HashSet<BindingName> _retainedNames;
         private long _retainedCopyCapacity;
 
-        public CommandBindings(Variables owner, Variables prepared, IReadOnlySet<BindingName> prefixes,
+        /// <remarks>The prepared prefix names remain stable until this invocation finishes.</remarks>
+        public CommandBindings(Variables owner, Variables prepared, HashSet<BindingName> prefixes,
             EvaluationMemory memory, CancellationToken cancellationToken)
         {
             // The originals remain live when subsequent commands account only for the
-            // visible store. Admit the complete saved set before changing any binding.
-            var bytes = checked(384 + (BindingOverheadBytes + (long)BindingNameSetEntryBytes) * prefixes.Count);
+            // visible store. Admit the saved store and space for a later membership copy.
+            var bytes = checked(384 + (long)BindingOverheadBytes * prefixes.Count
+                + (prefixes.Count > 1 ? PrefixSetBytes(prefixes) : 0));
             foreach (var name in prefixes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -287,7 +292,7 @@ public sealed partial class Variables
             cancellationToken.ThrowIfCancellationRequested();
 
             _owner = owner;
-            _prefixes = new HashSet<BindingName>(prefixes);
+            _prefixes = prefixes;
             _saved = new Variables();
             _retained = new Variables();
             _retainedNames = new HashSet<BindingName>();
@@ -310,6 +315,7 @@ public sealed partial class Variables
         {
             _owner = owner;
             _prefixes = new HashSet<BindingName>(source._prefixes);
+            _ownsPrefixNames = true;
             _saved = source._saved.Clone();
             // Child contexts never restore the caller's pending output assignments.
             _retained = new Variables();
@@ -320,15 +326,22 @@ public sealed partial class Variables
         internal bool RetainsBinding(BindingName name) => _retainedNames.Contains(name);
         internal Variables SavedVariables => _saved;
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
-        internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes
-            + (long)BindingNameSetEntryBytes * _prefixes.EnsureCapacity(0));
+        internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes + PrefixSetBytes(_prefixes));
         internal CommandBindings Fork(Variables owner) => new(owner, this);
+
+        private static long PrefixSetBytes(HashSet<BindingName> names) => names.Count == 0 ? 0
+            : 64L + (long)BindingNameSetEntryBytes * names.EnsureCapacity(0);
 
         /// <summary>Exposes a selected binding and ends this prefix's restoration responsibility.</summary>
         internal void ExposeBinding(BindingName name, Variables visible)
         {
             if (!_prefixes.Contains(name))
                 return;
+            if (!_ownsPrefixNames && _prefixes.Count > 1)
+            {
+                _prefixes = new HashSet<BindingName>(_prefixes);
+                _ownsPrefixNames = true;
+            }
             if (ReferenceEquals(visible, _saved))
                 _owner.TransferBindingFrom(_saved, name);
             else
@@ -337,7 +350,10 @@ public sealed partial class Variables
                     _owner.CopyBindingFrom(visible, name);
                 _saved.ClearBinding(name);
             }
-            _prefixes.Remove(name);
+            if (_ownsPrefixNames)
+                _prefixes.Remove(name);
+            else
+                _prefixes = EmptyPrefixes;
             _retained.ClearBinding(name);
             _retainedNames.Remove(name);
         }
@@ -505,7 +521,7 @@ public sealed partial class Variables
                 if (name.CachedText == "OPTIND")
                     _owner._getoptsCursor = cursor with { ArgumentIndex = 0 };
             }
-            _prefixes.Clear();
+            _prefixes = EmptyPrefixes;
             _retainedNames.Clear();
         }
     }
