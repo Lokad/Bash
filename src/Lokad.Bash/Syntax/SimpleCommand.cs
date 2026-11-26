@@ -23,6 +23,9 @@ public sealed record SimpleCommand(
 {
     internal bool IsEmpty => Assignments.Count == 0 && Words.Count == 0 && Redirections.Count == 0;
 
+    /// <summary>An empty command explicitly reached through a pipeline prefix.</summary>
+    internal bool IsBarePipelinePrefix { get; init; }
+
     internal static IReadOnlyDictionary<Word, AssignmentWord> NoDeclarationAssignments { get; } =
         new Dictionary<Word, AssignmentWord>();
 }

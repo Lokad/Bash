@@ -10,6 +10,25 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
+    [InlineData("!\n", 1)]
+    [InlineData("!; ", 1)]
+    [InlineData("! !; ", 0)]
+    [InlineData("! # empty command\n", 1)]
+    [InlineData("time; ", 0)]
+    [InlineData("time !; ", 1)]
+    [InlineData("! ! time; ", 0)]
+    public async Task BarePipelinePrefixPublishesSuccessBeforeNegationAndClearsLastArgument(string prefix, int exitCode)
+    {
+        var result = await EvaluationTestHelper.RunAsync("TIMEFORMAT=; : anchored; (exit 7) | (exit 3)\n" + prefix
+            + """printf '<%s|%s|%s>' "$?" "${PIPESTATUS[*]}" "$_" """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{exitCode}|0|>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.Host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("export item[0]=b | :", "<4|4 0|anchored>",
         "line 2: export: `item[0]': not a valid identifier\n")]
     [InlineData(": | command readonly item[0]+=b 2>&-", "<4|0 4|anchored>", "")]

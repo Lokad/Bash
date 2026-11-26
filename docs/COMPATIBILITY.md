@@ -735,6 +735,9 @@ its operands against the previous statuses. Publication preserves scalar,
 associative, and declaration-only bindings. Initialized sparse arrays reuse their
 positions when they fit the incoming status list. Empty loops and function
 definitions preserve the previous array.
+A standalone `!` or `time` prefix completes an empty command. It publishes
+status zero to `PIPESTATUS` and sets `$_` to an empty value. Negation still
+applies to the command's exit status.
 A direct commandless stage reports an isolated redirection failure to stderr
 and publishes its assignment status. Ordinary output redirection failures and
 failures in a compound stage contribute their own nonzero status.

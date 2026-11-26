@@ -712,7 +712,10 @@ public static class Parser
             {
                 if (terminator == TokenKind.EndOfInput)
                     tokenizer.RecordEmptyPipelinePrefixEndOfInput();
-                return Wrap(new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments));
+                return Wrap(new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments)
+                {
+                    IsBarePipelinePrefix = true
+                });
             }
         }
 

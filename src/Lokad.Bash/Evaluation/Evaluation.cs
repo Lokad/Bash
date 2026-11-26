@@ -1120,8 +1120,7 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope)
     {
         var directPipelineStage = IsPipelineStageCommand(simpleCommand);
-        var reachedCommand = simpleCommand.Words.Count != 0 || simpleCommand.Assignments.Count != 0
-            || simpleCommand.Redirections.Count != 0;
+        var reachedCommand = !simpleCommand.IsEmpty || simpleCommand.IsBarePipelinePrefix;
         var publishStatus = reachedCommand;
         if (publishStatus)
             PreparePipelineStatusStorage(1);
