@@ -164,7 +164,8 @@ public sealed class ShellQuotedOutputTests
 
     [Theory]
     [InlineData(ShellQuoteStyle.Backslash, "#é a=~:~b#", "\\#é\\ a=\\~:\\~b#")]
-    [InlineData(ShellQuoteStyle.DoubleQuoted, "aé$\"z", "\"aé\\$\\\"z\"")]
+    [InlineData(ShellQuoteStyle.DoubleQuoted, "aé$\"`\\'!z", "\"aé\\$\\\"\\`\\\\'!z\"")]
+    [InlineData(ShellQuoteStyle.AssociativeKey, "a é$\"`\\'!z", "\"a é\\$\\\"\\`\\\\'!z\"")]
     public void PrintableQuotesPreserveEveryBytePrefix(ShellQuoteStyle style, string input, string rendered)
     {
         var bytes = Utf8Text.Encode(input);

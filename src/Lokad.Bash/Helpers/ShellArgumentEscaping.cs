@@ -16,6 +16,7 @@ public static class ShellArgumentEscaping
     // Printable ASCII except the two bytes escaped inside ANSI-C quotes.
     private static readonly SearchValues<byte> AnsiCLiteralAscii = SearchValues.Create(
         " !\"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"u8);
+    private static readonly SearchValues<byte> DoubleQuoteEscapes = SearchValues.Create("\"$`\\"u8);
 
     /// <summary>Delimits a diagnostic operand without decoding or escaping its bytes.</summary>
     public static ShellValue QuoteDiagnosticOperand(ShellValue operand) =>
@@ -132,25 +133,39 @@ public static class ShellArgumentEscaping
         }
         if (style == ShellQuoteStyle.SingleQuoted)
             return TryAppendLiteralSingleQuoted(output, input);
-        var quote = style == ShellQuoteStyle.DoubleQuoted ? (byte)'"' : (byte)'\'';
-        var delimited = style != ShellQuoteStyle.Backslash;
-        if (delimited && !output.TryAppend(quote))
-            return false;
+        if (style == ShellQuoteStyle.DoubleQuoted)
+            return output.TryAppend((byte)'"') && AppendDoubleQuotedContent(output, input) && output.TryAppend((byte)'"');
+        if (style != ShellQuoteStyle.Backslash)
+            return output.TryAppend((byte)'\'') && AppendLiteralRun(output, input) && output.TryAppend((byte)'\'');
+
         var runStart = 0;
         for (var index = 0; index < input.Length; index++)
         {
-            var value = input[index];
-            var escape = style == ShellQuoteStyle.Backslash ? !IsShellSafe(input, index)
-                : style == ShellQuoteStyle.DoubleQuoted && value is (byte)'"' or (byte)'$' or (byte)'`' or (byte)'\\';
-            if (!escape)
+            if (IsShellSafe(input, index))
                 continue;
 
-            if (!AppendLiteralRun(output, input[runStart..index])
-                || !output.TryAppend((byte)'\\') || !output.TryAppend(value))
+            if (!AppendLiteralRun(output, input[runStart..index]) || !AppendBackslashEscape(output, input[index]))
                 return false;
             runStart = index + 1;
         }
-        return AppendLiteralRun(output, input[runStart..]) && (!delimited || output.TryAppend(quote));
+        return AppendLiteralRun(output, input[runStart..]);
+
+        static bool AppendDoubleQuotedContent(IByteMemoryWriter output, ReadOnlySpan<byte> bytes)
+        {
+            while (!bytes.IsEmpty)
+            {
+                var escape = DoubleQuoteEscapes.Contains(bytes[0]) ? 0 : bytes.IndexOfAny(DoubleQuoteEscapes);
+                if (escape < 0)
+                    return AppendLiteralRun(output, bytes);
+                if (!AppendLiteralRun(output, bytes[..escape]) || !AppendBackslashEscape(output, bytes[escape]))
+                    return false;
+                bytes = bytes[(escape + 1)..];
+            }
+            return true;
+        }
+
+        static bool AppendBackslashEscape(IByteMemoryWriter output, byte value) =>
+            output.TryAppend((byte)'\\') && output.TryAppend(value);
 
         static int GetPrintablePrefixLength(ReadOnlySpan<byte> bytes)
         {
