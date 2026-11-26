@@ -558,11 +558,24 @@ public static partial class PrintfFormatting
                     var adjusted = quotedSpecification.Conversion == 'Q'
                         ? quotedSpecification with { Precision = null }
                         : quotedSpecification;
-                    if (adjusted.Width == 0 && adjusted.Precision == null)
+                    if (adjusted.Precision == null)
                     {
-                        if (!_output.TryAppendCompleteQuote(bytes.Span, style))
-                            FailOutputLimit();
-                        return;
+                        // Quoting cannot shorten the operand. Left alignment only pads after the quote.
+                        var width = GetFieldWidth(adjusted.Width, contentLength: 1);
+                        if (width <= _output.RemainingLength
+                            && (width <= bytes.Length || adjusted.Flags.HasFlag(FormatFlags.LeftJustify)))
+                        {
+                            var start = _output.Length;
+                            if (!_output.TryAppendCompleteQuote(bytes.Span, style))
+                            {
+                                FailOutputLimit();
+                                return;
+                            }
+                            var padding = (int)width - (_output.Length - start);
+                            if (padding > 0)
+                                AppendPadding(padding, (byte)' ');
+                            return;
+                        }
                     }
 
                     // Empty %q syntax can be truncated by precision before consuming the final output budget.

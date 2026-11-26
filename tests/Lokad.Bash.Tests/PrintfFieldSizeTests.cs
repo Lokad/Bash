@@ -578,11 +578,16 @@ public sealed class PrintfFieldSizeTests
     }
 
     [Theory]
-    [InlineData("%q", "")]
-    [InlineData("%.512Q", "\n")]
-    public async Task UnpaddedQuotedOutputFitsWithoutASecondBuffer(string field, string operandSuffix)
+    [InlineData("%q", "", 512, 800)]
+    [InlineData("%.512Q", "\n", 512, 800)]
+    [InlineData("%500q", "", 512, 800)]
+    [InlineData("%500.512Q", "\n", 512, 800)]
+    [InlineData("%-640q", "", 640, 1600)]
+    [InlineData("%-640.512Q", "\n", 640, 1600)]
+    public async Task QuotedOutputWithoutLeadingPaddingFitsWithoutASecondBuffer(
+        string field, string operandSuffix, int length, int allowance)
     {
-        var memory = new MemoryGovernor(800);
+        var memory = new MemoryGovernor(allowance);
         using var owner = memory.CreateScope();
         var value = new string('x', 512);
         var counts = new List<PrintfVariableAssignment>();
@@ -593,8 +598,28 @@ public sealed class PrintfFieldSizeTests
             reportDiagnostic: null, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(ShellValue.FromText(value), ShellValue.FromBytes(result.Output));
-        Assert.Equal(new PrintfVariableAssignment("count", 512), Assert.Single(counts));
+        Assert.Equal(ShellValue.FromText(value.PadRight(length)), ShellValue.FromBytes(result.Output));
+        Assert.Equal(new PrintfVariableAssignment("count", length), Assert.Single(counts));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task LeftAlignedQuoteCountsDiscardedBytesInAnAssignment()
+    {
+        var memory = new MemoryGovernor(256);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(
+            ShellValue.FromText("prefix\\0%-8q%n"), [ShellValue.FromText("a b"), ShellValue.FromText("count")],
+            DateTimeOffset.UnixEpoch, assignOutput: true, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText("prefix"), ShellValue.FromBytes(result.Output));
+        Assert.True(result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("count", 15), Assert.Single(counts));
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
     }
