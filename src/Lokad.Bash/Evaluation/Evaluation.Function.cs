@@ -7,6 +7,8 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private const int FunctionContinuationInterval = 8;
+
     /// <summary>
     /// Evaluates a function invocation, managing positional parameters and local variables.
     /// </summary>
@@ -18,6 +20,16 @@ public sealed partial class Evaluation
         HashSet<BindingName>? prefixNames,
         bool negated)
     {
+        // Command entry checks the CLR's stack estimate. A periodic continuation
+        // also limits synchronous function nesting between those checks.
+        var callerDepth = scope.Context.FunctionContext?.Depth ?? 0;
+        var yieldAtBoundary = (callerDepth + 1) % FunctionContinuationInterval == 0;
+        if (yieldAtBoundary)
+        {
+            await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            CheckCancellation();
+        }
+
         var functionDefinition = function.Definition;
         // Keep the inactive caller frame admitted and reserve the callee's owned entry array.
         Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * arguments.Count));
@@ -48,8 +60,17 @@ public sealed partial class Evaluation
         var preserveExitOptions = false;
         try
         {
-            functionResult = await EvaluateCommandAsync(functionDefinition.Body, functionScope, negated: false)
-                .ConfigureAwait(false);
+            try
+            {
+                functionResult = await EvaluateCommandAsync(functionDefinition.Body, functionScope, negated: false)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                // A completed body can resume callers inline, including during failure unwinding.
+                if (yieldAtBoundary)
+                    await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            }
 
             if (IsDirectPipelineStageScope(scope) && _state.Traps?.HasPendingExitAction == true)
             {

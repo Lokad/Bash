@@ -210,11 +210,12 @@ GNU's bounded strftime result is selected before ordinary outer width/precision.
 Projection and rendering workspace share the current conversion owner; copied
 output keeps the ordinary result and descriptor-write lifetime.
 
-Command dispatch resumes asynchronously when CLR stack space runs low, so finite
-function calls do not depend on the embedding thread's native stack size. Reached
-source/eval parsers start on a fresh continuation to keep syntax guards independent
-of execution depth. These continuations retain the same evaluator, bindings,
-admission and descriptor owners through completion and cleanup.
+Command dispatch resumes asynchronously when the CLR reports low stack space.
+Nested functions also schedule periodic continuations on entry and after their
+bodies finish, including during failure unwinding. Reached source/eval parsers
+start on a fresh continuation to keep syntax guards independent of execution
+depth. These continuations retain the same evaluator, bindings, admission and
+descriptor owners through completion and cleanup.
 
 Sourced function definitions share the input's admitted owner across namespaces
 and attribute copies. An invocation retains its selected definition through
