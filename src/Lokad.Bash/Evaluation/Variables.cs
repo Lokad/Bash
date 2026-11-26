@@ -1533,8 +1533,9 @@ public sealed partial class Variables
     private bool TryResolveWritableName(BindingName name, out BindingName resolved)
     {
         resolved = BindingName.Empty;
-        return name.IsIdentifier && TryResolveWholeName(name, out resolved)
-            && !IsReadonly(resolved) && !IsReadonly(name);
+        return name.IsIdentifier && TryResolveWholeName(name, out resolved, out var binding)
+            && !IsReadonlyBinding(name)
+            && (binding.Name == name || !binding.Owner.IsReadonlyBinding(binding.Name));
     }
 
     /// <summary>
@@ -2162,10 +2163,13 @@ public sealed partial class Variables
     /// Resolves whole bindings, leaving element selection to the scoped evaluator.
     /// </summary>
     /// <remarks>An uninitialized nameref resolves successfully with an empty scalar or array destination.</remarks>
-    private bool TryResolveWholeName(BindingName name, out BindingName resolved)
+    private bool TryResolveWholeName(BindingName name, out BindingName resolved) =>
+        TryResolveWholeName(name, out resolved, out _);
+
+    private bool TryResolveWholeName(BindingName name, out BindingName resolved, out VariableBinding binding)
     {
         resolved = name;
-        if (!TryResolveBinding(name, selectOwner: null, out var binding))
+        if (!TryResolveBinding(name, selectOwner: null, out binding))
             return false;
         if (binding.Reference.Kind != VariableReferenceKind.Name)
             return false;

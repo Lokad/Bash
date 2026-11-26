@@ -298,6 +298,70 @@ public sealed class ShellVariableValueTests
             $"Setting and cloning one high-index variable allocated {allocated:N0} bytes.");
     }
 
+    [Theory]
+    [InlineData("source", false)]
+    [InlineData("middle", true)]
+    [InlineData("target", false)]
+    public void WholeArrayWriteChecksReadonlyAtTheSourceAndResolvedBinding(string readonlyName, bool writable)
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        var replacement = ShellValue.FromText("replacement");
+        Assert.True(variables.TryAssignArray("target", [original], ArrayKind.Indexed));
+        Assert.True(variables.TrySetNameref("middle", ShellValue.FromText("target")));
+        Assert.True(variables.TrySetNameref("source", ShellValue.FromText("middle")));
+        variables.SetReadonlyBinding(readonlyName);
+
+        Assert.Equal(writable, variables.TryAssignArray("source", [replacement], ArrayKind.Indexed));
+        Assert.True(variables.IndexedArrays["target"].TryGet(default, out var stored));
+        Assert.Equal(writable ? replacement : original, stored);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ScalarWriteChecksReadonlyOnTheReachedLiteralSelectorName(bool readOnly)
+    {
+        var variables = Variables.CreateEmpty();
+        var spelling = ShellValue.FromBytes(new byte[] { (byte)'a', (byte)'[', 0xff, (byte)']' });
+        var literal = BindingName.FromValue(spelling);
+        var original = ShellValue.FromText("original");
+        var replacement = ShellValue.FromBytes(new byte[] { 0xfe, (byte)'v' });
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.True(variables.TrySetResolvedScalar(literal, original, memory));
+            Assert.True(variables.TrySetNameref("source", spelling));
+            if (readOnly)
+                variables.SetReadonlyBinding(literal);
+
+            Assert.Equal(!readOnly, variables.TrySetScalar("source", replacement));
+            Assert.True(variables.TryGetScalar(literal, out var stored));
+            Assert.Equal(readOnly ? original : replacement, stored);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WritableNameResolutionDistinguishesAnUnsetNamerefFromAnAliasToIt(bool readOnly)
+    {
+        var variables = Variables.CreateEmpty();
+        var replacement = ShellValue.FromText("target");
+        Assert.True(variables.TrySetNameref("unset", ShellValue.Empty));
+        Assert.True(variables.TrySetNameref("alias", ShellValue.FromText("unset")));
+        if (readOnly)
+            variables.SetReadonlyBinding("unset");
+
+        Assert.False(variables.TrySetScalar("alias", replacement));
+        Assert.Equal(!readOnly, variables.TrySetScalar("unset", replacement));
+        Assert.True(variables.TryGetNameref("unset", out var target));
+        Assert.Equal(readOnly ? ShellValue.Empty : replacement, target);
+    }
+
     private static long MeasureAllocation(Action action)
     {
         var before = GC.GetAllocatedBytesForCurrentThread();
