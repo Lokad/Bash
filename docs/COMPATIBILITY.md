@@ -1553,10 +1553,13 @@ retain the converted prefix, report a byte-preserving diagnostic and return stat
 range warnings preserve their successful conversion status. Character constants
 consume one UTF-8 scalar or one malformed byte after the quote. Floating-point
 conversion uses the deterministic 64-bit-significand extended profile, including
-the pinned Linux hexadecimal spelling and NaN/subnormal behavior. Exact subnormals
-do not produce range warnings. A shell-closed stderr discards conversion diagnostics
-without suppressing stdout; host-reported diagnostic failures retain their ordinary
-stop policy. Numeric parsing observes cancellation and shared workspace admission.
+the pinned Linux hexadecimal spelling and NaN/subnormal behavior. A completed
+NaN operand with an out-of-range numeric payload prefix prints a range warning
+and keeps the converted NaN. A trailing invalid suffix selects the invalid-number
+diagnostic. Exact subnormals do not produce range warnings. A shell-closed stderr
+discards conversion diagnostics without suppressing stdout. Host-reported diagnostic
+failures retain their ordinary stop policy. Numeric parsing observes cancellation
+and shared workspace admission.
 
 Usage failures from `printf`, `mapfile`, `readarray`, `read` and
 `getopts` retain status 2 when stderr is explicitly closed by shell

@@ -618,7 +618,7 @@ public static partial class PrintfFormatting
                             cancellationToken);
                         if (result.Invalid)
                             AddNumericDiagnostic(argument, NumericErrorSuffix(argument), warning: false);
-                        if (result.RangeError)
+                        else if (result.RangeError)
                             AddNumericDiagnostic(argument, ": Numerical result out of range", warning: true);
 
                         AppendNumber(numberSpecification, result.Number);

@@ -151,6 +151,14 @@ public sealed class PrintfNumericTests
             ["character-3", "value=$'\\\"\\uD800'; printf '%d:%f:%u' \"$value\" \"$value\" \"$value\"; printf '|%s' \"$?\"", 0, "3233373A3233372E3030303030303A3233377C30", "", "{}", ""],
             ["character-4", "value=$'\\\"\\u00e9\\377'; printf '%d:%f:%u' \"$value\" \"$value\" \"$value\"; printf '|%s' \"$?\"", 0, "3233333A3233332E3030303030303A3233337C30", "", "{}", ""],
             ["character-5", "value=$'\\\"a\\377'; printf '%d:%f:%u' \"$value\" \"$value\" \"$value\"; printf '|%s' \"$?\"", 0, "39373A39372E3030303030303A39377C30", "", "{}", ""],
+            ["floating-range-decimal-over", "printf '<%a>' 'nan(18446744073709551616)'; printf '|%s\\n' \"$?\"\n", 0, "3C6E616E3E7C300A", "6C696E6520313A207072696E74663A207761726E696E673A206E616E283138343436373434303733373039353531363136293A204E756D65726963616C20726573756C74206F7574206F662072616E67650A", "{}", ""],
+            ["floating-range-hex-limit", "printf '<%a>' 'nan(0xffffffffffffffff)'; printf '|%s\\n' \"$?\"\n", 0, "3C6E616E3E7C300A", "", "{}", ""],
+            ["floating-range-text-inside", "printf '<%a>' 'nan(18446744073709551616extra)'; printf '|%s\\n' \"$?\"\n", 0, "3C6E616E3E7C300A", "6C696E6520313A207072696E74663A207761726E696E673A206E616E2831383434363734343037333730393535313631366578747261293A204E756D65726963616C20726573756C74206F7574206F662072616E67650A", "{}", ""],
+            ["floating-range-text-outside", "printf '<%a>' 'nan(18446744073709551616)extra'; printf '|%s\\n' \"$?\"\n", 0, "3C6E616E3E7C310A", "6C696E6520313A207072696E74663A206E616E2831383434363734343037333730393535313631362965787472613A20696E76616C6964206E756D6265720A", "{}", ""],
+            ["floating-range-assigned", "printf -v v '<%F>' '-nan(18446744073709551616)'; s=$?; printf '%s|%s\\n' \"$v\" \"$s\"\n", 0, "3C2D4E414E3E7C300A", "6C696E6520313A207072696E74663A207761726E696E673A202D6E616E283138343436373434303733373039353531363136293A204E756D65726963616C20726573756C74206F7574206F662072616E67650A", "{}", ""],
+            ["floating-range-closed-stderr", "printf '<%a>' 'nan(18446744073709551616)' 2>&-; printf '|%s\\n' \"$?\"\n", 0, "3C6E616E3E7C300A", "", "{}", ""],
+            ["floating-range-finite-over-tail", "printf '<%a>' '1e9999tail'; printf '|%s\\n' \"$?\"\n", 0, "3C696E663E7C310A", "6C696E6520313A207072696E74663A203165393939397461696C3A20696E76616C6964206E756D6265720A", "{}", ""],
+            ["floating-range-hex-float-over-tail", "printf '<%a>' '0x1p99999tail'; printf '|%s\\n' \"$?\"\n", 0, "3C696E663E7C310A", "6C696E6520313A207072696E74663A203078317039393939397461696C3A20696E76616C696420686578206E756D6265720A", "{}", ""],
         };
         foreach (var prepared in new[] { false, true })
         foreach (var sample in cases)

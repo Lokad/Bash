@@ -19,11 +19,15 @@ public readonly partial record struct ExtendedFloatingPoint
         ReadOnlySpan<byte> content,
         Action<long> reserveWorkspace,
         CancellationToken cancellationToken) =>
-        ParseGeneralPrefix(content, reserveWorkspace, cancellationToken).Value;
+        ParseGeneralPrefix(content, reserveWorkspace, cancellationToken, retainNanPayload: true).Value;
 
-    /// <summary>Shares conversion while retaining prefix validity and range causes for language callers.</summary>
+    /// <summary>Retains prefix validity, sign and range causes for formatting NaNs and ordinary numbers.</summary>
     internal static FloatingPointPrefixResult ParseGeneralPrefix(
-        ReadOnlySpan<byte> content, Action<long> reserveWorkspace, CancellationToken cancellationToken)
+        ReadOnlySpan<byte> content, Action<long> reserveWorkspace, CancellationToken cancellationToken) =>
+        ParseGeneralPrefix(content, reserveWorkspace, cancellationToken, retainNanPayload: false);
+
+    private static FloatingPointPrefixResult ParseGeneralPrefix(
+        ReadOnlySpan<byte> content, Action<long> reserveWorkspace, CancellationToken cancellationToken, bool retainNanPayload)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var totalBytes = content.Length;
@@ -51,9 +55,11 @@ public readonly partial record struct ExtendedFloatingPoint
                 if (cursor < prefix.Unsigned.Length && prefix.Unsigned[cursor] == (byte)')')
                     length = cursor + 1;
             }
+            var rangeError = false;
+            var payload = length > 3 ? ReadNanPayload(prefix.Unsigned[4..(length - 1)], out rangeError) : 0;
             return new FloatingPointPrefixResult(
-                new ExtendedFloatingPoint(prefix.Negative, FloatingPointClass.Nan, NanPayload(prefix.Unsigned[3..]), 0),
-                totalBytes - prefix.Unsigned.Length + length, true, false);
+                new ExtendedFloatingPoint(prefix.Negative, FloatingPointClass.Nan, payload, 0),
+                totalBytes - prefix.Unsigned.Length + length, true, rangeError);
         }
         if (prefix.Unsigned.StartsWith("0x"u8) || prefix.Unsigned.StartsWith("0X"u8))
             return ParseHexadecimal(prefix.Unsigned[2..], prefix.Negative);
@@ -239,36 +245,49 @@ public readonly partial record struct ExtendedFloatingPoint
             return true;
         }
 
-        ulong NanPayload(ReadOnlySpan<byte> suffix)
+        ulong ReadNanPayload(ReadOnlySpan<byte> digits, out bool rangeError)
         {
-            if (suffix.IsEmpty || suffix[0] != (byte)'(')
-                return 0;
-            var closing = suffix.IndexOf((byte)')');
-            if (closing < 0)
-                return 0;
-            var digits = suffix[1..closing];
-            var numberBase = 10;
+            rangeError = false;
+            uint numberBase = 10;
+            var minimumOverflowDigits = 20;
             if (digits.StartsWith("0x"u8) || digits.StartsWith("0X"u8))
             {
                 numberBase = 16;
+                minimumOverflowDigits = 17;
                 digits = digits[2..];
             }
             else if (!digits.IsEmpty && digits[0] == (byte)'0')
+            {
                 numberBase = 8;
+                minimumOverflowDigits = 22;
+            }
 
+            // The formatter only needs to know whether the payload is out of range.
+            if (!retainNanPayload && digits.Length < minimumOverflowDigits)
+                return 0;
+
+            var cutoff = ulong.MaxValue / numberBase;
+            var cutoffDigit = ulong.MaxValue % numberBase;
             ulong payload = 0;
             for (var index = 0; index < digits.Length; index++)
             {
                 CheckCancellation(index);
-                var value = digits[index];
-                if (!ShellEscapeDecoder.TryDigitValue((char)value, numberBase, out var digit))
+                if (!ShellEscapeDecoder.TryDigitValue((char)digits[index], (int)numberBase, out var digit))
                     return 0;
-                payload = payload > (ulong.MaxValue - (uint)digit) / (uint)numberBase
-                    ? ulong.MaxValue
-                    : payload * (uint)numberBase + (uint)digit;
+                if (rangeError)
+                    continue;
+                if (payload > cutoff || payload == cutoff && (uint)digit > cutoffDigit)
+                {
+                    rangeError = true;
+                    if (!retainNanPayload)
+                        return 0;
+                    payload = ulong.MaxValue;
+                }
+                else
+                    payload = payload * numberBase + (uint)digit;
             }
             // The integer and quiet-NaN bits leave 62 bits for the payload.
-            return payload & 0x3fff_ffff_ffff_ffff;
+            return retainNanPayload ? payload & 0x3fff_ffff_ffff_ffff : 0;
         }
 
         void CheckCancellation(int index)

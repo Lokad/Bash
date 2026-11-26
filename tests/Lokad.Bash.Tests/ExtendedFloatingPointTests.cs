@@ -77,6 +77,38 @@ public sealed class ExtendedFloatingPointTests
     }
 
     [Theory]
+    [InlineData("NAN", "NAN", 0UL, false, false)]
+    [InlineData(" \t-NaN(42)tail", " \t-NaN(42)", 42UL, true, false)]
+    [InlineData("nan(077)", "nan(077)", 63UL, false, false)]
+    [InlineData("nan(0X2f)", "nan(0X2f)", 47UL, false, false)]
+    [InlineData("nan(018)", "nan(018)", 0UL, false, false)]
+    [InlineData("nan(0x)", "nan(0x)", 0UL, false, false)]
+    [InlineData("nan(foo_bar9)", "nan(foo_bar9)", 0UL, false, false)]
+    [InlineData("nan(4-2)", "nan", 0UL, false, false)]
+    [InlineData("nan(7", "nan", 0UL, false, false)]
+    [InlineData("nan(18446744073709551616)", "nan(18446744073709551616)", 0x3fff_ffff_ffff_ffffUL, false, true)]
+    [InlineData("nan(18446744073709551616extra)", "nan(18446744073709551616extra)", 0UL, false, true)]
+    [InlineData("nan(18446744073709551616-extra)", "nan", 0UL, false, false)]
+    [InlineData("nan(0xffffffffffffffff)", "nan(0xffffffffffffffff)", 0x3fff_ffff_ffff_ffffUL, false, false)]
+    [InlineData("nan(é)", "nan", 0UL, false, false)]
+    public void NaNFormattingBoundaryAndPublicPayloadAreIndependent(
+        string input, string consumed, ulong payload, bool negative, bool rangeError)
+    {
+        var bytes = Encoding.UTF8.GetBytes(input);
+        var parsed = ExtendedFloatingPoint.ParseGeneralPrefix(bytes, NoWorkspace, CancellationToken.None);
+        var value = ExtendedFloatingPoint.ParseGeneral(bytes, NoWorkspace, CancellationToken.None);
+
+        Assert.True(parsed.HasNumber);
+        Assert.Equal(rangeError, parsed.RangeError);
+        Assert.Equal(Encoding.UTF8.GetByteCount(consumed), parsed.ConsumedBytes);
+        Assert.Equal(FloatingPointClass.Nan, parsed.Value.Class);
+        Assert.Equal(negative, parsed.Value.Negative);
+        Assert.Equal(new ExtendedFloatingPoint(negative, FloatingPointClass.Nan, payload, 0), value);
+
+        static void NoWorkspace(long _) => throw new InvalidOperationException("NaN parsing does not need workspace.");
+    }
+
+    [Theory]
     [InlineData("1.25")]
     [InlineData("0x1.4p0")]
     public void ParseGeneral_ObservesCancellationBeforeConversion(string input)
