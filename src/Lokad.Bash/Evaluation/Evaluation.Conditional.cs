@@ -43,6 +43,8 @@ public sealed partial class Evaluation
         using var workMemory = new MemoryCapacity(Memory.Budget, 0);
         var work = new List<(ConditionalExpression Expression, bool Complete)>();
         Push(command.Condition, false);
+        using var predicateMemory = command.Condition is ConditionalExpression.Logical or ConditionalExpression.Negated
+            ? Memory.BeginCommand(scope) : null;
         var status = 1;
         while (work.Count > 0)
         {
@@ -75,6 +77,9 @@ public sealed partial class Evaluation
                     break;
                 default:
                     status = await AwaitWordExpansionAsync(EvaluatePredicateAsync(frame.Expression)).ConfigureAwait(false);
+                    // All scratch users have settled. Retain the bindings for the next operand.
+                    if (work.Count > 0)
+                        predicateMemory?.ResetWorkspace();
                     break;
             }
         }

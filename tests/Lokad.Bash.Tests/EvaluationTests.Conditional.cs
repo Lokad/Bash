@@ -37,12 +37,12 @@ public partial class EvaluationTests
     {
         var left = new string('a', 8192);
         var right = new string('b', 8192);
-        var single = await MeasurePendingAsync([ShellValue.FromText(left + " " + right)]);
-        var fields = await MeasurePendingAsync([ShellValue.FromText(left), ShellValue.FromText(right)]);
+        var single = await MeasurePeakAsync([ShellValue.FromText(left + " " + right)]);
+        var fields = await MeasurePeakAsync([ShellValue.FromText(left), ShellValue.FromText(right)]);
 
         Assert.InRange(fields - single, -4096, 4096);
 
-        async Task<long> MeasurePendingAsync(IReadOnlyList<ShellValue> values)
+        async Task<long> MeasurePeakAsync(IReadOnlyList<ShellValue> values)
         {
             var budget = new MemoryGovernor(2 * 1024 * 1024);
             using var owner = budget.CreateScope();
@@ -52,14 +52,14 @@ public partial class EvaluationTests
 
             var query = await NextPathKindsAsync(state);
             Assert.Equal("/file", Assert.Single(query.Paths).Path);
-            var pending = budget.ReservedBytes;
+            var peak = budget.PeakBytes;
             query.SetResult([PathKindResult(FilePathKind.File)]);
 
             Assert.Null(await NextStepAsync(state));
             Assert.Equal(0, state.LastExitCode);
             owner.Dispose();
             Assert.Equal(0, budget.ReservedBytes);
-            return pending;
+            return peak;
         }
     }
 
@@ -75,6 +75,53 @@ public partial class EvaluationTests
         second.SetResult([PathKindResult(FilePathKind.Missing)]);
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(1, state.LastExitCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReachedConditionalPredicatesReuseScratchAfterQueriesSettle(bool cancel)
+    {
+        const int checks = 8;
+        var path = new string('x', 128);
+        var operands = string.Join(" && ", Enumerable.Repeat("-f \"$1\"", checks));
+        var state = new Eval(Parser.Parse($"[[ {operands} ]]; after=yes"));
+        var budget = new MemoryGovernor(128 * 1024);
+        using var owner = budget.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        state.Memory.Budget = owner;
+        state.ReplacePositionalParameters([ShellValue.FromText(path)]);
+        var completion = state.EnsureRunning(cancellation.Token);
+
+        var workspaces = new long[checks];
+        for (var index = 0; index < checks; index++)
+        {
+            var query = await NextPathKindsAsync(state);
+            Assert.Equal("/" + path, Assert.Single(query.Paths).Path);
+            workspaces[index] = state.Memory.Workspace.Bytes;
+            if (cancel && index == checks - 1)
+            {
+                var reserved = budget.ReservedBytes;
+                cancellation.Cancel();
+                Assert.False(completion.IsCompleted);
+                Assert.Equal(reserved, budget.ReservedBytes);
+            }
+            query.SetResult([PathKindResult(FilePathKind.File)]);
+        }
+
+        if (cancel)
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+            Assert.False(state.Variables.ContainsKey("after"));
+        }
+        else
+        {
+            Assert.Null(await NextStepAsync(state));
+            Assert.Equal(ShellValue.FromText("yes"), state.Variables["after"]);
+        }
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+        Assert.All(workspaces, workspace => Assert.Equal(workspaces[0], workspace));
     }
 
     [Fact]
