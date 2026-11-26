@@ -19,6 +19,7 @@ public sealed class Word
         LiteralFields = PrepareLiteral(parts);
         if (LiteralFields != null)
             return;
+        HasBraceDelimiterCandidate = BraceExpansion.HasCommentedDelimiterCandidate(parts);
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
@@ -75,6 +76,7 @@ public sealed class Word
     internal IReadOnlyList<ExpandedWord>? LiteralFields { get; }
     internal bool HasIncompleteQuotedParameterSubscript { get; }
     internal bool HasRejectedCaptureSpelling { get; }
+    internal bool HasBraceDelimiterCandidate { get; }
 
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)

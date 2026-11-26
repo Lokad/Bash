@@ -178,6 +178,52 @@ public sealed class ArithmeticErrorTestsEndToEnd
     }
 
     private const string QuotedChild = "$(printf 3; printf \"%s\" \"$((1 # note))\")";
+    private const string LegacyCapture = "`printf 3; : '$((1 # note))'`";
+    private const string LegacyBraceWord = "\"${present:-" + LegacyCapture + "}\"";
+
+    [Theory]
+    [InlineData("printf '<%s>' \"$((v=7))\" " + LegacyBraceWord, "[1:0:zero]", LegacyBraceWord)]
+    [InlineData("printf '<%s>' \"$((v=7))\" \"${present:-$((1 # note))}\"", "[1:0:zero]", "\"${present:-$((1 # note))}\"")]
+    [InlineData("printf '<%s>' \"" + LegacyCapture + "\"", "<3>[0:0:zero]", "")]
+    [InlineData("printf '<%s>' {a,b}" + LegacyBraceWord, "[1:0:zero]", LegacyBraceWord)]
+    [InlineData("for item in \"$((v=7))\" " + LegacyBraceWord + "; do printf '<%s>' \"$item\"; done", "[1:0:zero]", LegacyBraceWord)]
+    [InlineData("a=(\"$((v=7))\" " + LegacyBraceWord + ")", "[1:0:zero]", LegacyBraceWord)]
+    [InlineData("a=([1]=" + LegacyBraceWord + ")", "[1:0:zero]", "\\[1\\]=" + LegacyBraceWord)]
+    [InlineData("printf '<%s>' \"${present:-`printf 3; : '$((1\\\n# note))'`}\"", "<kept>[0:0:zero]", "")]
+    [InlineData("x=" + LegacyBraceWord, "[0:0:kept]", "")]
+    public async Task BraceDelimiterChecksPrecedeValueExpansion(string command, string output, string spelling)
+    {
+        var script = "v=0; x=zero; present=kept\n" + command + "\nprintf '[%s:%s:%s]' \"$?\" \"$v\" \"$x\"";
+        var error = spelling.Length == 0 ? "" : "line 2: bad substitution: no closing `)' in " + spelling + "\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task PathnameBraceDelimiterFailureKeepsEarlierRedirectionEffects()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync(
+            "present=kept\n: >earlier >" + LegacyBraceWord + "\nprintf '[%s]' \"$?\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("[1]", host.StandardOutput.TextContent);
+        Assert.Equal("line 2: bad substitution: no closing `)' in " + LegacyBraceWord + "\n", host.StandardError.TextContent);
+        Assert.True(await EndToEndHarness.FileExistsAsync(host, "/earlier"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/kept"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
 
     [Fact]
     public async Task IncompleteCaptureConsumesTheRemainingArithmeticForSeparators()

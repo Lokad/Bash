@@ -101,6 +101,59 @@ internal static partial class WordExpansion
         word.LiteralFields == null ? BraceExpansion.ExpandAlternatives(
             word, scope.Effects.Memory, scope.Effects.CancellationToken) : null;
 
+    internal static async Task<bool> CheckBraceDelimitersAsync(IReadOnlyList<Word> words, ScopedEvaluation scope)
+    {
+        for (var index = 0; index < words.Count; index++)
+            if (words[index].HasBraceDelimiterCandidate
+                && !await CheckBraceCandidateAsync(words[index], scope, protectSubscript: false).ConfigureAwait(false))
+                return false;
+        return true;
+    }
+
+    internal static Task<bool> CheckBraceDelimitersAsync(Word word, ScopedEvaluation scope) =>
+        CheckBraceDelimitersAsync(word, scope, protectSubscript: false);
+
+    internal static Task<bool> CheckBraceDelimitersAsync(Word word, ScopedEvaluation scope, bool protectSubscript) =>
+        word.HasBraceDelimiterCandidate ? CheckBraceCandidateAsync(word, scope, protectSubscript) : Task.FromResult(true);
+
+    private static async Task<bool> CheckBraceCandidateAsync(Word word, ScopedEvaluation scope, bool protectSubscript)
+    {
+        var budget = scope.Effects.Memory.Budget;
+        var cancellation = scope.Effects.CancellationToken;
+        using var spelling = new ByteMemoryBuilder(0, budget);
+        if (!FunctionDefinitionFormatter.TryAppendWordSource(word, spelling, budget, cancellation))
+            throw new ByteMemoryBuilder.LimitExceededException();
+
+        var source = ShellSource.FromBytes(spelling.ToMemory());
+        using var normalized = source.AsSpan().IndexOf("\\\n"u8) < 0 ? null : new ByteMemoryBuilder(0, budget);
+        int diagnosticStart;
+        var closingBracket = -1;
+        using (var scratch = new MemoryCapacity(budget, 0))
+        {
+            if (normalized != null)
+                source = BraceExpansion.RemoveLegacyContinuations(source, scratch, normalized, cancellation);
+            if (!BraceExpansion.TryFindUnclosedParenthesis(source, scratch, cancellation, out diagnosticStart))
+                return true;
+            if (protectSubscript && diagnosticStart == 0 && ArraySubscriptScanner.TryScan(
+                    new ShellScanContext { SyntaxMemory = scratch }, source, 0, out var bracket))
+                closingBracket = bracket;
+        }
+
+        if (closingBracket >= 0)
+        {
+            using var diagnostic = new ByteMemoryBuilder(0, budget);
+            diagnostic.Append((byte)'\\').Append(source.AsSpan()[..closingBracket])
+                .Append((byte)'\\').Append(source.AsSpan()[closingBracket..]);
+            await ReportAsync(ShellValue.FromBytes(diagnostic.ToMemory())).ConfigureAwait(false);
+        }
+        else
+            await ReportAsync(source[diagnosticStart..].ToValue()).ConfigureAwait(false);
+        return false;
+
+        Task ReportAsync(ShellValue value) => ReportWordSyntaxAsync(value, WordSyntaxFailure.MissingArithmeticParenthesis,
+            scope, hereDocument: false);
+    }
+
     internal static Task<IReadOnlyList<ExpandedWord>> ExpandBraceArgumentsAsync(
         IReadOnlyList<Word> alternatives, ScopedEvaluation scope) =>
         ExpandWordsAsync(alternatives, scope, allowWordSplitting: true, ExpansionPurpose.Normal, TildeExpansion.Leading);

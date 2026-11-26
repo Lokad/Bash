@@ -61,6 +61,120 @@ internal static class BraceExpansion
     public static IReadOnlyList<Word> Expand(Word word, EvaluationMemory memory, CancellationToken cancellationToken) =>
         ExpandAlternatives(word, memory, cancellationToken) ?? [word];
 
+    internal static bool HasCommentedDelimiterCandidate(IReadOnlyList<WordPart> parts)
+    {
+        var hasBrace = false;
+        var hasComment = false;
+        var hasArithmetic = false;
+        for (var index = 0; index < parts.Count; index++)
+        {
+            var bytes = parts[index].GetUnexpandedValue().Bytes.Span;
+            hasBrace = hasBrace || bytes.Contains((byte)'{');
+            hasComment = hasComment || bytes.Contains((byte)'#');
+            hasArithmetic = hasArithmetic || bytes.IndexOf("$(("u8) >= 0
+                || bytes.IndexOf("\\\n"u8) >= 0 && bytes.Contains((byte)'$') && bytes.Contains((byte)'(');
+            if (hasBrace && hasComment && hasArithmetic)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Uses the legacy reader's continuation rules before scanning brace syntax.</summary>
+    internal static ShellSource RemoveLegacyContinuations(ShellSource spelling, MemoryCapacity scratch,
+        ByteMemoryBuilder output, CancellationToken cancellationToken)
+    {
+        var cursor = new ShellSourceCursor(spelling, 0, new ShellScanContext { SyntaxMemory = scratch });
+        var bytes = spelling.AsSpan();
+        var written = 0;
+        while (!cursor.IsAtEnd)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (cursor.TryConsumeQuoteOrEscape())
+                continue;
+            var start = cursor.Position;
+            var legacy = cursor.Current == (byte)'`';
+            if ((legacy || ShellSourceCursor.TryMatchLogicalText(bytes, start, "$(", out _))
+                && cursor.SkipNestedExpansion(BracedParameterRecognition.DoubleQuotedOnly) is ShellNestedExpansionScan.Complete)
+            {
+                if (legacy)
+                    for (var index = start + 1; index < cursor.Position - 1; index++)
+                    {
+                        if (bytes[index] != (byte)'\\')
+                            continue;
+                        if (bytes[index + 1] == (byte)'\n')
+                        {
+                            output.Append(bytes[written..index]);
+                            written = index + 2;
+                        }
+                        index++;
+                    }
+                continue;
+            }
+            cursor.Advance();
+        }
+        if (written == 0)
+            return spelling;
+        output.Append(bytes[written..]);
+        return ShellSource.FromBytes(output.ToMemory());
+    }
+
+    /// <summary>Checks the reached delimiter pass before materializing alternatives.</summary>
+    internal static bool TryFindUnclosedParenthesis(ShellSource spelling, MemoryCapacity scratch,
+        CancellationToken cancellationToken, out int diagnosticStart)
+    {
+        diagnosticStart = 0;
+        if (!ArithmeticExpansionScanner.HasPossibleExpansionComment(spelling.AsSpan()))
+            return false;
+
+        var bytes = spelling.AsSpan();
+        var context = new ShellScanContext { SyntaxMemory = scratch, ReadArithmeticExpansionComments = true };
+        var cursor = new ShellSourceCursor(spelling, 0, context);
+        while (!cursor.IsAtEnd)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var start = cursor.Position;
+            if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC: false))
+                continue;
+            // The brace reader treats backticks as ordinary bytes inside double quotes.
+            if (cursor.Current == (byte)'$' && ShellSourceCursor.TryMatchLogicalText(bytes, start, "$(", out _)
+                || !cursor.IsQuoted && cursor.Current == (byte)'`')
+            {
+                var result = cursor.SkipNestedExpansion(BracedParameterRecognition.DoubleQuotedOnly);
+                if (context.MissingReachedArithmeticParenthesis)
+                {
+                    diagnosticStart = FindDiagnosticStart(start);
+                    return true;
+                }
+                if (result is ShellNestedExpansionScan.Complete)
+                    continue;
+            }
+            cursor.Advance();
+        }
+        return false;
+
+        int FindDiagnosticStart(int failure)
+        {
+            // After a complete brace, the brace reader processes its suffix separately.
+            var source = new SourceWordPart(WordPartKind.Unquoted, spelling, scratch);
+            var braces = Scan([source], scratch, cancellationToken);
+            var position = 0;
+            for (var index = 0; index < braces.Count;)
+            {
+                var brace = braces[index];
+                if (brace.Kind == BraceKind.None)
+                {
+                    index++;
+                    continue;
+                }
+                if (brace.Closing.Position.Offset >= failure)
+                    break;
+                position = brace.Closing.Position.Offset + 1;
+                index = brace.Closing.BraceIndex;
+            }
+            return position;
+        }
+    }
+
     internal static IReadOnlyList<Word>? ExpandAlternatives(Word word, EvaluationMemory memory, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

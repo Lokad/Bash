@@ -20,6 +20,9 @@ public sealed partial class Evaluation
         if (!name.IsIdentifier)
             return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(GetDiagnosticName(name))).ConfigureAwait(false);
 
+        if (!await WordExpansion.CheckBraceDelimitersAsync(forCommand.Items, scope).ConfigureAwait(false))
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+
         var items = new List<ShellValue>();
         foreach (var word in forCommand.Items)
         {

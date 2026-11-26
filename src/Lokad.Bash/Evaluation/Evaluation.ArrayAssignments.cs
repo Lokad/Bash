@@ -42,6 +42,12 @@ public sealed partial class Evaluation
         }
         else
         {
+            if (!retainQuotes)
+                foreach (var item in items)
+                    if (!await WordExpansion.CheckBraceDelimitersAsync(item.Word, scope, protectSubscript: item.Element != null)
+                            .ConfigureAwait(false))
+                        return null;
+
             foreach (var item in items)
             {
                 if (!retainQuotes && item.Element == null && scope.CanExpand && GetLiteralWithoutGlob(item.Word) is { } literal)

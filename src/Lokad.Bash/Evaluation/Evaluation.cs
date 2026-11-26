@@ -1123,6 +1123,9 @@ public sealed partial class Evaluation : IFileTester
         if (publishStatus)
             PreparePipelineStatusStorage(1);
         _state.LastCommandSubstitutionExitCode = null;
+        if (!await WordExpansion.CheckBraceDelimitersAsync(simpleCommand.Words, scope).ConfigureAwait(false))
+            return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
+
         PreparedDeclaration? declaration = null;
         if (simpleCommand.DeclarationAssignments.Count > 0)
         {
@@ -4689,6 +4692,8 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Validates redirection fields in order and decodes a single candidate.</summary>
     internal async Task<(int Count, string Value)> ExpandRedirectionFieldsAsync(Word word, ScopedEvaluation scope)
     {
+        if (scope.CanExpand && !await WordExpansion.CheckBraceDelimitersAsync(word, scope).ConfigureAwait(false))
+            return (0, string.Empty);
         var (count, field) = await CollectRedirectionFieldsAsync(word, scope).ConfigureAwait(false);
         return (count, count == 1 ? await DecodeExpandedValueAsync(field).ConfigureAwait(false) : string.Empty);
     }

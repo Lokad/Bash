@@ -171,13 +171,19 @@ complete command-unit boundaries. Both execution paths use the same recovery
 policy and publish the failure status before resuming the next unit.
 For modern arithmetic expansions, the reached word reader checks parentheses
 with comment handling before expanding the arithmetic operand. A missing
-closer uses the word-syntax failure path. Effects from earlier word parts
-remain visible. When the reached delimiter selects an adjacent subshell, the
-existing command substitution path reads and executes its body.
+closer uses the word-syntax failure path. During value expansion, effects from
+earlier word parts remain visible. When the reached delimiter selects an
+adjacent subshell, the existing command substitution path reads and executes
+its body.
 Modern and bracketed expansions also check nested delimiters inside quotes
 in the arithmetic spelling before evaluating any part of the operand. The
 substring offset and arithmetic `for` header readers use comment-aware
 capture delimiters while locating their separators.
+Brace delimiter validation precedes value expansion for the command argument,
+loop item and indexed initializer lists that undergo brace expansion. Each
+pathname redirection validates its own target during redirection setup.
+Commandless scalar assignments and here-input operands use their direct
+expansion paths.
 
 Printf retains byte numeric operands through prefix validation, range classification
 and diagnostics. Integer accumulation stays bounded after overflow while validity

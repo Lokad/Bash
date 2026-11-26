@@ -468,7 +468,10 @@ before a brace group's closing delimiter. A compound command's closing token
 can supply the boundary itself, as in `{ (printf value) }`.
 Brace expansion can join alternatives across quoted or escaped fragments and
 substitutions. Protected commas are data and alternatives retain their original
-quoting through splitting and pathname expansion. For declaration operands such
+quoting through splitting and pathname expansion. A word containing an opening
+brace can fail the delimiter check even when its braces are quoted or belong to
+a parameter expansion. Within double quotes, this check can see arithmetic
+syntax inside a legacy backtick capture. For declaration operands such
 as `declare x+={a,b}`, the generated words undergo ordinary argument expansion.
 The builtin then applies each resulting operand in order. A backslash or backtick generated
 by a character range can change how subsequent quotes and substitutions are read.
