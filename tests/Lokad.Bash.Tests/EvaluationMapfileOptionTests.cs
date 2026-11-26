@@ -34,6 +34,8 @@ public sealed class EvaluationMapfileOptionTests
     [InlineData("a=scalar; mapfile -tn1 -O3 a <<< value; printf '<%s><%s>' \"${a[0]}\" \"${a[3]}\"", 0, "<scalar><value>", "")]
     [InlineData("declare -a a; mapfile -tO4294967294 -n4 a <<< $'first\\nsecond\\nthird\\nfourth\\nignored'; printf '<%s>/<%s>' \"${!a[*]}\" \"${a[*]}\"", 0, "<0 1 4294967294 4294967295>/<third fourth first second>", "")]
     [InlineData("a=([1]=keep); readarray -td: -O4294967295 -n3 a <<< 'a:b:c:d'; printf '<%s><%s><%s>' \"${a[4294967295]}\" \"${a[0]}\" \"${a[1]}\"", 0, "<a><b><c>", "")]
+    [InlineData("a=([0]=old [2]=red [4]=blue); mapfile -tO4294967294 -n4 a <<< $'first\\nsecond\\nthird\\nfourth'; printf '<%s>/<%s>' \"${!a[*]}\" \"${a[*]}\"",
+        0, "<0 1 2 4 4294967294 4294967295>/<third fourth red blue first second>", "")]
     [InlineData("a=([0]=keep [4]=old [8]=last); { mapfile -tn2 -O4 a; IFS= read -r next; } <<< $'first\\nsecond\\nthird'; printf '<%s><%s><%s><%s><%s>' \"${a[0]}\" \"${a[4]}\" \"${a[5]}\" \"${a[8]}\" \"$next\"", 0, "<keep><first><second><last><third>", "")]
     [InlineData("a=([0]=keep [4]=old); { a=temp mapfile -tn1 -O4 a; } <<< changed; printf '<%s><%s>' \"${a[0]}\" \"${a[4]}\"", 0, "<keep><old>", "")]
     [InlineData("arr=(old); mapfile arr extra </dev/null; printf '<%s,%s>' \"$?\" \"${arr[0]-empty}\"", 0, "<0,empty>", "")]

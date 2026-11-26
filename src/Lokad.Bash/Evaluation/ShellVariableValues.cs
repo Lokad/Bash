@@ -274,24 +274,23 @@ internal sealed class IndexedArray
     internal void SetSequential(
         uint origin, IReadOnlyList<ShellValue> values, EvaluationMemory? memory, CancellationToken cancellationToken)
     {
+        var count = values.Count;
         var capacity = _elements.EnsureCapacity(0);
-        if (capacity == 0 && values.Count > 1)
+        if (capacity == 0 && count > 1)
         {
             // The already admitted batch supplies every position in a fresh table.
-            _elements.EnsureCapacity(values.Count);
+            _elements.EnsureCapacity(count);
         }
-        else if (memory != null && capacity != 0 && values.Count > capacity - _elements.Count)
+        else if (memory != null && capacity != 0 && count > capacity - _elements.Count)
         {
-            var added = 0;
-            for (var index = 0; index < values.Count; index++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!_elements.ContainsKey(unchecked(origin + (uint)index)))
-                    added++;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            // The source index wraps at UInt32.MaxValue. Count existing entries in
+            // each contiguous part only through the array's current maximum.
+            var beforeWrap = (int)Math.Min(count, (long)uint.MaxValue + 1 - origin);
+            var added = count - CountExisting(origin, beforeWrap) - CountExisting(0, count - beforeWrap);
 
             // Keep the new position nodes covered by the existing per-record admission.
-            var prepaid = (long)values.Count * ElementMemoryBytes - added * PositionNodeBytes;
+            var prepaid = (long)count * ElementMemoryBytes - added * PositionNodeBytes;
             var (replacementCapacity, overlap) = EstimateDictionaryGrowth(
                 capacity, checked(_elements.Count + added), prepaid);
             if (replacementCapacity != 0)
@@ -310,9 +309,22 @@ internal sealed class IndexedArray
             }
         }
 
-        for (var index = 0; index < values.Count; index++)
+        for (var index = 0; index < count; index++)
             Set(IndexedArrayIndex.FromUnsigned(unchecked(origin + (uint)index)), values[index]);
         MarkInitialized();
+
+        int CountExisting(uint first, int length)
+        {
+            var last = Math.Min(_maximumIndex.GetValueOrDefault(-1), (long)first + length - 1);
+            var existing = 0;
+            for (long position = first; position <= last; position++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_elements.ContainsKey(position))
+                    existing++;
+            }
+            return existing;
+        }
     }
 
     private (int Capacity, long Overlap) EstimateDictionaryGrowth(int capacity, int required, long prepaidBytes)

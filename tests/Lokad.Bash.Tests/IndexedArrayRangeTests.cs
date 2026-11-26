@@ -1,9 +1,29 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class IndexedArrayRangeTests
 {
+    [Fact]
+    public void CanceledDisjointBatchStopsBeforeGrowingTheIndex()
+    {
+        const int count = 1024;
+        var array = IndexedArray.FromSequential(new ShellValue[count]);
+        var budget = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(budget);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            array.SetSequential(4096, new ShellValue[count], memory, cancellation.Token));
+
+        Assert.Equal(count, array.Count);
+        Assert.Equal(count - 1L, array.MaxIndex);
+        Assert.Equal(0, budget.PeakBytes);
+        memory.Finish(retainVariables: false);
+    }
+
     [Fact]
     public void ClonesKeepTheirOwnCapacityEstimate()
     {
