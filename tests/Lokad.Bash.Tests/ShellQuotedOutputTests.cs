@@ -215,6 +215,28 @@ public sealed class ShellQuotedOutputTests
         Assert.InRange(output.Appends, 1, 4);
     }
 
+    [Fact]
+    public void AutomaticQuotesKeepCompleteCharactersAcrossWideAsciiRuns()
+    {
+        var first = Enumerable.Repeat((byte)'~', 65).ToArray();
+        var second = Enumerable.Repeat((byte)' ', 65).ToArray();
+        byte[] printable = [.. first, .. "é"u8, .. second];
+        byte[] expected = [(byte)'\'', .. printable, (byte)'\''];
+        using var exact = BoundedByteMemoryBuilder.CreateUnaccounted(0, expected.Length);
+
+        Assert.True(ShellArgumentEscaping.TryAppendQuoted(exact, printable, ShellQuoteStyle.SingleQuoted));
+        Assert.Equal(expected, exact.ToMemory().ToArray());
+
+        byte[] input = [.. printable, 0x7f, .. "🙂"u8, 0xc3];
+        byte[][] atoms =
+        [
+            "$'"u8.ToArray(), .. first.Select(value => new[] { value }), "é"u8.ToArray(),
+            .. second.Select(value => new[] { value }), "\\177"u8.ToArray(), "🙂"u8.ToArray(),
+            "\\303"u8.ToArray(), "'"u8.ToArray(),
+        ];
+        AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendQuoted(output, input, ShellQuoteStyle.SingleQuoted));
+    }
+
     [Theory]
     [InlineData(ShellQuoteStyle.Backslash)]
     [InlineData(ShellQuoteStyle.AnsiC)]

@@ -56,17 +56,7 @@ public static class ShellArgumentEscaping
             return style == ShellQuoteStyle.AssignmentValue
                 || output.TryAppend(style == ShellQuoteStyle.DoubleQuoted ? "\"\""u8 : "''"u8);
 
-        var printablePrefix = 0;
-        if (style != ShellQuoteStyle.AnsiC)
-        {
-            while (printablePrefix < input.Length)
-            {
-                var length = PrintableCharacterLength(input[printablePrefix..]);
-                if (length == 0)
-                    break;
-                printablePrefix += length;
-            }
-        }
+        var printablePrefix = style == ShellQuoteStyle.AnsiC ? 0 : GetPrintablePrefixLength(input);
 
         if (style == ShellQuoteStyle.AnsiC || printablePrefix < input.Length)
         {
@@ -161,6 +151,31 @@ public static class ShellArgumentEscaping
             runStart = index + 1;
         }
         return AppendLiteralRun(output, input[runStart..]) && (!delimited || output.TryAppend(quote));
+
+        static int GetPrintablePrefixLength(ReadOnlySpan<byte> bytes)
+        {
+            var position = 0;
+            while (position < bytes.Length)
+            {
+                var current = bytes[position];
+                if (current is >= 0x20 and <= 0x7e)
+                {
+                    var runLength = bytes[position..].IndexOfAnyExceptInRange((byte)0x20, (byte)0x7e);
+                    if (runLength < 0)
+                        return bytes.Length;
+                    position += runLength;
+                    current = bytes[position];
+                }
+
+                if (current < 0x80)
+                    break;
+                var length = PrintableCharacterLength(bytes[position..]);
+                if (length == 0)
+                    break;
+                position += length;
+            }
+            return position;
+        }
 
         static bool AppendPrintablePrefix(IByteMemoryWriter output, ReadOnlySpan<byte> bytes)
         {
