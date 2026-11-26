@@ -216,6 +216,9 @@ internal sealed class EvaluationState
     /// <summary>Stops preparation before later operands or command effects after an expansion failure.</summary>
     public bool HasPendingExpansionError => _pendingExpansionError.HasValue;
 
+    /// <summary>A rejected here-document capture left temporary command prefixes out of ordinary builtin lookup.</summary>
+    internal bool SuppressTemporaryLookup { get; set; }
+
     /// <summary>Fatal noninteractive expansion failures cannot be consumed by an OR-list or negation.</summary>
     public ExpansionFailure? FatalExpansion { get; set; }
 
@@ -581,6 +584,7 @@ internal sealed class EvaluationState
             PreparationDiagnosticName = PreparationDiagnosticName,
             FunctionBraceLine = FunctionBraceLine,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
+            SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,
             Traps = Traps?.Fork(kind)
         };

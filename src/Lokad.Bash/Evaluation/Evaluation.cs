@@ -1381,7 +1381,8 @@ public sealed partial class Evaluation : IFileTester
         var commandRedirections = await OpenRedirectionScopeAsync(
                 simpleCommand.Redirections, redirectionExpansionScope,
                 externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
-                preparation.RedirectionLifetime, RedirectionOrigin.Command,
+                preparation.RedirectionLifetime,
+                externalRedirections ? RedirectionOrigin.IsolatedHostCommand : RedirectionOrigin.Command,
                 reportMoveRestorationFailure: !externalRedirections && !directPipelineStage)
             .ConfigureAwait(false);
         Exception? scopeFailure = null;
@@ -1608,12 +1609,26 @@ public sealed partial class Evaluation : IFileTester
                         commandVars.ArgumentZero = builtinName;
                 }
 
+                // Ordinary builtin lookup skips this invocation's pending prefixes after capture recovery.
+                // Loaded readers and explicit temporary-binding operations still consume them.
+                var useCallerBindings = prefixNames != null && _state.SuppressTemporaryLookup
+                    && evaluatorBuiltin.Kind is not (BuiltinKind.Eval or BuiltinKind.Source or BuiltinKind.Local
+                        or BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Unset);
+                if (useCallerBindings)
+                {
+                    commandVars = builtinScope.Variables;
+                    if (prefixNames?.Contains(FieldSeparators.Name) == true)
+                        commandVars.UseVisibleFieldSeparators();
+                }
+
                 // local/declare already publish declarations through the owning function's LocalBindings.
                 using var bindings = prefixNames == null
+                    || useCallerBindings
                     || (builtinScope.Context.FunctionContext != null
                         && evaluatorBuiltin.Kind is BuiltinKind.Local or BuiltinKind.Declare)
                     ? null
-                    : new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
+                    : new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames,
+                        _state.SuppressTemporaryLookup, Memory, _cancellationToken);
                 if (bindings != null)
                     commandVars = builtinScope.Variables;
 
@@ -1759,7 +1774,8 @@ public sealed partial class Evaluation : IFileTester
                 && execution is CommandExecutionResult.NotFound or CommandExecutionResult.NotExecutable)
             {
                 using var bindings = prefixNames == null ? null
-                    : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
+                    : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames,
+                        _state.SuppressTemporaryLookup, Memory, _cancellationToken);
                 commandResult = await RunExitTrapAsync(scope, EvaluationResult.Exit(commandResult.ExitCode)).ConfigureAwait(false);
             }
             return CompleteCommandResult(commandResult, executable.Completion, commandInvoked: true);
@@ -2518,7 +2534,8 @@ public sealed partial class Evaluation : IFileTester
                     {
                         var found = global
                             ? declarationScope.Context.TryResolveGlobalBinding(sourceName, declarationScope.Variables,
-                                commandVars, prefixNames, globalBindings, resolution, out var binding)
+                                commandVars, ReferenceEquals(commandVars, declarationScope.Variables) && bindings == null
+                                    ? null : prefixNames, globalBindings, resolution, out var binding)
                             : commandVars.TryResolveBinding(sourceName, selectOwner: null, resolution, out binding);
                         if (!found)
                         {
@@ -4410,6 +4427,7 @@ public sealed partial class Evaluation : IFileTester
         // Expose the table as setup advances, so later target expansions and their substitutions
         // inherit earlier redirections. Descriptor ownership is finalized after setup succeeds.
         _state.PushRedirectionTable(evaluation.DescriptorTable, evaluation.OpenedDescriptors, evaluation.TouchedDescriptors, Memory);
+        var suppressedLookup = _state.SuppressTemporaryLookup;
         try
         {
             await evaluation.EvaluateAsync(scope with { AfterPipelineExitReset = true }, persistence).ConfigureAwait(false);
@@ -4434,6 +4452,11 @@ public sealed partial class Evaluation : IFileTester
                 return new RedirectionScope(this, active: false, [], []);
             throw;
         }
+        finally
+        {
+            if (evaluation.IsIsolated)
+                _state.SuppressTemporaryLookup = suppressedLookup;
+        }
         return new RedirectionScope(this, active: true, evaluation.ReplacedHandles, evaluation.ConsumedSources)
         {
             InputOpenFailed = evaluation.InputOpenFailed,
@@ -4449,6 +4472,10 @@ public sealed partial class Evaluation : IFileTester
             return false;
         }
     }
+
+    internal bool SuppressesTemporaryLookup => _state.SuppressTemporaryLookup;
+
+    internal void ResumeTemporaryLookup() => _state.SuppressTemporaryLookup = false;
 
     internal IReadOnlyList<FileDescriptor> CollectDescriptorsAvailableToNestedEvaluation() =>
         CollectDescriptorsAvailable().Descriptors;
@@ -5839,7 +5866,8 @@ public sealed partial class Evaluation : IFileTester
     };
 
     internal async Task RejectHereDocumentSubstitutionAsync(
-        ShellScanStatus status, ParserFailure? failure, ShellSource source, ScopedEvaluation scope)
+        ShellScanStatus status, ParserFailure? failure, ShellSource source, ScopedEvaluation scope,
+        bool interruptedCapture)
     {
         if (failure?.CaptureWarnings is { } captureWarnings)
             await ReportHereDocumentCaptureWarningsAsync(captureWarnings.Warnings, scope).ConfigureAwait(false);
@@ -5872,6 +5900,8 @@ public sealed partial class Evaluation : IFileTester
                 ExpansionErrorKind.HereDocumentReaderSyntax,
             _ => ExpansionErrorKind.HereDocumentSyntax
         };
+        if (interruptedCapture)
+            _state.SuppressTemporaryLookup = true;
         _state.SetExpansionError(1, kind);
     }
 

@@ -757,6 +757,17 @@ The rejected bare-prefix recovery uses the same binding. Its entries stay empty
 through later commands and assignments. `unset PIPESTATUS` resumes normal
 status publication. A local or temporary command binding can shadow the empty
 array within its own scope.
+After an expanded here-document rejects command substitution syntax, ordinary
+builtin lookup uses caller bindings in place of that invocation's temporary
+prefixes. `export`, `readonly`, and `unset` still take their explicit temporary
+binding paths. A function, `eval`, or `source` receives its prefixes as active
+bindings. In those calls a temporary `IFS` can be read by parameter expansion
+while field splitting and joining still use the caller's separators. A reached
+operand expansion in a redirection in that shell restores ordinary lookup, and
+assigning `IFS` refreshes the field separators. A quoted or empty here-document,
+a literal descriptor close or duplication, and an isolated child redirection keep
+the caller's recovery state. A command substitution starts with ordinary
+temporary-prefix lookup in its child.
 A standalone `!` or `time` prefix completes an empty command. It publishes
 status zero to `PIPESTATUS` and sets `$_` to an empty value. Negation still
 applies to the command's exit status.

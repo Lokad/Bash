@@ -361,6 +361,121 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
         : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
 
+    private const string InspectTemporaryPrefix = "probe=temp declare -p probe\n";
+    private const string InspectFieldSeparators = "set -- left right; printf '[%s|%s]' \"$IFS\" \"$*\"";
+
+    [Theory]
+    [InlineData(RejectedDocument, "declare -- probe=\"base\"\n")]
+    [InlineData("read -r value <<EOF\nX$(printf incomplete\nEOF\n", "declare -- probe=\"base\"\n")]
+    [InlineData("read -r value <<EOF\nX$(printf 'incomplete)\nEOF\n", "declare -- probe=\"base\"\n")]
+    [InlineData("read -r value <<EOF\nX`printf incomplete\nEOF\n", "declare -x probe=\"temp\"\n")]
+    [InlineData("value=$(!;)\n", "declare -x probe=\"temp\"\n")]
+    public async Task RejectedModernHereDocumentCaptureUsesTheCallerBinding(string recovery, string expected)
+    {
+        var script = "probe=base\n" + recovery + InspectTemporaryPrefix;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(": 3>&-", false)]
+    [InlineData(": 3>&1", false)]
+    [InlineData(": <<EOF\nEOF", false)]
+    [InlineData(": <<'EOF'\n$probe\nEOF", false)]
+    [InlineData(": <<EOF\nplain\nEOF", true)]
+    [InlineData(": 3<&absent", true)]
+    [InlineData(": 3>$probe", true)]
+    [InlineData("fd=1; : 3>&\"$fd\"", true)]
+    [InlineData(": 3<<<literal", true)]
+    [InlineData("( : 3>sink )", false)]
+    [InlineData("<input", false)]
+    public async Task ReachedOperandExpansionRestoresTemporaryLookupInItsOwnShell(string redirect, bool restores)
+    {
+        var script = "probe=base\n" + RejectedDocument + redirect + "\n" + InspectTemporaryPrefix;
+        var expected = restores ? "declare -x probe=\"temp\"\n" : "declare -- probe=\"base\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/input", "");
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("p=1; p=4 let 'q=p'; printf '%s' \"$q\"", "1")]
+    [InlineData("prefix=only builtin test -v prefix; printf '%s' \"$?\"", "1")]
+    [InlineData("p=1; p=4 declare p=7; printf '%s' \"$p\"", "7")]
+    [InlineData("p=1; p=4 export p; printf '%s' \"$p\"", "4")]
+    [InlineData("p=1; p=4 unset p; printf '%s' \"$p\"", "1")]
+    public async Task RecoveredBuiltinLookupDistinguishesExplicitTemporaryOperations(string command, string expected)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(RejectedDocument + command, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("", "[:|left/right]")]
+    [InlineData("IFS=:; ", "[:|left:right]")]
+    [InlineData(": 3>sink; ", "[:|left:right]")]
+    [InlineData("( : 3>sink ); ", "[:|left/right]")]
+    [InlineData("$( : 3>sink ); ", "[:|left/right]")]
+    [InlineData("IFS=, eval ':'; ", "[:|left:right]")]
+    public async Task RecoveredPrefixKeepsCallerSeparatorsUntilTheActiveBindingIsRefreshed(string before, string expected)
+    {
+        var reader = ShellArgumentEscaping.EscapeArgument(before + InspectFieldSeparators);
+        var script = "IFS=/\n" + RejectedDocument + "IFS=: eval " + reader;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task ExpansionChildResumesPrefixLookupWhileTheCallerRemainsSuppressed()
+    {
+        var script = "probe=base\n" + RejectedDocument + "( " + InspectTemporaryPrefix + ")\n"
+            + "captured=$( " + InspectTemporaryPrefix + ")\nprintf '%s\\n' \"$captured\"\n" + InspectTemporaryPrefix;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("declare -- probe=\"base\"\ndeclare -x probe=\"temp\"\ndeclare -- probe=\"base\"\n",
+                host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("", "<1>")]
+    [InlineData(" -N 8", "<8>")]
+    public async Task RecoveredReadUsesCallerSeparatorsForOrdinaryRecords(string options, string expected)
+    {
+        const string setup = "printf -v payload '%8s' x\nread -r skipped <<FIRST <<EOF\n$payload\nFIRST\nX$(!)Y\nEOF\n";
+        var script = setup + "IFS= read -r" + options + " value\nprintf '<%s>' \"${#value}\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

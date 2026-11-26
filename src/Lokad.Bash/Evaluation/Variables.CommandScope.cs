@@ -10,6 +10,7 @@ namespace Lokad.Bash.Evaluation;
 public sealed partial class Variables
 {
     private CommandSource? _commandSource;
+    internal bool BorrowsBindings => _commandSource != null;
 
     /// <summary>The surrounding command owns this borrow and all reached-binding copies.</summary>
     private sealed record CommandSource(Variables Variables, EvaluationMemory Memory, CancellationToken CancellationToken)
@@ -45,6 +46,7 @@ public sealed partial class Variables
             _positional = caller._positional,
             _argumentZero = caller._argumentZero,
             _getoptsCursor = caller._getoptsCursor,
+            _deferFieldSeparators = caller._deferFieldSeparators,
             CachedFieldSeparators = caller.CachedFieldSeparators
         };
     }
@@ -79,7 +81,9 @@ public sealed partial class Variables
         source.CancellationToken.ThrowIfCancellationRequested();
         slot = slot.Clone();
         source.CancellationToken.ThrowIfCancellationRequested();
+        var deferFieldSeparators = _deferFieldSeparators;
         StoreBinding(name, slot);
+        _deferFieldSeparators = deferFieldSeparators;
         return true;
     }
 

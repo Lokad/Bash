@@ -709,7 +709,8 @@ public sealed class PrefixScopeOwnershipTests
         using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
         var installation = new EvaluationMemory(setup);
         using var bindings = owner == "local" ? null
-            : new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, installation, CancellationToken.None);
+            : new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+                suppressTemporaryLookup: false, installation, CancellationToken.None);
         var locals = new Variables.LocalBindings(caller, parent: null, bindings);
         if (owner == "local")
         {
@@ -882,7 +883,8 @@ public sealed class PrefixScopeOwnershipTests
             Assert.Equal(borrowed, caller.IsBorrowedBinding("x"));
             var baseBytes = memory.Workspace.Bytes;
             IndexedArray saved;
-            using (var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None))
+            using (var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+                suppressTemporaryLookup: false, memory, CancellationToken.None))
             {
                 saved = bindings.SavedVariables.IndexedArrays["x"];
                 if (borrowed)
@@ -930,13 +932,15 @@ public sealed class PrefixScopeOwnershipTests
             {
                 counted.AdmissionSucceeded += cancellation.Cancel;
                 var error = Assert.ThrowsAny<OperationCanceledException>(() =>
-                    new Variables.CommandBindings(caller, prepared, names, memory, cancellation.Token));
+                    new Variables.CommandBindings(caller, prepared, names,
+                        suppressTemporaryLookup: false, memory, cancellation.Token));
                 Assert.Equal(cancellation.Token, error.CancellationToken);
             }
             else
             {
                 Assert.Throws<MemoryBudgetExceededException>(() =>
-                    new Variables.CommandBindings(caller, prepared, names, memory, cancellation.Token));
+                    new Variables.CommandBindings(caller, prepared, names,
+                        suppressTemporaryLookup: false, memory, cancellation.Token));
             }
             Assert.Same(original, caller.IndexedArrays["x"]);
             Assert.Equal(value, caller.Scalars["first"]);
@@ -967,7 +971,8 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(budget);
         try
         {
-            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
             memory.ReleaseUnusedCapacity();
             using var hold = budget.Reserve(budget.LimitBytes - budget.ReservedBytes);
             Assert.Throws<MemoryBudgetExceededException>(() =>
@@ -1006,7 +1011,7 @@ public sealed class PrefixScopeOwnershipTests
         try
         {
             using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
-                memory, CancellationToken.None);
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
             var location = new WordExpansion.ResolvedVariableReference.Indexed("x", default) { ReplaceAssociative = true };
             memory.ReleaseUnusedCapacity();
             using var hold = budget.Reserve(budget.LimitBytes - budget.ReservedBytes);
@@ -1036,7 +1041,7 @@ public sealed class PrefixScopeOwnershipTests
         try
         {
             using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "prefix" },
-                memory, CancellationToken.None);
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
             memory.ReleaseUnusedCapacity();
             var workspace = memory.Workspace.Bytes;
             using var hold = governor.Reserve(governor.LimitBytes - governor.ReservedBytes);
@@ -1067,7 +1072,7 @@ public sealed class PrefixScopeOwnershipTests
         try
         {
             using (var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "prefix" },
-                       evaluation.Memory, CancellationToken.None))
+                       suppressTemporaryLookup: false, evaluation.Memory, CancellationToken.None))
             {
                 var scope = new ScopedEvaluation(evaluation, caller, default)
                 {
@@ -1116,7 +1121,8 @@ public sealed class PrefixScopeOwnershipTests
         try
         {
             using (var bindings = retainOutput
-                ? new Variables.CommandBindings(caller, command, prefixes, evaluation.Memory, CancellationToken.None)
+                ? new Variables.CommandBindings(caller, command, prefixes,
+                    suppressTemporaryLookup: false, evaluation.Memory, CancellationToken.None)
                 : null)
             {
                 var scope = bindings is not null
@@ -1256,7 +1262,7 @@ public sealed class PrefixScopeOwnershipTests
                 }));
 
             using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
-                memory, CancellationToken.None);
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
             bindings.Retain(route == "raw selector" ? literal : (BindingName)"link", memory, CancellationToken.None);
         }
         finally { memory.Finish(retainVariables: false); }
@@ -1281,7 +1287,8 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(budget);
         try
         {
-            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+            using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
             var baseline = memory.Workspace.Bytes;
             var selected = bindings.SelectOutputVariables("x", memory, CancellationToken.None);
             Assert.True(memory.Workspace.Bytes - baseline >= selected.EstimatedMemoryBytes);

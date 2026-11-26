@@ -151,6 +151,7 @@ public sealed partial class Variables
             _exportedIndex.Add(name);
         else
             _exportedIndex.Remove(name);
+        UpdateFieldSeparatorBinding(name);
     }
 
     private void ClearBinding(BindingName name)
@@ -164,6 +165,7 @@ public sealed partial class Variables
         PreparePrefixTableEntry(name);
         using var memory = TrackBindingMemory(name);
         ResetGetoptsPosition(name);
+        UpdateFieldSeparatorBinding(name);
         if (_commandSource == null)
             _bindings.Remove(name);
         else

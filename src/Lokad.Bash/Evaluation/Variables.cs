@@ -202,6 +202,18 @@ public sealed partial class Variables
 
     /// <summary>Immutable snapshot of the last resolved IFS; completed membership belongs to this variable owner.</summary>
     private FieldSeparators _fieldSeparators = FieldSeparators.Default;
+    private bool _deferFieldSeparators;
+
+    internal FieldSeparators? DeferredFieldSeparators => _deferFieldSeparators ? _fieldSeparators : null;
+
+    internal void UseVisibleFieldSeparators() => _deferFieldSeparators = false;
+
+    private void UpdateFieldSeparatorBinding(BindingName name)
+    {
+        if (_deferFieldSeparators && name == FieldSeparators.Name)
+            UseVisibleFieldSeparators();
+    }
+
     internal FieldSeparators CachedFieldSeparators
     {
         get => _fieldSeparators;
@@ -250,6 +262,7 @@ public sealed partial class Variables
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
             clone.StoreBinding(entry.Key, entry.Value.Clone());
+        clone._deferFieldSeparators = _deferFieldSeparators;
         clone._positional = _positional.CopyActiveValues();
         clone._argumentZero = _argumentZero;
         clone._getoptsCursor = _getoptsCursor;
@@ -275,7 +288,7 @@ public sealed partial class Variables
 
         /// <remarks>The prepared prefix names remain stable until this invocation finishes.</remarks>
         public CommandBindings(Variables owner, Variables prepared, HashSet<BindingName> prefixes,
-            EvaluationMemory memory, CancellationToken cancellationToken)
+            bool suppressTemporaryLookup, EvaluationMemory memory, CancellationToken cancellationToken)
         {
             // The originals remain live when subsequent commands account only for the
             // visible store. Admit the saved store and space for a later membership copy.
@@ -296,6 +309,9 @@ public sealed partial class Variables
             _saved = new Variables();
             _retained = new Variables();
             _retainedNames = new HashSet<BindingName>();
+            var deferFieldSeparators = suppressTemporaryLookup && prefixes.Contains(FieldSeparators.Name);
+            if (deferFieldSeparators)
+                _ = FieldSeparators.FromVisibleBinding(owner);
             foreach (var name in prefixes)
             {
                 var savedCursor = owner._getoptsCursor;
@@ -309,6 +325,8 @@ public sealed partial class Variables
                 }
                 owner.SetAttribute(name, BindingAttributes.Temporary, true);
             }
+            if (deferFieldSeparators)
+                owner._deferFieldSeparators = true;
         }
 
         private CommandBindings(Variables owner, CommandBindings source)
@@ -1164,6 +1182,7 @@ public sealed partial class Variables
             using var memory = TrackBindingMemory(resolved);
             scalar.Value = value;
             ResetGetoptsPosition(resolved);
+            UpdateFieldSeparatorBinding(resolved);
         }
         else
             ReplaceValue(resolved, new ScalarSlot(value));

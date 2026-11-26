@@ -35,7 +35,8 @@ public sealed partial class Evaluation
         Memory.Charge(checked(scope.Variables.PositionalMemoryBytes + 32L * arguments.Count));
         using var bindings = prefixNames == null
             ? null
-            : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames, Memory, _cancellationToken);
+            : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames,
+                _state.SuppressTemporaryLookup, Memory, _cancellationToken);
         using var functionContext = new FunctionContext(
             functionDefinition.Name.Value, new Variables.LocalBindings(scope.Variables, parent: null, bindings), scope.Context.FunctionContext)
         {

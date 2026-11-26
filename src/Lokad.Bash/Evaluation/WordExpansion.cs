@@ -865,7 +865,8 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument
                     && legacyStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid)
                 {
-                    await scope.Effects.RejectHereDocumentSubstitutionAsync(legacyStatus, legacyError, content, scope).ConfigureAwait(false);
+                    await scope.Effects.RejectHereDocumentSubstitutionAsync(legacyStatus, legacyError, content, scope,
+                        interruptedCapture: false).ConfigureAwait(false);
                     return null;
                 }
                 if (syntax?.IsBraceExpanded == true && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
@@ -1024,7 +1025,7 @@ internal static partial class WordExpansion
             {
                 await scope.Effects.RejectHereDocumentSubstitutionAsync(
                         commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus, commandError ?? arithmeticError,
-                        content, scope)
+                        content, scope, interruptedCapture: commandStatus != ShellScanStatus.NotFound)
                     .ConfigureAwait(false);
                 return null;
             }
@@ -1146,7 +1147,7 @@ internal static partial class WordExpansion
                             await scope.Effects.RejectHereDocumentSubstitutionAsync(
                                 parameterStatus == BracedParameterScanStatus.UnterminatedCommandSubstitution
                                     ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid,
-                                parameterError, content, scope).ConfigureAwait(false);
+                                parameterError, content, scope, interruptedCapture: true).ConfigureAwait(false);
                         return null;
                     }
                     if (output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)

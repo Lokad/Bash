@@ -243,7 +243,8 @@ public sealed class ExportDeclarationEffectsTestsEndToEnd
             {
                 var temporary = Variables.CreateEmpty();
                 Assert.True(temporary.TrySetScalar("x", ShellValue.FromText("prefix")));
-                var prefix = new Variables.CommandBindings(active, temporary, names, prefixMemory, CancellationToken.None);
+                var prefix = new Variables.CommandBindings(active, temporary, names,
+                    suppressTemporaryLookup: false, prefixMemory, CancellationToken.None);
                 installed.Add(prefix);
                 chain = new ShellEvaluation.GlobalPrefixBindings(prefix, 0, chain);
                 Assert.True(active.TryUnset("x"));

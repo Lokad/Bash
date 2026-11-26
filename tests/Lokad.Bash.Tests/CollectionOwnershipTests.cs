@@ -167,7 +167,8 @@ public sealed class CollectionOwnershipTests
         try
         {
             IndexedArray earlier;
-            using (var bindings = new Variables.CommandBindings(variables, prepared, new HashSet<BindingName> { "a" }, memory, CancellationToken.None))
+            using (var bindings = new Variables.CommandBindings(variables, prepared, new HashSet<BindingName> { "a" },
+                suppressTemporaryLookup: false, memory, CancellationToken.None))
             {
                 var retained = bindings.SelectOutputVariables("a", memory, CancellationToken.None);
                 Assert.True(retained.TrySetArrayElement("a", default(IndexedArrayIndex), output));

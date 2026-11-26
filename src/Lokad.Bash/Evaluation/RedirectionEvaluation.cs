@@ -10,7 +10,7 @@ using Lokad.Bash.Syntax;
 namespace Lokad.Bash.Evaluation;
 
 internal enum RedirectionPersistence { None, Allocations, AllocationsAndMoves }
-internal enum RedirectionOrigin { Command, IsolatedCommandless, InputSubstitution }
+internal enum RedirectionOrigin { Command, IsolatedCommandless, IsolatedHostCommand, InputSubstitution }
 
 /// <summary>
 /// Evaluates redirections and resolves descriptor mappings in order.
@@ -52,6 +52,7 @@ internal sealed class RedirectionEvaluation
     /// Gets the resolved descriptor table.
     /// </summary>
     public DescriptorTable DescriptorTable => _descriptorTable;
+    internal bool IsIsolated => _origin is RedirectionOrigin.IsolatedCommandless or RedirectionOrigin.IsolatedHostCommand;
     /// <summary>
     /// Gets the descriptors opened during evaluation, in open order.
     /// </summary>
@@ -158,6 +159,7 @@ internal sealed class RedirectionEvaluation
         FileOpenMode mode,
         LogicalDescriptor? secondaryTargetDescriptor)
     {
+        ResumeTemporaryLookup(scope);
         var path = await ExpandRedirectionTargetAsync(scope, redirection.Target).ConfigureAwait(false);
         if (path == null)
         {
@@ -218,6 +220,9 @@ internal sealed class RedirectionEvaluation
         if (move && target.Parts.Count == 0)
             return await RejectBadDescriptorAsync(scope, redirection, targetDescriptor, sourceDescriptor: null)
                 .ConfigureAwait(false);
+        if ((scope.Effects.SuppressesTemporaryLookup || scope.Variables.DeferredFieldSeparators != null)
+            && !redirection.TryGetLiteralDescriptor(out _))
+            ResumeTemporaryLookup(scope);
         var (fieldCount, sourceWord) = await scope.Effects.ExpandRedirectionFieldsAsync(target, scope).ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
         if (fieldCount != 1 && !move)
@@ -327,6 +332,9 @@ internal sealed class RedirectionEvaluation
     private async Task HereInputAsync(ScopedEvaluation scope, Redirection redirection, LogicalDescriptor targetDescriptor)
     {
         var effects = scope.Effects;
+        if (redirection.Kind == RedirectionKind.HereString
+            || redirection.Target.Parts is [SourceWordPart { Kind: WordPartKind.HereDocument, Source.Length: > 0 }])
+            ResumeTemporaryLookup(scope);
         FileDescriptor? reader = null;
         OperationError? error;
         using (var storage = new MemoryCapacity(effects.Memory.Budget, 0))
@@ -357,6 +365,13 @@ internal sealed class RedirectionEvaluation
             return;
         }
         SetDescriptor(scope, targetDescriptor, new DescriptorBinding(reader.Value));
+    }
+
+    private void ResumeTemporaryLookup(ScopedEvaluation scope)
+    {
+        scope.Effects.ResumeTemporaryLookup();
+        if (!IsIsolated || scope.Variables.BorrowsBindings)
+            scope.Variables.UseVisibleFieldSeparators();
     }
 
     /// <summary>Publishes one selected variable output and persists the acquired alias through restoration boundaries.</summary>
@@ -426,7 +441,7 @@ internal sealed class RedirectionEvaluation
         if (error is { Kind: not OperationErrorKind.Unknown, Message.Length: > 0 })
             return ReportFailureAsync(scope, path, error);
         var detail = error is { Message: not null } failure ? failure : new OperationError("No such file or directory\n");
-        return mode == FileOpenMode.Read && _origin == RedirectionOrigin.Command
+        return mode == FileOpenMode.Read && _origin is (RedirectionOrigin.Command or RedirectionOrigin.IsolatedHostCommand)
             ? ReportFailureAsync(scope, error)
             : ReportFailureAsync(scope, path, detail);
     }

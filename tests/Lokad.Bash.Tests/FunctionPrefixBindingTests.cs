@@ -70,7 +70,7 @@ public sealed partial class FunctionPrefixBindingTests
             var prepared = Variables.CreateEmpty();
             Assert.True(prepared.TrySetScalar(binding, ShellValue.FromText("temporary")));
             return new Variables.CommandBindings(variables, prepared, new HashSet<BindingName> { binding },
-                memory, CancellationToken.None);
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
         }
     }
 
@@ -118,7 +118,8 @@ public sealed partial class FunctionPrefixBindingTests
             var prepared = Variables.CreateEmpty();
             foreach (var prefix in names)
                 Assert.True(prepared.TrySetScalar(prefix, value));
-            return new Variables.CommandBindings(variables, prepared, names.ToHashSet(), memory, CancellationToken.None);
+            return new Variables.CommandBindings(variables, prepared, names.ToHashSet(),
+                suppressTemporaryLookup: false, memory, CancellationToken.None);
         }
     }
 
@@ -305,7 +306,8 @@ public sealed partial class FunctionPrefixBindingTests
         using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
         var memory = new EvaluationMemory(setup);
         var names = new HashSet<BindingName> { "x" };
-        using var bindings = new Variables.CommandBindings(caller, prepared, names, memory, CancellationToken.None);
+        using var bindings = new Variables.CommandBindings(caller, prepared, names,
+            suppressTemporaryLookup: false, memory, CancellationToken.None);
         var saved = bindings.SavedVariables.IndexedArrays["x"];
 
         Assert.True(caller.TryUnset("x"));
@@ -339,7 +341,8 @@ public sealed partial class FunctionPrefixBindingTests
         var governor = new MemoryGovernor(64 * 1024);
         using var setup = governor.CreateScope();
         var memory = new EvaluationMemory(setup);
-        using (var bindings = new Variables.CommandBindings(caller, prepared, names, memory, CancellationToken.None))
+        using (var bindings = new Variables.CommandBindings(caller, prepared, names,
+            suppressTemporaryLookup: false, memory, CancellationToken.None))
         {
             var forwarding = ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(bindings);
             Assert.Same(names, bindings.PrefixNames);
@@ -386,7 +389,8 @@ public sealed partial class FunctionPrefixBindingTests
         }
         using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
         var memory = new EvaluationMemory(setup);
-        using var parent = new Variables.CommandBindings(caller, prepared, names, memory, CancellationToken.None);
+        using var parent = new Variables.CommandBindings(caller, prepared, names,
+            suppressTemporaryLookup: false, memory, CancellationToken.None);
         if (exposeBeforeFork)
             parent.ExposeBinding("third", parent.SavedVariables);
         var child = caller.Clone();
@@ -424,7 +428,8 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
         using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
         var memory = new EvaluationMemory(setup);
-        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, memory, CancellationToken.None);
+        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+            suppressTemporaryLookup: false, memory, CancellationToken.None);
         var donor = retainedOutput ? bindings.SelectOutputVariables("x", memory, CancellationToken.None) : bindings.SavedVariables;
         var array = donor.IndexedArrays["x"];
         if (retainedOutput)
@@ -501,7 +506,8 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(prepared.TrySetScalar("x", ShellValue.FromText("prefix")));
         using var setup = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
         var installation = new EvaluationMemory(setup);
-        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" }, installation, CancellationToken.None);
+        using var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "x" },
+            suppressTemporaryLookup: false, installation, CancellationToken.None);
         Assert.True(caller.TryAssignArray("x", Enumerable.Repeat(ShellValue.FromText("value"), 256).ToArray(), ArrayKind.Indexed));
         var array = caller.IndexedArrays["x"];
         var locals = new Variables.LocalBindings(caller, parent: null, prefixes: null);

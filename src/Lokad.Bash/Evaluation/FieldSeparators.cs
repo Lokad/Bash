@@ -10,6 +10,8 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Represents the shell's internal field separators.</summary>
 internal sealed class FieldSeparators
 {
+    internal static readonly BindingName Name = "IFS";
+
     /// <summary>The separators used when <c>IFS</c> is unset.</summary>
     private const string DefaultValue = " \t\n";
 
@@ -95,9 +97,12 @@ internal sealed class FieldSeparators
     /// <summary>
     /// Returns the current <c>IFS</c> value, or the shell default when it is unset.
     /// </summary>
-    public static FieldSeparators FromVariables(Variables variables)
+    public static FieldSeparators FromVariables(Variables variables) =>
+        variables.DeferredFieldSeparators ?? FromVisibleBinding(variables);
+
+    internal static FieldSeparators FromVisibleBinding(Variables variables)
     {
-        if (!variables.TryGetScalar("IFS", out var value))
+        if (!variables.TryGetScalar(Name, out var value))
             return variables.CachedFieldSeparators = Default;
 
         // Resolve aliases every time; immutable memory identity detects changes without value scans.
