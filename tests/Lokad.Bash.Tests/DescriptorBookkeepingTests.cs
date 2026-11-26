@@ -40,6 +40,43 @@ public sealed class DescriptorBookkeepingTests
         }
     }
 
+    [Fact]
+    public async Task PipelineReturnsUnusedParentCapacityBeforePublishingTheStages()
+    {
+        var ordinary = await MeasureDispatchAsync(extraCapacity: 0);
+        Assert.Equal(ordinary, await MeasureDispatchAsync(extraCapacity: 16 * 1024));
+
+        async Task<(long Accounted, long Live)> MeasureDispatchAsync(int extraCapacity)
+        {
+            var evaluation = new Eval(Parser.Parse(": | :"));
+            var governor = new MemoryGovernor(64 * 1024);
+            using var owner = governor.CreateScope();
+            evaluation.Memory.Budget = owner;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            var pipe = Assert.IsType<CreatePipeOperation>(await evaluation.GetNextStep(deadline.Token));
+            var workspace = evaluation.Memory.Workspace;
+            var before = workspace.Bytes;
+            if (extraCapacity != 0)
+            {
+                workspace.Grow(extraCapacity);
+                workspace.Resize(before);
+            }
+            pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(10, 11)));
+            var pipeline = Assert.IsType<RunPipelineEvaluations>(await evaluation.GetNextStep(deadline.Token));
+            var usage = (Accounted: governor.ReservedBytes, Live: workspace.Bytes);
+            pipeline.SetResult([0, 0]);
+
+            Assert.Null(await evaluation.GetNextStep(deadline.Token));
+            await evaluation.Completion;
+            Assert.Equal(0, evaluation.LastExitCode);
+            Assert.True(usage.Accounted >= usage.Live);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return usage;
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

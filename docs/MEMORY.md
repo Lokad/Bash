@@ -561,6 +561,8 @@ refusal keeps the child owner alive while the parent's ordinary operation path
 settles every close, then fails the enclosing command. An earlier exception or
 cancellation keeps precedence. Stage stream lists already own their handles
 through cleanup and do not acquire a new tracking reservation after execution.
+Pipeline dispatch returns unused parent capacity after stage preparation and
+keeps the live snapshots and pending parent storage admitted through settlement.
 Lexical and receiving redirection lifetimes share an ordered handle owner; setup
 keeps its admitted frame installed through execution instead of allocating another.
 Persistent bindings prepare the receiving owner and writable removal storage

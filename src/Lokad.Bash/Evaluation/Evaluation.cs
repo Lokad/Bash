@@ -1091,6 +1091,8 @@ public sealed partial class Evaluation : IFileTester
                 stages.Add(new PipelineEvaluationStage(stage, descriptorsToClose));
             }
 
+            // The stage snapshots and pending parent remain charged while the host runs the stages.
+            Memory.Workspace.ReleaseUnusedCapacityOnPublication();
             var pipelineTask = RunPipelineEvaluations.AsTask(PublishOperation, stages);
             ownershipTransferred = true;
             Exception? pipelineFailure = null;
