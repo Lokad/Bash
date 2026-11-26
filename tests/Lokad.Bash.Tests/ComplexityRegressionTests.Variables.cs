@@ -123,18 +123,23 @@ public sealed partial class ComplexityRegressionTests
     [Fact]
     public void NamedLookupAllocationDoesNotScaleWithBindingsInOneFrame()
     {
+        const int lookupsPerSample = 10_000;
+        const int maximumAdditionalBytes = 1_024;
         var narrow = CreateFrame(64);
         var wide = CreateFrame(65_536);
-        Lookup(narrow, 1);
-        Lookup(wide, 1);
+        Lookup(narrow);
+        Lookup(wide);
 
-        var narrowAllocation = MeasureAllocation(() => Lookup(narrow, 10_000));
-        var wideAllocation = MeasureAllocation(() => Lookup(wide, 10_000));
+        var narrowAllocation = AllocationAssert.MeasureAllocatedBytes(() => Lookup(narrow), lookupsPerSample);
+        var wideAllocation = AllocationAssert.MeasureAllocatedBytes(() => Lookup(wide), lookupsPerSample);
 
         Assert.True(
-            wideAllocation <= narrowAllocation + 1_024,
-            $"Named lookup allocated {narrowAllocation:N0} bytes with 64 bindings and "
-            + $"{wideAllocation:N0} bytes with 65,536 bindings.");
+            wideAllocation.Median <= narrowAllocation.Median + maximumAdditionalBytes,
+            $"Named lookup allocated {narrowAllocation.Minimum:N0}, {narrowAllocation.Median:N0}, and "
+            + $"{narrowAllocation.Maximum:N0} bytes with 64 bindings and {wideAllocation.Minimum:N0}, "
+            + $"{wideAllocation.Median:N0}, and {wideAllocation.Maximum:N0} bytes with 65,536 bindings "
+            + $"over {lookupsPerSample:N0} lookups per sample. "
+            + $"The median allowance for growth is {maximumAdditionalBytes:N0} bytes.");
 
         static Variables CreateFrame(int bindingCount)
         {
@@ -145,20 +150,10 @@ public sealed partial class ComplexityRegressionTests
             return frame;
         }
 
-        static void Lookup(Variables frame, int repetitions)
+        static void Lookup(Variables frame)
         {
-            for (var index = 0; index < repetitions; index++)
-            {
-                if (!frame.TryGetScalar("target", out _))
-                    throw new InvalidOperationException("Expected target binding was absent.");
-            }
-        }
-
-        static long MeasureAllocation(Action action)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action();
-            return GC.GetAllocatedBytesForCurrentThread() - before;
+            if (!frame.TryGetScalar("target", out _))
+                throw new InvalidOperationException("Expected target binding was absent.");
         }
     }
 

@@ -3,8 +3,11 @@
 Tests belong to the boundary whose invariant they assert. Similar scripts can
 exercise distinct boundaries: a stepped operation test establishes order and
 ownership; an integrated script establishes visible shell behavior. Retain both
-when those assertions differ. Avoid parser smoke executions that ignore results,
-quota-only assertions and allocation counters attached to a caller thread.
+when those assertions differ. Avoid parser smoke executions that ignore results
+and quota-only assertions. A caller-thread allocation counter is suitable for
+synchronous work on that thread. For sustained synchronous allocation checks,
+`AllocationAssert` uses three samples. The named-lookup tests vary frame width
+and clone depth independently. Asynchronous work can allocate on other threads.
 
 | Invariant | Primary owners in `tests/Lokad.Bash.Tests/` |
 | --- | --- |
