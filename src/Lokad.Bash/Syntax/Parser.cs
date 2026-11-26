@@ -775,11 +775,19 @@ public static class Parser
                 }
             };
 
-            SubshellCommand TimeSubshell(SubshellCommand subshell, bool inherited) => subshell with
+            SubshellCommand TimeSubshell(SubshellCommand subshell, bool inherited)
             {
-                Body = Time(subshell.Body, inherited: true),
-                AuthoredTimingPortable = inherited ? subshell.AuthoredTimingPortable : portable
-            };
+                // A prefix parsed at this subshell has already applied its timing to the body.
+                // Only a portable timer can add to an existing ordinary timer.
+                if (inherited && subshell.AuthoredTimingPortable is { } authoredPortable && (!portable || authoredPortable))
+                    return subshell;
+
+                return subshell with
+                {
+                    Body = Time(subshell.Body, inherited: true),
+                    AuthoredTimingPortable = inherited ? subshell.AuthoredTimingPortable : portable
+                };
+            }
         }
     }
 

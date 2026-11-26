@@ -936,6 +936,22 @@ public class ParserTests
         AssertListOperator(subshell.Body, ListOperator.Sequence);
     }
 
+    [Theory]
+    [InlineData("time (time (time (printf x)))", false)]
+    [InlineData("time -p (time (time (printf x)))", true)]
+    [InlineData("time (time -p (time (printf x)))", true)]
+    [InlineData("time -p (time -p (time (printf x)))", true)]
+    public void Parse_NestedTimingPrefixes_MergeAtTheInnermostCommand(string source, bool portable)
+    {
+        var outer = Assert.IsType<SubshellCommand>(Assert.Single(Parser.Parse(source).Commands));
+        var middle = Assert.IsType<SubshellCommand>(outer.Body);
+        var inner = Assert.IsType<SubshellCommand>(middle.Body);
+
+        var timer = Assert.IsType<TimedCommand>(inner.Body);
+        Assert.Equal(portable, timer.Portable);
+        Assert.IsType<SimpleCommand>(timer.Inner);
+    }
+
     [Fact]
     public void Parse_Group_ListBody()
     {
