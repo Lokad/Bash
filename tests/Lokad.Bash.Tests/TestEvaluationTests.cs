@@ -86,6 +86,41 @@ public sealed class TestEvaluationTests
     }
 
     [Fact]
+    public void TestEvaluation_PurePredicateUsesSharedEmptyFileRequests()
+    {
+        const int Repetitions = 64;
+        using var owner = new MemoryGovernor(TestMemoryBudget.EvaluationBytes).CreateScope();
+        var memory = new EvaluationMemory(owner);
+        ShellValue[] args = [ShellValue.FromText("-n"), ShellValue.FromText("value")];
+
+        var parsed = Parse();
+        Assert.Empty(parsed.CollectFileTests(out var result));
+        Assert.True(result);
+        AllocationAssert.SustainedReuse(() => _ = Parse(), Repetitions, maximumBytes: 224 * Repetitions);
+
+        TestEvaluation Parse()
+        {
+            memory.Workspace.Resize(0);
+            return TestEvaluation.ParseValues(args, 0, args.Length, CancellationToken.None,
+                errexitEnabled: false, memory);
+        }
+    }
+
+    [Fact]
+    public void TestEvaluation_SingleFileResultUsesNoReductionArray()
+    {
+        var parsed = TestEvaluation.Parse(["-f", "file"]);
+        bool[] present = [true];
+        bool[] absent = [false];
+
+        Assert.Single(parsed.CollectFileTests(out var result));
+        Assert.Null(result);
+        Assert.True(parsed.CompleteFileTests(present));
+        Assert.False(parsed.CompleteFileTests(absent));
+        AllocationAssert.SustainedReuse(() => _ = parsed.CompleteFileTests(present), 64, maximumBytes: 0);
+    }
+
+    [Fact]
     public void TestEvaluation_AllocatesReductionScratchForLiveDepth()
     {
         const int Leaves = 64;

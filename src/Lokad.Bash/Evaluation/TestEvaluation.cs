@@ -19,7 +19,7 @@ public sealed class TestEvaluation
     // Standalone parsing has no execution owner; the evaluator supplies its command workspace.
     private readonly EvaluationMemory? _memory;
     private readonly List<Step> _steps = [];
-    private readonly List<UnresolvedFileTest> _files = [];
+    private IReadOnlyList<UnresolvedFileTest> _files = Array.Empty<UnresolvedFileTest>();
     private int _index;
     private int _end;
     private int _stackDepth;
@@ -44,7 +44,7 @@ public sealed class TestEvaluation
         }
 
         // Admit the completion scratch before any file or variable predicate runs.
-        if (!HasParseError && !HasConstantResult)
+        if (!HasParseError && _steps.Count > 1)
             _memory?.Charge(MemoryCapacity.ArrayBackingBytes<bool>(_maximumStackDepth));
     }
 
@@ -52,7 +52,6 @@ public sealed class TestEvaluation
     public bool HasParseError => ParseError.HasValue;
     internal (string Prefix, ShellValue Operand, string Suffix)? ParseError { get; private set; }
     internal bool HasVariablePredicates { get; private set; }
-    private bool HasConstantResult => _steps.Count == 1 && _steps[0].Kind == StepKind.Constant;
 
     /// <summary>Encodes text arguments and parses them through the byte-valued test grammar.</summary>
     public static TestEvaluation Parse(IReadOnlyList<string> arguments)
@@ -88,10 +87,16 @@ public sealed class TestEvaluation
         if (HasParseError)
             return false;
 
-        if (HasConstantResult)
+        if (_steps.Count == 1)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            return _steps[0].Value != 0;
+            var step = _steps[0];
+            return step.Kind switch
+            {
+                StepKind.Constant => step.Value != 0,
+                StepKind.File => fileResults[step.Value],
+                _ => false
+            };
         }
 
         var values = new bool[_maximumStackDepth];
@@ -118,7 +123,8 @@ public sealed class TestEvaluation
         // A parse error still allows earlier parsed predicates to run. Its partial
         // step sequence can contain operators without all their operands.
         var reduce = !HasParseError;
-        var values = reduce ? new bool[_maximumStackDepth] : [];
+        var singleStep = reduce && _steps.Count == 1;
+        var values = reduce && !singleStep ? new bool[_maximumStackDepth] : [];
         var count = 0;
         foreach (var step in _steps)
         {
@@ -150,6 +156,11 @@ public sealed class TestEvaluation
                         ReduceBinary(values, --count, step.Kind);
                     continue;
                 default: throw new InvalidOperationException("Unsupported test predicate step.");
+            }
+            if (singleStep)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                return value;
             }
             if (reduce)
                 values[count++] = value;
@@ -381,9 +392,12 @@ public sealed class TestEvaluation
 
     private void AppendFileTest(UnresolvedFileTest test)
     {
-        _memory?.PrepareListCapacity(_files, 1);
-        AppendPredicate(StepKind.File, _files.Count);
-        _files.Add(test);
+        var files = _files as List<UnresolvedFileTest>;
+        if (files == null)
+            _files = files = [];
+        _memory?.PrepareListCapacity(files, 1);
+        AppendPredicate(StepKind.File, files.Count);
+        files.Add(test);
     }
 
     private static bool TryTestBinary(ShellValue token, out BinaryPredicate predicate) =>
