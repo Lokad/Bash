@@ -225,6 +225,23 @@ public sealed class DeclarationAttributeTestsEndToEnd
         Assert.Equal($"line 2: {diagnostic}: expression recursion level exceeded (error token is \"{diagnostic}\")\n", result.StdErr);
     }
 
+    [Theory]
+    [InlineData("f() { local -a item=(10 11); declare -gx link+=NeW; }; f", "-Ax")]
+    [InlineData("item=tmp declare link+=NeW", "-A")]
+    public async Task RecursiveSelectorInTheActiveBindingPreservesTheSavedAssociativeValue(string command, string flags)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            key=key; declare -A item=([key]=2); declare -rn link='item[$key]'
+            {command}
+            printf '<%s>\n' "$?"
+            declare -p item link
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<1>\ndeclare {flags} item=([key]=\"2\" )\ndeclare -nr link=\"item[\\$key]\"\n", result.StdOut);
+        Assert.Equal("line 2: key: expression recursion level exceeded (error token is \"key\")\n", result.StdErr);
+    }
+
     [Fact]
     public async Task IntegerPrefixPublicationPreservesTheConvertedValueWhenItsSelectorFails()
     {

@@ -17,8 +17,23 @@ public sealed class ArithmeticValueTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.Contains("arithmetic nesting limit exceeded", host.StandardError.TextContent);
+        Assert.Contains("expression recursion level exceeded (error token is \"", host.StandardError.TextContent);
         Assert.Single(host.StandardError.TextContent.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Theory]
+    [InlineData("x=x", "let 'x'", "let: x", "x")]
+    [InlineData("x='x+1'", "((x))", "((: x+1", "x+1")]
+    [InlineData("a=('a[0]' 5); x='a[0]'", "declare 'a[x]=new'", "a[0]", "a[0]")]
+    public async Task RecursionReportsTheStoredExpression(string setup, string command, string subject, string token)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"{setup}\n{command}\nprintf '<%s>' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Equal($"line 2: {subject}: expression recursion level exceeded (error token is \"{token}\")\n",
+            host.StandardError.TextContent);
     }
 
     [Theory]

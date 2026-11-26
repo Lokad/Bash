@@ -178,15 +178,18 @@ internal static partial class WordExpansion
 
         async Task<long?> EvaluateCoreAsync()
         {
+            var storedExpression = expression.IsStoredValue ? expression : context.StoredExpression;
             if (context.Depth >= ShellSourceCursor.MaximumNestedExpansionDepth)
             {
-                var recursionError = context.IsIntegerPromotion
-                    ? new ArithmeticError(ArithmeticErrorKind.ExpressionRecursionLimit, expression.Value) { Token = expression.Value }
+                // A selector within a stored expression can reach the limit first.
+                var recursiveOperand = context.IsIntegerPromotion ? expression : storedExpression;
+                var recursionError = recursiveOperand != null
+                    ? new ArithmeticError(ArithmeticErrorKind.ExpressionRecursionLimit, recursiveOperand.Value) { Token = recursiveOperand.Value }
                     : new ArithmeticError(ArithmeticErrorKind.NestingLimit, expression.Value);
                 await ReportAsync(recursionError).ConfigureAwait(false);
                 return null;
             }
-            scope = scope with { Arithmetic = context with { Depth = context.Depth + 1 } };
+            scope = scope with { Arithmetic = context with { Depth = context.Depth + 1, StoredExpression = storedExpression } };
             var referenceFailureReported = false;
             var result = await ArithmeticEvaluation.EvaluateAsync<ArithmeticTarget>(expression, BindAsync, WriteAsync,
                 scope.Effects.Memory.Workspace, scope.Effects.CancellationToken).ConfigureAwait(false);
@@ -230,7 +233,7 @@ internal static partial class WordExpansion
                         var nestedScope = selected.Syntax.Kind != VariableReferenceKind.Name
                             && scope.Arithmetic is { IsIntegerPromotion: true, ReadThroughElement: false } active
                             ? scope with { Arithmetic = active with { ReadThroughElement = true } } : scope;
-                        var nested = await EvaluateArithmeticAsync(ArithmeticOperand.FromValue(stored),
+                        var nested = await EvaluateArithmeticAsync(ArithmeticOperand.FromStoredValue(stored),
                             nestedScope, failureMode, assignOutput, command).ConfigureAwait(false);
                         if (nested is not { } number)
                         {

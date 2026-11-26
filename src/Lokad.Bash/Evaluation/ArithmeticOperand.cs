@@ -16,11 +16,14 @@ internal sealed class ArithmeticOperand
 
     public ShellValue Value { get; }
     public bool IsExpandedIndex { get; private init; }
+    public bool IsStoredValue { get; private init; }
     public IReadOnlyDictionary<int, Subscript> Subscripts { get; }
     public ArithmeticEvaluation.LexicalSyntax? Syntax { get; }
 
     /// <summary>Operand bytes without prepared shell selectors, as used by let and text adapters.</summary>
     public static ArithmeticOperand FromValue(ShellValue value) => new(value, NoSubscripts, null);
+
+    internal static ArithmeticOperand FromStoredValue(ShellValue value) => new(value, NoSubscripts, null) { IsStoredValue = true };
 
     internal static ArithmeticOperand FromSyntax(ShellSource source, ArithmeticEvaluation.LexicalSyntax syntax) =>
         new(source.ToValue(), NoSubscripts, syntax);

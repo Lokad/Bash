@@ -245,4 +245,5 @@ internal sealed record ArithmeticContext(int Depth)
     public ArithmeticWorkQueue Work { get; } = new();
     internal bool IsIntegerPromotion { get; init; }
     internal bool ReadThroughElement { get; init; }
+    internal ArithmeticOperand? StoredExpression { get; init; }
 }
