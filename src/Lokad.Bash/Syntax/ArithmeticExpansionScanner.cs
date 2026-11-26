@@ -212,7 +212,7 @@ internal static class ArithmeticExpansionScanner
     {
         if (!HasPossibleExpansionComment(text.AsSpan(start, authoredEnd - start + 1)))
             return new ReachedParentheses(authoredEnd, null, false);
-        return RescanReachedArithmeticParentheses(text, start, authoredEnd, memory);
+        return RescanReachedArithmeticParentheses(text, start, authoredEnd, memory, out _);
     }
 
     internal static bool TrySelectCommentedAdjacentSubshell(ShellSource text, int start, int? commandEnd, bool quoted,
@@ -232,9 +232,10 @@ internal static class ArithmeticExpansionScanner
             || !HasPossibleExpansionComment(text.AsSpan(start, authoredEnd - start + 1)))
             return false;
 
-        // Only the enclosing double-quoted word can carry a later closer here.
         var limit = authoredEnd + 1;
-        if (quoted)
+        var reached = RescanReachedArithmeticParentheses(text[..limit], start, authoredEnd, memory, out var complete);
+        // Only an unresolved span can need a later closer in the enclosing quote.
+        if (quoted && !complete && limit < text.Length && text[limit] != (byte)'"')
         {
             while (limit < text.Length && text[limit] != (byte)'"')
             {
@@ -242,8 +243,8 @@ internal static class ArithmeticExpansionScanner
                     limit++;
                 limit++;
             }
+            reached = RescanReachedArithmeticParentheses(text[..limit], start, authoredEnd, memory, out _);
         }
-        var reached = RescanReachedArithmeticParentheses(text[..limit], start, authoredEnd, memory);
         if (!reached.Missing && reached.Subshell == null)
             return false;
 
@@ -253,13 +254,14 @@ internal static class ArithmeticExpansionScanner
     }
 
     private static ReachedParentheses RescanReachedArithmeticParentheses(ShellSource text, int start, int authoredEnd,
-        MemoryCapacity? memory)
+        MemoryCapacity? memory, out bool complete)
     {
         var context = new ShellScanContext { SyntaxMemory = memory, ReadArithmeticExpansionComments = true };
         var status = ScanReachedParentheses(context, text, start, out var reachedEnd, out _, out _, out _);
+        complete = status == ShellScanStatus.Complete;
         if (context.MissingReachedArithmeticParenthesis)
             return new ReachedParentheses(authoredEnd, null, true);
-        if (status == ShellScanStatus.Complete && reachedEnd != authoredEnd)
+        if (complete && reachedEnd != authoredEnd)
             return new ReachedParentheses(reachedEnd, ReadAdjacentBody(text, start, reachedEnd, memory), false);
         return new ReachedParentheses(authoredEnd, null, false);
     }
