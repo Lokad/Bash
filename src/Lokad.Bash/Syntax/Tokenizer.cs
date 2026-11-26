@@ -1760,7 +1760,7 @@ internal sealed class Tokenizer
                             FlushUnquoted();
                             if (!TryReserveSyntax())
                                 return new Word([]);
-                            AddPart(CopyEscapedLiteral(Position - 1, 1));
+                            AddPart(CreateEscapedLiteral(Position - 1, 1));
                         }
                         break;
                     }
@@ -1794,7 +1794,7 @@ internal sealed class Tokenizer
                 var length = Utf8Text.FirstCharacterLength(span[Position..]);
                 if (!TryReserveSyntax())
                     return new Word([]);
-                AddPart(CopyEscapedLiteral(Position, length));
+                AddPart(CreateEscapedLiteral(Position, length));
                 Position += length;
                 continue;
             }
@@ -2097,7 +2097,7 @@ internal sealed class Tokenizer
                     Flush(allowEmpty: false);
                     if (!TryReserveSyntax())
                         return parts;
-                    AddPart(CopyEscapedLiteral(Position + 1, 1));
+                    AddPart(CreateEscapedLiteral(Position + 1, 1));
                     Position += 2;
                     continue;
                 }
@@ -2230,9 +2230,13 @@ internal sealed class Tokenizer
     }
 
     // Like quoted literals, escaped characters can survive the dynamic source that produced them.
-    // Copy at most one source character so retained values do not pin the complete input buffer.
-    private WordPart CopyEscapedLiteral(int offset, int length) =>
-        WordPart.FromValue(WordPartKind.Escaped, ShellValue.FromBytes(_input.Bytes.Slice(offset, length).ToArray()));
+    // Keep the value independent of the input by borrowing an immutable byte or copying one scalar.
+    private WordPart CreateEscapedLiteral(int offset, int length)
+    {
+        var bytes = _input.Bytes.Slice(offset, length);
+        var value = length == 1 ? ShellValue.FromByte(bytes.Span[0]) : ShellValue.FromBytes(bytes.ToArray());
+        return WordPart.FromValue(WordPartKind.Escaped, value);
+    }
 
     /// <summary>
     /// Returns true when an ASCII byte terminates a word; CR is ordinary data.

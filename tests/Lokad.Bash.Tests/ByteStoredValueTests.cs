@@ -285,7 +285,7 @@ public sealed class ByteStoredValueTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task DynamicEscapedValueBatchKeepsBackingWithinRetainedAdmission(bool eval)
+    public async Task DynamicEscapedValuesShareCompactBackingAfterSourceRetirement(bool eval)
     {
         const int Count = 64;
         await using var host = new TestHost();
@@ -315,7 +315,9 @@ public sealed class ByteStoredValueTests
             Assert.NotNull(storage.Array);
             backing.Add(storage.Array);
         }
-        Assert.InRange(backing.Sum(bytes => (long)bytes.Length), Count, memory.ReservedBytes);
+        var shared = Assert.Single(backing);
+        Assert.Equal("x"u8.ToArray(), shared);
+        Assert.InRange(shared.LongLength, 1, memory.ReservedBytes);
         Assert.Equal(0, host.OpenFileCount);
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
