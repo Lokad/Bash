@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Text.Unicode;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
@@ -1073,22 +1074,7 @@ internal static partial class WordExpansion
                     if (pattern.IsEmpty && mode is ParameterReplacementMode.First or ParameterReplacementMode.All)
                         return value;
                     var byteCharacters = pattern.UsesByteCharacters(bytes);
-                    var lastMalformed = -1;
-                    if (mode == ParameterReplacementMode.All && byteCharacters && !pattern.RequiresByteCharacters)
-                    {
-                        // Later global matches can return to scalar matching after malformed
-                        // input is consumed. Remember suffix validity without rescanning it.
-                        for (var index = 0; index < bytes.Length;)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            if (Rune.DecodeFromUtf8(bytes[index..], out _, out var width) != OperationStatus.Done)
-                            {
-                                lastMalformed = index;
-                                width = 1;
-                            }
-                            index += width;
-                        }
-                    }
+                    var validSuffixStart = -1;
                     var replaced = false;
                     using var builder = new ByteMemoryBuilder(0, scratch);
                     using var search = mode == ParameterReplacementMode.All ? pattern.CreateSearch(scratch) : default;
@@ -1125,13 +1111,47 @@ internal static partial class WordExpansion
                             break;
                         if (length == 0)
                             position += byteCharacters ? 1 : Utf8Text.FirstCharacterLength(bytes[position..]);
-                        if (byteCharacters && !pattern.RequiresByteCharacters && position < bytes.Length)
-                            byteCharacters = position <= lastMalformed || (bytes[position] & 0xc0) == 0x80;
+                        if (byteCharacters && !pattern.RequiresByteCharacters
+                            && position < bytes.Length && position >= validSuffixStart)
+                        {
+                            // Only another global search needs the boundary, which later matches reuse.
+                            if (validSuffixStart < 0)
+                                validSuffixStart = position + FindValidSuffixStart(bytes[position..]);
+                            byteCharacters = position < validSuffixStart || (bytes[position] & 0xc0) == 0x80;
+                        }
                     } while (position < bytes.Length);
                     if (!replaced)
                         return value;
                     Append(bytes[copiedThrough..]);
                     return ShellValue.FromBytes(builder.DetachSnapshot());
+
+                    int FindValidSuffixStart(ReadOnlySpan<byte> source)
+                    {
+                        const int BlockBytes = 4096;
+                        for (var end = source.Length; end > 0;)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var start = Math.Max(0, end - BlockBytes);
+                            var boundary = Math.Max(0, start - 3);
+                            // Include any valid scalar that crosses the block boundary.
+                            while (start > boundary && (source[start] & 0xc0) == 0x80)
+                                start--;
+
+                            if (!Utf8.IsValid(source[start..end]))
+                            {
+                                // The last malformed byte lies inside this block. Decode its valid tail.
+                                while (end > start)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    if (Rune.DecodeLastFromUtf8(source[start..end], out _, out var width) != OperationStatus.Done)
+                                        return end;
+                                    end -= width;
+                                }
+                            }
+                            end = start;
+                        }
+                        return 0;
+                    }
 
                     void AppendReplacement(ReadOnlySpan<byte> match)
                     {

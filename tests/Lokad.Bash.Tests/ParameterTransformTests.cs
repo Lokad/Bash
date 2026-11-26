@@ -494,6 +494,7 @@ public sealed class ParameterTransformTests
     [InlineData("x='𐐨é'; printf '%s|%s' \"${x^}\" \"${x^^}\"", "F0909080C3A97CF0909080C389")]
     [InlineData("x='AK𐐀'; printf '%s' \"${x,,}\"", "616BF09090A8")]
     [InlineData("x=$'\\377aλ'; printf '%s' \"${x//?/X}\"", "585858")]
+    [InlineData("x=$'\\377€λ'; printf '%s' \"${x//??/X}\"", "5858CEBB")]
     [InlineData("x=$'a\\377b'; printf '%s' \"${x/$'\\377'/$'\\376'}\"", "61FE62")]
     [InlineData("x=$'\\377abc\\376'; a=$'\\377'; b=$'\\376'; printf '<%s><%s><%s>' \"${x#$a}\" \"${x%$b}\" \"${x/$b/X}\"",
         "3C616263FE3E3CFF6162633E3CFF616263583E")]
@@ -519,6 +520,28 @@ public sealed class ParameterTransformTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(Convert.FromHexString(expectedHex), result.Host.StandardOutput.Content.ToArray());
         Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task GlobalReplacementResumesScalarMatchingAcrossUtf8BlockBoundary(int split)
+    {
+        var padding = 4096 - 4 + split;
+        var evaluation = new Eval(Parser.Parse("printf '%s' \"${x//?/X}\""));
+        var subject = new byte[5 + padding];
+        subject[0] = 0xff;
+        "🙂"u8.CopyTo(subject.AsSpan(1));
+        subject.AsSpan(5).Fill((byte)'a');
+        evaluation.SetVariable("x", ShellValue.FromBytes(subject));
+        await using var host = new TestHost();
+
+        await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal(new string('X', padding + 2), host.StandardOutput.TextContent);
+        Assert.True(host.StandardError.Content.IsEmpty);
     }
 
     [Theory]
