@@ -691,6 +691,7 @@ internal sealed class EvaluationState
             {
                 FunctionBodyLine = bodyLine,
                 CompoundOpenLine = coordinates.RedirectionOpenLine,
+                EnclosingExecutionLine = 0,
                 UnitReadLine = 0
             }
         });

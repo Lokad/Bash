@@ -3,6 +3,7 @@ using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
@@ -82,6 +83,71 @@ public sealed class ShellTimeFormattingTests
         Assert.Equal(Capacity, memory.PeakBytes);
         owner.Dispose();
         Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("TIMEFORMAT=%2l\ntime false", 1, "line 2: TIMEFORMAT: `\0': invalid format character\n")]
+    [InlineData("TIMEFORMAT=$'%\\377'\n\ntime false", 1, "line 3: TIMEFORMAT: `ÿ': invalid format character\n")]
+    [InlineData("TIMEFORMAT=%Q\n:\n\n! time", 1, "line 4: TIMEFORMAT: `Q': invalid format character\n")]
+    [InlineData("TIMEFORMAT=%Q\nf(){\n :\n time false\n}\nf", 1, "line 2: TIMEFORMAT: `Q': invalid format character\n")]
+    [InlineData("TIMEFORMAT=%Q\n:\neval '\n :\n time false\n'", 1, "line 8: TIMEFORMAT: `Q': invalid format character\n")]
+    [InlineData("TIMEFORMAT=%Q\nv=$(\n :\n time false\n)", 1, "line 6: TIMEFORMAT: `Q': invalid format character\n")]
+    [InlineData("TIMEFORMAT=%Q\nfor item in suit; do\n case $item in\n (suit) time false ;;\n esac\n time false\ndone", 1,
+        "line 3: TIMEFORMAT: `Q': invalid format character\nline 2: TIMEFORMAT: `Q': invalid format character\n")]
+    [InlineData("TIMEFORMAT=%Q\nwhile :; do\n time false\n break\ndone", 0, "line 5: TIMEFORMAT: `Q': invalid format character\n")]
+    public async Task InvalidTimingFormatsReportTheReachedLineAndPreserveStatus(
+        string commands, int timedStatus, string diagnostic)
+    {
+        var source = commands + "\nprintf '<%s>' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunTimedFixtureAsync(host, source, prepared));
+            Assert.Equal($"<{timedStatus}>", host.GetOutput(FileDescriptor.StdOut));
+            // Latin-1 names the opaque FF byte in the expectation without decoding shell output.
+            Assert.Equal(System.Text.Encoding.Latin1.GetBytes(diagnostic), host.GetOutputBytes(FileDescriptor.StdErr));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("TIMEFORMAT=%Q\ntime (\n :\n false\n) 2>out", "line 5")]
+    [InlineData("TIMEFORMAT=%Q\nsource ./child\n\nf 2>out", "./child: line 2")]
+    public async Task TimingDiagnosticUsesTheActiveRedirectedStream(string commands, string prefix)
+    {
+        var source = commands + "\nprintf '<%s>' \"$?\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new MockFileSystem();
+            host.AddFile("/child", "\nf(){\n :\n time false\n}\n");
+            Assert.Equal(0, await RunTimedFixtureAsync(host, source, prepared));
+            Assert.Equal("<1>", host.GetOutput(FileDescriptor.StdOut));
+            Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+            Assert.Equal($"{prefix}: TIMEFORMAT: `Q': invalid format character\n", host.ReadFile("/out"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task PendingTimingDiagnosticPrecedesTheErrexitAction()
+    {
+        const string source = "TIMEFORMAT=%Q\nset -e\ntrap 'printf \"exit:%s\" \"$?\" >&2' EXIT\ntime false\nprintf later\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new MockFileSystem();
+            Assert.Equal(1, await RunTimedFixtureAsync(host, source, prepared));
+            Assert.Empty(host.GetOutputBytes(FileDescriptor.StdOut));
+            Assert.Equal("line 4: TIMEFORMAT: `Q': invalid format character\nexit:1", host.GetOutput(FileDescriptor.StdErr));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    private static async Task<int> RunTimedFixtureAsync(MockFileSystem host, string source, bool prepared)
+    {
+        var result = prepared
+            ? await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, CancellationToken.None)
+            : await BashScript.RunAsync(host, source, EvaluationOptions.Default, CancellationToken.None);
+        return result.ExitCode;
     }
 
     [Fact]

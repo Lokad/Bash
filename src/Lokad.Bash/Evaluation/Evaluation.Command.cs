@@ -211,7 +211,14 @@ public sealed partial class Evaluation
             {
                 Memory.Charge(128);
                 var started = await AwaitOperationAsync(ReadTimingOperation.AsTask(PublishOperation)).ConfigureAwait(false);
-                var timing = new ActiveTiming(started, timed.Portable, scope.Variables, scope.Timing);
+                // Timing reports after the inner command restores its execution line.
+                var coordinates = scope.Context.Coordinates;
+                var line = coordinates.EnclosingExecutionLine != 0
+                    ? coordinates.EnclosingExecutionLine : coordinates.UnitReadLine;
+                if (line == 0)
+                    line = coordinates.FunctionBodyLine != 0 ? coordinates.FunctionBodyLine : coordinates.Line;
+                var timing = new ActiveTiming(started, timed.Portable, scope.Variables, scope.Timing,
+                    scope.Context.DiagnosticPath, coordinates.Locations == null ? 0 : line);
                 var result = await EvaluateCommandAsync(timed.Inner, scope with { Timing = timing }, negated).ConfigureAwait(false);
                 // Bash's return unwinds past the timer; the calling function's timer still reports.
                 if (!_state.ExitedThroughExec && result.Flow != FlowControlKind.Return)
@@ -304,12 +311,15 @@ public sealed partial class Evaluation
     }
 
     internal sealed class ActiveTiming(
-        ShellTimingSnapshot started, bool portable, Variables variables, ActiveTiming? enclosing)
+        ShellTimingSnapshot started, bool portable, Variables variables, ActiveTiming? enclosing,
+        string? diagnosticPath, int diagnosticLine)
     {
         internal ShellTimingSnapshot Started { get; } = started;
         internal bool Portable { get; } = portable;
         internal Variables Variables { get; } = variables;
         internal ActiveTiming? Enclosing { get; } = enclosing;
+        internal string? DiagnosticPath { get; } = diagnosticPath;
+        internal int DiagnosticLine { get; } = diagnosticLine;
         internal bool Settled { get; set; }
     }
 
@@ -343,7 +353,13 @@ public sealed partial class Evaluation
                 await ExecuteWriteAsync(GetStdErrDescriptor(), output).ConfigureAwait(false);
         }
         else
-            await ExecuteWriteAsync(GetStdErrDescriptor(), error).ConfigureAwait(false);
+        {
+            var descriptor = GetStdErrDescriptor();
+            var prefix = !descriptor.IsClosed && timing.DiagnosticLine > 0
+                ? new SyntaxDiagnosticPrefix(timing.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, timing.DiagnosticLine)
+                : default;
+            await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, error).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Admits the replacement binding before foreground execution can publish effects.</summary>

@@ -845,7 +845,12 @@ public sealed partial class Evaluation : IFileTester
         if (coordinates.Locations?.TryGet(subshellCommand, out var location) == true)
         {
             var closingLine = coordinates.Offset + location.EndLine;
-            childContext = childContext.WithCoordinates(coordinates with { CompoundOpenLine = closingLine, UnitReadLine = closingLine });
+            childContext = childContext.WithCoordinates(coordinates with
+            {
+                CompoundOpenLine = closingLine,
+                UnitReadLine = closingLine,
+                EnclosingExecutionLine = 0
+            });
         }
         var exitBoundary = SubshellExitBoundary(scope);
         var inheritedExitBindings = exitBoundary.KeepsReachedBindings ? null

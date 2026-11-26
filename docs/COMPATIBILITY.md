@@ -1197,6 +1197,11 @@ Timing prefixes keep their authored side of a subshell's parentheses in a
 listing. An authored inner timer keeps its own `-p` spelling. A timed and
 negated command prints `time` or `time -p` before `!`. Timing for a sole
 subshell still runs inside it, with its active descriptors and `TIMEFORMAT`.
+An invalid `TIMEFORMAT` reports the timer's reached reader location on the
+active stderr and preserves the timed command's status. A timer inside a
+function uses the body entry line unless an enclosing `for` or `case`
+selects its own line. A sourced or evaluated command string supplies its
+own reader coordinates.
 
 `getopts` scans explicit arguments or the current positional parameters one option
 byte at a time, including bundled flags. A colon after an option byte requires an

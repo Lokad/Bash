@@ -21,6 +21,8 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
     internal int? FunctionBraceBeforeUnit { get; init; }
     /// <summary>The entry line inherited by non-forking compound redirections.</summary>
     internal int? CompoundOpenLine { get; init; }
+    /// <summary>The line set by an enclosing for-in or case command between executions of its child commands.</summary>
+    internal int EnclosingExecutionLine { get; init; }
 
     internal CommandCoordinates At(ICommand command, CommandLocation location) => this with
     {
@@ -31,6 +33,8 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
             _ => location.StartLine
         }),
         EndLine = Offset + location.EndLine,
+        EnclosingExecutionLine = command is ForCommand or CaseCommand
+            ? Offset + location.CommandLine : EnclosingExecutionLine,
         LastWordLine = Offset + (location.LastWordLine != 0 ? location.LastWordLine : location.EndLine),
         RedirectionDiagnosticLine = location.RedirectionDiagnosticLine == 0 ? 0 : Offset + location.RedirectionDiagnosticLine,
         RedirectionOpenLine = command switch

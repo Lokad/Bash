@@ -680,9 +680,11 @@ public static class Parser
         var timed = false;
         var portable = false;
         var prefixed = false;
+        var prefixStart = 0;
         while (true)
         {
-            var text = GetUnquotedTokenText(tokenizer.PeekTokenCore());
+            var token = tokenizer.PeekTokenCore();
+            var text = GetUnquotedTokenText(token);
             if (text.SequenceEqual("!"u8))
             {
                 tokenizer.NextTokenCore();
@@ -706,6 +708,8 @@ public static class Parser
             }
             else
                 break;
+            if (!prefixed)
+                prefixStart = token.Source.Start.Value;
             prefixed = true;
         }
         // A standalone prefix applies to an empty command, without consuming the list terminator.
@@ -716,10 +720,16 @@ public static class Parser
             {
                 if (terminator == TokenKind.EndOfInput)
                     tokenizer.RecordEmptyPipelinePrefixEndOfInput();
-                return Wrap(new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments)
+                var empty = new SimpleCommand([], [], [], SimpleCommand.NoDeclarationAssignments)
                 {
                     IsBarePipelinePrefix = true
-                });
+                };
+                if (timed)
+                {
+                    var line = tokenizer.GetLine(prefixStart);
+                    tokenizer.RecordLocation(empty, line, line);
+                }
+                return Wrap(empty);
             }
         }
 
@@ -770,7 +780,7 @@ public static class Parser
             {
                 NegatedCommand negative => negative with { Inner = Time(negative.Inner, inherited) },
                 RedirectedCommand { Body: SubshellCommand subshell } redirected =>
-                    redirected with { Body = TimeSubshell(subshell, inherited) },
+                    TimeRedirectedSubshell(redirected, subshell, inherited),
                 SubshellCommand subshell => TimeSubshell(subshell, inherited),
                 // Bash propagates timing flags into a subshell's sole command. Merge them
                 // for evaluation while retaining each authored prefix for serialization.
@@ -786,6 +796,16 @@ public static class Parser
                 }
             };
 
+            RedirectedCommand TimeRedirectedSubshell(RedirectedCommand redirected, SubshellCommand subshell, bool inherited)
+            {
+                var body = TimeSubshell(subshell, inherited);
+                if (ReferenceEquals(body, subshell))
+                    return redirected;
+                var replacement = redirected with { Body = body };
+                tokenizer.Locations?.Replace(redirected, replacement);
+                return replacement;
+            }
+
             SubshellCommand TimeSubshell(SubshellCommand subshell, bool inherited)
             {
                 // A prefix parsed at this subshell has already applied its timing to the body.
@@ -793,11 +813,13 @@ public static class Parser
                 if (inherited && subshell.AuthoredTimingPortable is { } authoredPortable && (!portable || authoredPortable))
                     return subshell;
 
-                return subshell with
+                var replacement = subshell with
                 {
                     Body = Time(subshell.Body, inherited: true),
                     AuthoredTimingPortable = inherited ? subshell.AuthoredTimingPortable : portable
                 };
+                tokenizer.Locations?.Replace(subshell, replacement);
+                return replacement;
             }
         }
     }
