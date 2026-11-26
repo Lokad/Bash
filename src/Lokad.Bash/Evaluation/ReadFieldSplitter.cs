@@ -7,7 +7,7 @@ using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
-/// <summary>Splits delimiter-free read input, preserving escapes and the last field's remainder.</summary>
+/// <summary>Splits normalized read input, preserving escapes and the last field's remainder.</summary>
 /// <remarks>Fields borrow the input or use the supplied scratch budget. Detach borrowed slices and admit retained backing before assigning.</remarks>
 internal static class ReadFieldSplitter
 {
@@ -24,21 +24,30 @@ internal static class ReadFieldSplitter
         {
             var separatorBytes = fieldSeparators.Bytes;
             // Span searches specialize sets of up to three bytes.
-            var asciiRaw = options.BackslashMode == ReadBackslashMode.Preserve
-                && separatorBytes.Length is > 0 and <= 3 && Ascii.IsValid(separatorBytes.Span);
+            var shortAscii = separatorBytes.Length is > 0 and <= 3 && Ascii.IsValid(separatorBytes.Span);
+            var interpretEscapes = options.BackslashMode == ReadBackslashMode.InterpretEscapes;
+            Span<byte> boundaryStorage = stackalloc byte[4];
+            scoped ReadOnlySpan<byte> boundaries = separatorBytes.Span;
+            if (shortAscii && interpretEscapes && !boundaries.Contains((byte)'\\'))
+            {
+                boundaries.CopyTo(boundaryStorage);
+                boundaryStorage[boundaries.Length] = (byte)'\\';
+                boundaries = boundaryStorage[..(boundaries.Length + 1)];
+            }
+
             Span<byte> whitespaceStorage = stackalloc byte[3];
             var whitespaceLength = 0;
-            if (asciiRaw)
+            if (shortAscii)
                 foreach (var separator in separatorBytes.Span)
                     if (FieldSeparators.HasWhitespaceSemantics(new Rune(separator)))
                         whitespaceStorage[whitespaceLength++] = separator;
-            var rawWhitespace = whitespaceStorage[..whitespaceLength];
+            var asciiWhitespace = whitespaceStorage[..whitespaceLength];
 
             var splitFields = new List<ShellValue>(capacity);
             var position = 0;
             if (options.FieldMode == ReadFieldMode.SplitAll)
             {
-                while (TryReadField(ref position, rawWhitespace, out var start, out var end))
+                while (TryReadField(ref position, boundaries, asciiWhitespace, out var start, out var end))
                 {
                     scratch.PrepareListCapacity(splitFields, 1);
                     splitFields.Add(BuildValue(start, end));
@@ -48,12 +57,12 @@ internal static class ReadFieldSplitter
 
             for (var fieldIndex = 0; fieldIndex < fieldCount - 1; fieldIndex++)
             {
-                splitFields.Add(TryReadField(ref position, rawWhitespace, out var start, out var end)
+                splitFields.Add(TryReadField(ref position, boundaries, asciiWhitespace, out var start, out var end)
                     ? BuildValue(start, end)
                     : ShellValue.Empty);
             }
 
-            if (!TryReadField(ref position, rawWhitespace, out var firstStart, out var firstEnd))
+            if (!TryReadField(ref position, boundaries, asciiWhitespace, out var firstStart, out var firstEnd))
             {
                 splitFields.Add(ShellValue.Empty);
             }
@@ -63,12 +72,13 @@ internal static class ReadFieldSplitter
             }
             else
             {
-                splitFields.Add(BuildValue(firstStart, TrimRemainderEnd(firstStart, rawWhitespace)));
+                splitFields.Add(BuildValue(firstStart, TrimRemainderEnd(firstStart, asciiWhitespace)));
             }
 
             return splitFields;
 
-            bool TryReadField(ref int index, ReadOnlySpan<byte> whitespace, out int start, out int end)
+            bool TryReadField(ref int index, ReadOnlySpan<byte> scanBytes, ReadOnlySpan<byte> whitespace,
+                out int start, out int end)
             {
                 if (fieldSeparators.IsEmpty)
                 {
@@ -77,14 +87,16 @@ internal static class ReadFieldSplitter
                     end = index = contentEnd;
                     return start < end;
                 }
-                if (asciiRaw)
+                if (shortAscii)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     // An ASCII separator cannot occur inside a UTF-8 scalar.
                     var bytes = content.Span[..contentEnd];
                     var separators = separatorBytes.Span;
                     start = index + LeadingWhitespace(bytes[index..], whitespace);
-                    var boundary = bytes[start..].IndexOfAny(separators);
+                    var boundary = interpretEscapes
+                        ? FindUnescapedBoundary(bytes[start..], scanBytes)
+                        : bytes[start..].IndexOfAny(separators);
                     if (boundary < 0)
                     {
                         end = index = contentEnd;
@@ -94,7 +106,8 @@ internal static class ReadFieldSplitter
                     end = start + boundary;
                     index = end + LeadingWhitespace(bytes[end..], whitespace);
                     // Adjacent IFS whitespace and one other separator form a single delimiter.
-                    if (whitespace.Length != separators.Length && index < contentEnd && separators.Contains(bytes[index]))
+                    if (whitespace.Length != separators.Length && index < contentEnd
+                        && (!interpretEscapes || bytes[index] != (byte)'\\') && separators.Contains(bytes[index]))
                     {
                         index++;
                         index += LeadingWhitespace(bytes[index..], whitespace);
@@ -156,8 +169,7 @@ internal static class ReadFieldSplitter
                 if (index >= contentEnd)
                     return false;
 
-                var escaped = options.BackslashMode == ReadBackslashMode.InterpretEscapes
-                    && content.Span[index] == (byte)'\\';
+                var escaped = interpretEscapes && content.Span[index] == (byte)'\\';
                 if (escaped && ++index >= contentEnd)
                     return false;
 
@@ -176,6 +188,30 @@ internal static class ReadFieldSplitter
             bool IsIfsWhitespace(ReadCharacter character) =>
                 IsIfsDelimiter(character) && character.Scalar is { } scalar && FieldSeparators.HasWhitespaceSemantics(scalar);
 
+            int FindUnescapedBoundary(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> scanBytes)
+            {
+                const int ScanChunkBytes = 4096;
+                var index = 0;
+                while (index < bytes.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var chunk = bytes.Slice(index, Math.Min(bytes.Length - index, ScanChunkBytes));
+                    var boundary = chunk.IndexOfAny(scanBytes);
+                    if (boundary < 0)
+                    {
+                        index += chunk.Length;
+                        continue;
+                    }
+
+                    index += boundary;
+                    if (bytes[index] != (byte)'\\')
+                        return index;
+                    // Skip the escape and its next byte. UTF-8 continuation bytes cannot be ASCII boundaries.
+                    index += 2;
+                }
+                return -1;
+            }
+
             static int LeadingWhitespace(ReadOnlySpan<byte> remaining, ReadOnlySpan<byte> whitespace)
             {
                 if (whitespace.IsEmpty)
@@ -188,7 +224,7 @@ internal static class ReadFieldSplitter
             {
                 // IFS whitespace is ASCII. Trim from the end so the remainder need not be scanned again.
                 var bytes = content.Span;
-                if (asciiRaw)
+                if (shortAscii && !interpretEscapes)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     return whitespace.IsEmpty ? contentEnd : start + bytes[start..contentEnd].LastIndexOfAnyExcept(whitespace) + 1;
@@ -197,13 +233,11 @@ internal static class ReadFieldSplitter
                 while (end > start)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var scalar = new Rune(bytes[end - 1]);
-                    if (!FieldSeparators.HasWhitespaceSemantics(scalar)
-                        || !IsSeparator(new ReadCharacter(content.Slice(end - 1, 1), scalar, IsEscaped: false)))
+                    if (!IsTrimWhitespace(end - 1, whitespace))
                         break;
 
                     end--;
-                    if (options.BackslashMode == ReadBackslashMode.Preserve)
+                    if (!interpretEscapes)
                         continue;
                     // Trim the escape of removed whitespace, retaining any preceding literal backslashes.
                     var escapeStart = end;
@@ -216,6 +250,16 @@ internal static class ReadFieldSplitter
                         end--;
                 }
                 return end;
+            }
+
+            bool IsTrimWhitespace(int index, ReadOnlySpan<byte> whitespace)
+            {
+                var value = content.Span[index];
+                if (shortAscii)
+                    return whitespace.Contains(value);
+                var scalar = new Rune(value);
+                return FieldSeparators.HasWhitespaceSemantics(scalar)
+                    && IsSeparator(new ReadCharacter(content.Slice(index, 1), scalar, IsEscaped: false));
             }
 
             bool IsIfsNonWhitespace(ReadCharacter character) =>

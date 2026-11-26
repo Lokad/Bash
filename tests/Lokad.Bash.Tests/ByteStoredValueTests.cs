@@ -409,6 +409,8 @@ public sealed class ByteStoredValueTests
     [InlineData("IFS=':'", "read -ra values; printf '<%s>' \"${values[@]}\"", "3A3A613AC3A93A3A2063203A0A", "3C3E3C3E3C613E3CC3A93E3C3E3C2063203E")]
     [InlineData("IFS=$' \\t:'", "read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "20203A093AC3A9203A206320203A090A", "3C3E3C3AC3A9203A206320203A3E")]
     [InlineData("IFS=' :'", "read -r first last; printf '<%s><%s>' \"$first\" \"$last\"", "203AC3A9FF203A2078FE20200A", "3C3E3CC3A9FF203A2078FE3E")]
+    [InlineData("IFS=$' \\t:'", "read first last; printf '<%s><%s>' \"$first\" \"$last\"", "205CC3A95CFF5C3A203A0961395C2020625C20090A", "3CC3A9FF3A3E3C61392020623E")]
+    [InlineData("IFS=$' \\\\\\:'", "read -a values; printf '<%s>' \"${values[@]}\"", "2061205C3A205C5C3A5C003A7A0A", "3C613E3C3A3E3C5C3E3C3E")]
     public async Task ReadWithShortAsciiIfsPreservesRawBytesAndFields(string setup, string command, string inputHex, string outputHex)
     {
         await using var host = new TestHost();
@@ -421,11 +423,12 @@ public sealed class ByteStoredValueTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ReadWithoutRetainedEscapesFitsWithoutAnAsciiMembershipIndex(bool raw)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public void ReadFitsWithoutAnAsciiMembershipIndex(bool raw, bool retainEscape)
     {
-        var governor = new MemoryGovernor(256);
+        var governor = new MemoryGovernor(retainEscape ? 384 : 256);
         using var owner = governor.CreateScope();
         var memory = new EvaluationMemory(owner);
         var variables = Variables.CreateEmpty();
@@ -434,9 +437,13 @@ public sealed class ByteStoredValueTests
         var input = new ReadInputBuffer(content, raw
             ? ReadBackslashMode.Preserve : ReadBackslashMode.InterpretEscapes);
         var firstLine = raw ? " first \t:second:third \t "u8 : " first \t:second:third \t \\"u8;
+        if (retainEscape)
+            firstLine = " f\\irst \t:second:third \t \\"u8;
         Assert.Equal(!raw, input.AppendLine(firstLine, hasTerminator: true, CancellationToken.None));
         if (!raw)
             Assert.False(input.AppendLine([], hasTerminator: true, CancellationToken.None));
+        Assert.Equal(retainEscape ? ReadBackslashMode.InterpretEscapes : ReadBackslashMode.Preserve,
+            input.FieldBackslashMode);
         using (var scratch = new MemoryCapacity(owner, 0))
         {
             var options = new ReadBuiltinOptions(FieldSeparators.FromVariables(variables),
