@@ -467,12 +467,18 @@ refused candidates refund their own storage, and refusal does not retry a winner
 Replacement, unset and settled temporary namespaces retire their references.
 Function calls, descriptive queries and host command payloads retain their selected bindings
 through all consumers and descriptor cleanup; only the final owner refunds a cache.
-The function namespace owns ordered binding slots, one export mask per 64 slots
-and an index of the nonempty masks. Its capacity estimate covers those collections
-and their growth overlap. The export selection borrows bindings in slot order and
-admits its array on first use. Replacing an exported binding updates its selected
-slot directly. Membership changes refund the selection, and the next selection
-walks the occupied export positions in nonempty blocks.
+The function namespace owns ordered binding slots, with occupancy and export
+masks for each block of 64 slots. It indexes blocks containing exported bindings
+and, once it grows past one block, separately indexes blocks containing any
+binding. Its capacity estimate covers these collections and their growth overlap.
+In-process forks reserve their function namespace workspace from the number of
+live bindings. They copy those bindings into compact slots in parent slot order,
+retaining the shared definitions. Forks and namespace retirement use the
+occupancy index to skip vacant blocks in larger namespaces.
+The export selection borrows bindings in slot order and admits its array on
+first use. Replacing an exported binding updates its selected slot directly.
+Changes to export membership refund the selection. The next selection uses
+the export index to visit only exported slots.
 The command admits exact backing for its host payload and retained bindings from
 the selection count before allocating either array. Each invocation retains the
 reached bindings through dispatch and cleanup, including the retained prefix
