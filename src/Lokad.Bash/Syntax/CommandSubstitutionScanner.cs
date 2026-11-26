@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Syntax;
@@ -6,6 +7,33 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Scans command substitution payloads, honoring the delimiter rules of each form.</summary>
 internal static class CommandSubstitutionScanner
 {
+    /// <summary>Writes a backtick word as read, with its lexical continuations removed.</summary>
+    internal static bool TryAppendLegacyWordSpelling(CommandSubstitutionSyntax.Legacy legacy, IByteMemoryWriter output,
+        CancellationToken cancellationToken)
+    {
+        var spelling = legacy.Spelling.AsSpan();
+        var start = 0;
+        if (legacy.RemovedLineContinuations > 0)
+        {
+            for (var index = 1; index + 1 < spelling.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (spelling[index] != (byte)'\\' || !IsLegacyEscape(spelling[index + 1]))
+                    continue;
+                if (spelling[index + 1] == (byte)'\n')
+                {
+                    if (!output.TryAppend(spelling[start..index]))
+                        return false;
+                    start = index + 2;
+                }
+                index++;
+            }
+        }
+        return output.TryAppend(spelling[start..]);
+    }
+
+    private static bool IsLegacyEscape(byte value) => value is (byte)'$' or (byte)'`' or (byte)'\\' or (byte)'\n';
+
     /// <summary>Gets whether a position can begin a command substitution after arithmetic selection.</summary>
     public static bool HasPrefix(ShellSource text, int startIndex)
     {
@@ -227,7 +255,7 @@ internal static class CommandSubstitutionScanner
                     return ShellScanStatus.Complete;
                 }
 
-                if (current == (byte)'\\' && position + 1 < source.Length)
+                if (current == (byte)'\\' && position + 1 < source.Length && IsLegacyEscape(source[position + 1]))
                 {
                     var next = source[position + 1];
                     if (next == (byte)'\n')
@@ -236,12 +264,9 @@ internal static class CommandSubstitutionScanner
                         position += 2;
                         continue;
                     }
-                    if (next is (byte)'$' or (byte)'`' or (byte)'\\')
-                    {
-                        builder.Append(next);
-                        position += 2;
-                        continue;
-                    }
+                    builder.Append(next);
+                    position += 2;
+                    continue;
                 }
 
                 builder.Append(current);

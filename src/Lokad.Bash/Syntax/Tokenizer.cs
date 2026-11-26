@@ -1551,7 +1551,7 @@ internal sealed class Tokenizer
     private FinalBackslash _finalBackslash;
 
     /// <summary>Reads one already-delimited word after generated punctuation changes its quote context.</summary>
-    internal static Word ReadBraceExpandedWord(ShellSource content, MemoryCapacity memory)
+    internal static Word ReadGeneratedWord(ShellSource content, MemoryCapacity memory)
     {
         var tokenizer = new Tokenizer(content, 0,
             new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = LegacySubstitutionOrigin.Temporary }) { _isExpansionOperand = true };

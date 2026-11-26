@@ -10,8 +10,8 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Renders retained syntax and its line layout without evaluation.</summary>
 internal static class FunctionDefinitionFormatter
 {
-    private enum Format { Display, Export, ImportValidation, BraceSource, SubstitutionSource, SubstitutionDisplay, SubstitutionDiagnostic, CaptureCoordinates }
-    private enum CaptureSpelling { Source, Display, Diagnostic }
+    private enum Format { Display, Export, ImportValidation, BraceSource, SubstitutionSource, SubstitutionWord, SubstitutionDisplay, SubstitutionDiagnostic, CaptureCoordinates }
+    private enum CaptureSpelling { Source, Word, Display, Diagnostic }
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppend(FunctionDefinition definition, ByteMemoryBuilder output) =>
@@ -37,8 +37,9 @@ internal static class FunctionDefinitionFormatter
 
     /// <summary>Renders a lexical suffix while borrowing the original word parts.</summary>
     internal static bool TryAppendWordSource(IReadOnlyList<WordPart> parts, int firstPart, IByteMemoryWriter output,
-        IMemoryBudget budget, CancellationToken cancellationToken) =>
-        TryAppend(new Step.WordTail(parts, firstPart), output, budget, Format.BraceSource, cancellationToken);
+        IMemoryBudget budget, CancellationToken cancellationToken, bool normalizeLegacySpelling) =>
+        TryAppend(new Step.WordTail(parts, firstPart), output, budget,
+            normalizeLegacySpelling ? Format.SubstitutionWord : Format.BraceSource, cancellationToken);
 
     /// <summary>Locates commands in Bash's rendered capture body without materializing or parsing it again.</summary>
     internal static IReadOnlyList<Range>? ProjectCaptureLocations(ParsedScript script, MemoryCapacity? memory,
@@ -61,6 +62,11 @@ internal static class FunctionDefinitionFormatter
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
         CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, CaptureSpelling.Source);
 
+    /// <summary>Renders substitution spelling for an expansion that can read part of it as word text.</summary>
+    internal static bool TryAppendSubstitutionWord(
+        CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget budget,
+        CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, CaptureSpelling.Word);
+
     internal static bool TryAppendSubstitutionDisplay(
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
         CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, CaptureSpelling.Diagnostic);
@@ -72,9 +78,11 @@ internal static class FunctionDefinitionFormatter
         IMemoryBudget? budget, CancellationToken cancellationToken, CaptureSpelling style)
     {
         if (substitution is CommandSubstitutionSyntax.Legacy legacy)
-            return output.TryAppend(legacy.Spelling.AsSpan());
+            return style == CaptureSpelling.Word
+                ? CommandSubstitutionScanner.TryAppendLegacyWordSpelling(legacy, output, cancellationToken)
+                : output.TryAppend(legacy.Spelling.AsSpan());
         if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling } adjacent
-            && (style != CaptureSpelling.Source || !adjacent.PreserveAdjacentOpening))
+            && (style is CaptureSpelling.Display or CaptureSpelling.Diagnostic || !adjacent.PreserveAdjacentOpening))
             return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken, style)
                 && output.TryAppend((byte)')');
         if (substitution is CommandSubstitutionSyntax.Parsed parsed && CanRender(parsed, style))
@@ -85,6 +93,7 @@ internal static class FunctionDefinitionFormatter
                 {
                     CaptureSpelling.Display => Format.SubstitutionDisplay,
                     CaptureSpelling.Diagnostic => Format.SubstitutionDiagnostic,
+                    CaptureSpelling.Word => Format.SubstitutionWord,
                     _ => Format.SubstitutionSource
                 }, cancellationToken)
                 && output.TryAppend((byte)')');
@@ -113,7 +122,7 @@ internal static class FunctionDefinitionFormatter
     }
 
     private static bool CanRender(CommandSubstitutionSyntax.Parsed parsed, CaptureSpelling style) =>
-        style == CaptureSpelling.Source ? parsed.CanRenderBody
+        style is CaptureSpelling.Source or CaptureSpelling.Word ? parsed.CanRenderBody
             : parsed.CanDisplayBody || style == CaptureSpelling.Diagnostic && !parsed.PreserveAdjacentOpening && parsed.HasDiagnosticSpelling;
 
     private static bool AppendSpelling(SourceSpelling spelling, int sourceOffset, IByteMemoryWriter output,
@@ -144,9 +153,11 @@ internal static class FunctionDefinitionFormatter
         {
             Format.Display or Format.SubstitutionDisplay or Format.ImportValidation => CaptureSpelling.Display,
             Format.SubstitutionDiagnostic => CaptureSpelling.Diagnostic,
+            Format.SubstitutionWord => CaptureSpelling.Word,
             _ => CaptureSpelling.Source
         };
-        var substitutionSource = format is Format.SubstitutionSource or Format.SubstitutionDisplay or Format.SubstitutionDiagnostic;
+        var substitutionSource = format is Format.SubstitutionSource or Format.SubstitutionWord or Format.SubstitutionDisplay
+            or Format.SubstitutionDiagnostic;
         var displayRedirections = display || substitutionSource;
         var displayHereDocumentDelimiters = display || format is Format.SubstitutionDisplay or Format.SubstitutionDiagnostic;
         var inlineSource = format == Format.BraceSource || substitutionSource;

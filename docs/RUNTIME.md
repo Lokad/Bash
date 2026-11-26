@@ -23,9 +23,10 @@ evaluation respectively.
 
 Tilde selection reads the complete unquoted prefix across adjacent word parts
 before resolving its value. Reached assignment colons open additional prefixes
-in source order. The word walker resumes at the original part and byte offset.
-That offset addresses the existing source-owned arithmetic metadata. The
-source and command owners retain syntax and expanded bytes through consumption.
+in source order. The word walker uses the original part and byte offset to resume
+with the existing source-owned arithmetic metadata. In an ordinary colon tail,
+a slash inside rendered substitution spelling opens a reconstructed suffix.
+The source and command owners retain syntax and expanded bytes through consumption.
 
 Here-document delimiter words keep literal structured spelling and determine
 body expansion from outer quoting. Collection and function serialization share

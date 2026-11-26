@@ -341,6 +341,17 @@ public sealed partial class TildePrefixTests
             yield return new object?[] { "phase-4", "HOME=home; printf before; : > ~\"${missing:?synthetic}\"$(printf x >late); printf after", "6265666F7265", "line 1: missing: synthetic\n", 1, null, "{}", prepared };
             yield return new object?[] { "phase-5", "HOME=home; x=set; printf \"%s\" \"${x:-~$(printf x >effect)}\"; printf tail", "7365747461696C", "", 0, null, "{}", prepared };
             yield return new object?[] { "phase-6", "HOME=home; false && : > ~$(printf x >effect); printf tail", "7461696C", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-rendered-capture", "HOME=/synthetic\nprintf \"<%s>\\n\" ~:$(printf / >flag)\n", "3C2F73796E7468657469633A24287072696E7466202F203E20666C6167293E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-capture-after-slash", "HOME=/synthetic\nprintf \"<%s>\\n\" ~:outer/$(printf / >flag)\n", "3C2F73796E7468657469633A6F757465722F3E0A", "", 0, null, "{\"flag\":\"File:2F\"}", prepared };
+            yield return new object?[] { "colon-quote-before-slash", "HOME=/synthetic\nprintf \"<%s>\\n\" ~:$(printf \"/\")\n", "3C7E3A2F3E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-rendered-whitespace", "HOME=/synthetic\nprintf \"<%s>\\n\" ~:$(printf    A)\n", "3C2F73796E7468657469633A24287072696E74662041293E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-quote-after-slash", "HOME=/synthetic; v=VALUE\nprintf \"<%s>\\n\" ~:$(printf / \"$v\")\n", "3C2F73796E7468657469633A24287072696E7466202F2056414C5545293E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-backtick-continuation", "HOME=/synthetic\nprintf \"<%s>\\n\" ~:`printf \\\n/`\n", "3C2F73796E7468657469633A607072696E7466202F603E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-backtick-tail-error", "HOME=/synthetic; v=V\nprintf \"<%s>\\n\" ~:`printf /`/$v\n", "", "line 2: bad substitution: no closing \"`\" in `/$v\n", 1, null, "{}", prepared };
+            yield return new object?[] { "colon-backtick-quoted-continuation", "HOME=/synthetic\nprintf \"<%s>\\n\" ~:`printf / '\\\nA'`\n", "3C2F73796E7468657469633A607072696E7466202F2041603E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-implicit-array", "HOME=/synthetic\na=(~:$(printf / >flag)); printf \"<%s>\\n\" \"${a[@]}\"\n", "3C2F73796E7468657469633A24287072696E7466202F203E20666C6167293E0A", "", 0, null, "{}", prepared };
+            yield return new object?[] { "colon-indexed-array", "HOME=/synthetic\na=([2]=~:$(printf / >flag)); printf \"<%s>\\n\" \"${a[@]}\"\n", "3C2F73796E7468657469633A3E0A", "", 0, null, "{\"flag\":\"File:2F\"}", prepared };
+            yield return new object?[] { "colon-nested-backtick-continuation", "HOME=/synthetic\nprintf '<%s>\\n' ~:$(printf `printf \\\n/`)\n", "", "line 2: bad substitution: no closing \"`\" in `)\n", 1, null, "{}", prepared };
         }
     }
 }

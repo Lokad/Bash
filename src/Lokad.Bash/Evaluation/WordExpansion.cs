@@ -291,9 +291,15 @@ internal static partial class WordExpansion
         var inheritAssignmentTildes = assigningDefault || assignmentValue && builder.Purpose != ExpansionPurpose.IndexedCompound;
         var position = new WordPosition(firstPart, 0);
         if (tildeExpansion != TildeExpansion.None
-            && TryAppendTildePrefix(word, position, scope, builder,
-                literalColonTail: !assignment.HasValue && !assigningDefault, out var suffix))
-            position = suffix;
+            && TryReadTildePrefix(word, position, scope, out var suffix, out var sign, out var ordinal))
+        {
+            if (!assignment.HasValue && !assigningDefault && suffix.Part < endPart
+                && ((SourceWordPart)word.Parts[suffix.Part]).Source[suffix.Offset] == (byte)':')
+                position = await ExpandTildeColonTailAsync(word, suffix, sign, ordinal, scope, builder, allowWordSplitting)
+                    .ConfigureAwait(false) ?? position;
+            else if (TryAppendTildeValue(sign, ordinal, scope, builder))
+                position = suffix;
+        }
         while (position.Part < endPart && scope.CanExpand)
         {
             var part = word.Parts[position.Part];
@@ -517,92 +523,114 @@ internal static partial class WordExpansion
         }
     }
 
-    private static bool TryAppendTildePrefix(
-        Word word,
-        WordPosition start,
-        ScopedEvaluation scope,
-        ExpandedWordBuilder output,
-        bool literalColonTail,
-        out WordPosition suffix)
+    private static bool TryAppendTildeValue(byte sign, int? ordinal, ScopedEvaluation scope, ExpandedWordBuilder output)
     {
-        suffix = start;
-        if (!TryReadTildePrefix(word, start, scope, out var end, out var sign, out var ordinal))
-            return false;
-
-        suffix = end;
-        // In an ordinary word, Bash carries the unquoted colon tail up to the
-        // slash as literal text. Other consumers can resume at the colon.
-        if (literalColonTail && end.Part < word.Parts.Count
-            && ((SourceWordPart)word.Parts[end.Part]).Source[end.Offset] == (byte)':'
-            && !TryFindLiteralTailEnd(end, out suffix))
-            return false;
-
         if (!TryResolveTildePrefix(sign, ordinal, scope, pathMemory: null, out var value))
             return false;
 
         output.AppendValue(value, globQuoted: true);
-        if (suffix != end)
-        {
-            for (var index = end.Part; index < word.Parts.Count && index <= suffix.Part; index++)
-            {
-                scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                if (word.Parts[index] is SourceWordPart source)
-                {
-                    var begin = index == end.Part ? end.Offset : 0;
-                    var limit = index == suffix.Part ? suffix.Offset : source.Source.Length;
-                    if (begin < limit)
-                        output.AppendSource(source.Source.Slice(begin, limit - begin), globQuoted: true);
-                }
-                else
-                {
-                    var substitution = ((CommandSubstitutionWordPart)word.Parts[index]).Substitution;
-                    if (substitution is CommandSubstitutionSyntax.Legacy legacy)
-                        output.AppendSource(legacy.Spelling, globQuoted: true);
-                    else
-                    {
-                        output.AppendValue(OpenSubstitution, globQuoted: true);
-                        output.AppendSource(substitution.Source, globQuoted: true);
-                        output.AppendValue(CloseSubstitution, globQuoted: true);
-                    }
-                }
-            }
-        }
         return true;
+    }
 
-        bool TryFindLiteralTailEnd(WordPosition tail, out WordPosition stop)
+    private static async Task<WordPosition?> ExpandTildeColonTailAsync(
+        Word word, WordPosition colon, byte sign, int? ordinal, ScopedEvaluation scope,
+        ExpandedWordBuilder output, bool allowWordSplitting)
+    {
+        // Bash inspects the spelling up to the first slash. A quote or escape
+        // in that prefix rejects the tilde before its binding is read.
+        var cancellation = scope.Effects.CancellationToken;
+        var memory = scope.Effects.Memory;
+        var end = new WordPosition(word.Parts.Count, 0);
+        var suffix = end;
+        var firstRenderedPart = end.Part;
+        var slashInCapture = -1;
+        var capturePart = -1;
+        ByteMemoryBuilder? spelling = null;
+        try
         {
-            stop = new WordPosition(word.Parts.Count, 0);
-            for (var index = tail.Part; index < word.Parts.Count; index++)
+            for (var index = colon.Part; index < end.Part; index++)
             {
-                scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                cancellation.ThrowIfCancellationRequested();
                 switch (word.Parts[index])
                 {
                     case SourceWordPart { Kind: WordPartKind.Unquoted } source:
                     {
-                        var begin = index == tail.Part ? tail.Offset : 0;
+                        var begin = index == colon.Part ? colon.Offset : 0;
                         var bytes = source.Source.AsSpan()[begin..];
                         var delimiter = bytes.IndexOfAny("/\\\"'"u8);
-                        if (delimiter < 0)
-                            continue;
-                        stop = new WordPosition(index, begin + delimiter);
-                        return bytes[delimiter] == (byte)'/';
+                        if (delimiter >= 0)
+                        {
+                            if (bytes[delimiter] != (byte)'/')
+                                return null;
+                            suffix = new WordPosition(index, begin + delimiter);
+                            bytes = bytes[..delimiter];
+                        }
+                        spelling?.Append(bytes);
+                        break;
                     }
                     case CommandSubstitutionWordPart { Kind: WordPartKind.CommandSubstitution } command:
-                        var spelling = command.Substitution is CommandSubstitutionSyntax.Legacy legacy
-                            ? legacy.Spelling : command.Substitution.Source;
-                        if (spelling.AsSpan().IndexOfAny("/\\\"'"u8) >= 0)
-                            return false;
+                    {
+                        if (spelling == null)
+                        {
+                            firstRenderedPart = index;
+                            spelling = new ByteMemoryBuilder(0, memory.Budget);
+                        }
+                        var begin = spelling.Length;
+                        if (!FunctionDefinitionFormatter.TryAppendSubstitutionWord(command.Substitution, spelling,
+                                memory.Budget, cancellation))
+                            throw new ByteMemoryBuilder.LimitExceededException();
+                        var bytes = spelling.ToMemory().Span[begin..];
+                        var delimiter = bytes.IndexOfAny("/\\\"'"u8);
+                        if (delimiter >= 0)
+                        {
+                            if (bytes[delimiter] != (byte)'/')
+                                return null;
+                            slashInCapture = begin + delimiter;
+                            capturePart = index;
+                        }
                         break;
+                    }
                     default:
-                        return false;
+                        return null;
                 }
+                if (suffix != end || slashInCapture >= 0)
+                    break;
             }
-            return true;
-        }
-    }
 
-    private static readonly ShellValue OpenSubstitution = ShellValue.FromText("$(");
-    private static readonly ShellValue CloseSubstitution = ShellValue.FromText(")");
+            if (!TryAppendTildeValue(sign, ordinal, scope, output))
+                return null;
+
+            var borrowedEnd = spelling == null ? suffix : new WordPosition(firstRenderedPart, 0);
+            for (var index = colon.Part; index < borrowedEnd.Part || index == borrowedEnd.Part && borrowedEnd.Offset > 0; index++)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                var source = ((SourceWordPart)word.Parts[index]).Source;
+                var begin = index == colon.Part ? colon.Offset : 0;
+                var limit = index == borrowedEnd.Part ? borrowedEnd.Offset : source.Length;
+                output.AppendSource(source.Slice(begin, limit - begin), globQuoted: true);
+            }
+            if (spelling == null)
+                return suffix;
+
+            var prefixLength = slashInCapture >= 0 ? slashInCapture : spelling.Length;
+            output.AppendSource(ShellSource.FromBytes(spelling.ToMemory()[..prefixLength]), globQuoted: true,
+                retainCompactBacking: false);
+            if (slashInCapture < 0)
+                return suffix;
+
+            // The outer word resumes inside the capture spelling. Its closing
+            // delimiter and the following word parts now share this lexical context.
+            if (!FunctionDefinitionFormatter.TryAppendWordSource(word.Parts, capturePart + 1, spelling,
+                    memory.Budget, cancellation, normalizeLegacySpelling: true))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var tail = Tokenizer.ReadGeneratedWord(ShellSource.FromBytes(spelling.ToMemory()[slashInCapture..]), memory.Workspace);
+            await ExpandWordPartsAsync(tail, scope with { ExpansionOrigin = LegacySubstitutionOrigin.Temporary },
+                    output, allowWordSplitting, TildeExpansion.None)
+                .ConfigureAwait(false);
+            return end;
+        }
+        finally { spelling?.Dispose(); }
+    }
 
     private static bool TryReadTildePrefix(
         Word word,
@@ -872,8 +900,9 @@ internal static partial class WordExpansion
                 if (assignment is { } tildes
                     && (start.Part == 0 && index == tildes.EqualsOffset
                         || value == (byte)':' && (start.Part != 0 || index > tildes.EqualsOffset))
-                    && TryAppendTildePrefix(tildes.Word, new WordPosition(start.Part, index + 1),
-                        scope, output, literalColonTail: false, out var suffix))
+                    && TryReadTildePrefix(tildes.Word, new WordPosition(start.Part, index + 1), scope,
+                        out var suffix, out var tildeSign, out var tildeOrdinal)
+                    && TryAppendTildeValue(tildeSign, tildeOrdinal, scope, output))
                 {
                     if (suffix.Part != start.Part)
                         return suffix;
