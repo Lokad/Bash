@@ -999,17 +999,14 @@ public static class Parser
     private static ICommand? ParseIf(Tokenizer tokenizer)
     {
         tokenizer.NextTokenCore();
-        var condition = ParseListUntilKeyword(tokenizer, KeywordThen);
+        var condition = ParseListUntilKeyword(tokenizer, [KeywordThen]);
         if (condition == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordThen, "then"))
             return null;
 
-        var thenBody = ParseListUntilKeyword(
-            tokenizer,
-            KeywordElif,
-            KeywordElse,
-            KeywordFi);
+        ReadOnlySpan<string> bodyKeywords = [KeywordElif, KeywordElse, KeywordFi];
+        var thenBody = ParseListUntilKeyword(tokenizer, bodyKeywords);
         if (thenBody == null)
             return null;
 
@@ -1018,16 +1015,12 @@ public static class Parser
         {
             if (!TryConsumeKeyword(tokenizer, KeywordElif, "elif"))
                 return null;
-            var elifCondition = ParseListUntilKeyword(tokenizer, KeywordThen);
+            var elifCondition = ParseListUntilKeyword(tokenizer, [KeywordThen]);
             if (elifCondition == null)
                 return null;
             if (!TryConsumeKeyword(tokenizer, KeywordThen, "then"))
                 return null;
-            var elifBody = ParseListUntilKeyword(
-                tokenizer,
-                KeywordElif,
-                KeywordElse,
-                KeywordFi);
+            var elifBody = ParseListUntilKeyword(tokenizer, bodyKeywords);
             if (elifBody == null)
                 return null;
             (elifClauses ??= new List<ElifClause>()).Add(new ElifClause(elifCondition, elifBody));
@@ -1038,7 +1031,7 @@ public static class Parser
         {
             if (!TryConsumeKeyword(tokenizer, KeywordElse, "else"))
                 return null;
-            elseBody = ParseListUntilKeyword(tokenizer, KeywordFi);
+            elseBody = ParseListUntilKeyword(tokenizer, [KeywordFi]);
             if (elseBody == null)
                 return null;
         }
@@ -1054,12 +1047,12 @@ public static class Parser
     private static ICommand? ParseConditionLoop(Tokenizer tokenizer, bool until)
     {
         tokenizer.NextTokenCore();
-        var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
+        var condition = ParseListUntilKeyword(tokenizer, [KeywordDo]);
         if (condition == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
             return null;
-        var body = ParseListUntilKeyword(tokenizer, KeywordDone);
+        var body = ParseListUntilKeyword(tokenizer, [KeywordDone]);
         if (body == null)
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
@@ -1163,7 +1156,7 @@ public static class Parser
 
             if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
                 return null;
-            var list = ParseListUntilKeyword(tokenizer, KeywordDone);
+            var list = ParseListUntilKeyword(tokenizer, [KeywordDone]);
             return list != null && TryConsumeKeyword(tokenizer, KeywordDone, "done") ? list : null;
         }
     }
@@ -1935,21 +1928,7 @@ public static class Parser
     private static ReadOnlySpan<byte> GetUnquotedTokenText(Token token) =>
         token.Word is { } word && TryGetPlainUnquotedSource(word, out var source) ? source.AsSpan() : [];
 
-    private static ICommand? ParseListUntilKeyword(Tokenizer tokenizer, string keyword)
-    {
-        return ParseListUntilKeyword(tokenizer, [keyword]);
-    }
-
-    private static ICommand? ParseListUntilKeyword(
-        Tokenizer tokenizer,
-        string keyword1,
-        string keyword2,
-        string keyword3)
-    {
-        return ParseListUntilKeyword(tokenizer, [keyword1, keyword2, keyword3]);
-    }
-
-    private static ICommand? ParseListUntilKeyword(Tokenizer tokenizer, string[] keywords)
+    private static ICommand? ParseListUntilKeyword(Tokenizer tokenizer, ReadOnlySpan<string> keywords)
     {
         var result = ParseListWithTerminatorInfo(tokenizer, null, keywords, null);
         if (result.Command == null)
@@ -2010,7 +1989,7 @@ public static class Parser
     private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
         Tokenizer tokenizer,
         TokenKind? closingKind,
-        string[] endKeywords,
+        ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind) =>
         ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, CommandUnitMetadata.None);
 
@@ -2019,7 +1998,7 @@ public static class Parser
     private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
         Tokenizer tokenizer,
         TokenKind? closingKind,
-        string[] endKeywords,
+        ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata) =>
         ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, unitMetadata, out _);
@@ -2027,7 +2006,7 @@ public static class Parser
     private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
         Tokenizer tokenizer,
         TokenKind? closingKind,
-        string[] endKeywords,
+        ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata,
         out int lastCommandEnd)
@@ -2120,13 +2099,19 @@ public static class Parser
     /// <summary>
     /// Returns true when the next token is one of the end keywords.
     /// </summary>
-    private static bool IsEndKeyword(Tokenizer tokenizer, string[] endKeywords)
+    private static bool IsEndKeyword(Tokenizer tokenizer, ReadOnlySpan<string> endKeywords)
     {
-        if (endKeywords.Length == 0)
+        if (endKeywords.IsEmpty)
             return false;
 
-        var token = tokenizer.PeekTokenCore();
-        return endKeywords.Any(keyword => IsKeyword(token, keyword));
+        var text = GetUnquotedTokenText(tokenizer.PeekTokenCore());
+        if (text.IsEmpty)
+            return false;
+
+        foreach (var keyword in endKeywords)
+            if (AsciiByte.EqualsAscii(text, keyword))
+                return true;
+        return false;
     }
 
     /// <summary>

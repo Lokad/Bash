@@ -78,6 +78,24 @@ public sealed partial class ComplexityRegressionTests
     }
 
     [Fact]
+    public void IfBodyKeywordChecksReuseStorageAcrossCommands()
+    {
+        const int iterations = 6;
+        var body = string.Concat(Enumerable.Repeat(":; ", 128)) + ":;";
+        var ifText = "if :; then " + body + " fi";
+        var groupText = ("{ :; " + body + " }").PadRight(ifText.Length);
+        var conditional = ShellSource.FromText(ifText).Bytes;
+        var group = ShellSource.FromText(groupText).Bytes;
+        Assert.IsType<IfCommand>(Assert.Single(Parser.Parse(conditional).Commands));
+        Assert.IsType<GroupCommand>(Assert.Single(Parser.Parse(group).Commands));
+
+        var conditionalBytes = AllocationAssert.MeasureAllocatedBytes(() => Parser.Parse(conditional), iterations);
+        var groupBytes = AllocationAssert.MeasureAllocatedBytes(() => Parser.Parse(group), iterations);
+        Assert.True(conditionalBytes.Median <= groupBytes.Median + 3 * 1024 * iterations,
+            $"Parsing the if and group allocated {conditionalBytes} and {groupBytes} bytes over {iterations} parses per sample.");
+    }
+
+    [Fact]
     public void CommandDisplayDecodesALargeSinglePartWithoutCopyingItsBytes()
     {
         var argument = new string('a', 64 * 1024);
