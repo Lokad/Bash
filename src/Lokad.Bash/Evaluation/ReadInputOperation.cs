@@ -23,16 +23,18 @@ internal sealed class ReadInputOperation(
 
 internal readonly record struct ReadInputResult(bool Complete, ReadBackslashMode FieldBackslashMode, OperationError? Error);
 
-/// <summary>Reads a bounded batch of raw records into caller-owned storage.</summary>
+/// <summary>Reads a bounded batch of raw records for the caller.</summary>
 internal sealed class ReadRecordBatchOperation(
     TaskCompletionSource<DescriptorRecordBatch> completion,
     FileDescriptor descriptor,
     byte delimiter,
     int limit,
-    IMemoryBudget destinationBudget) : EvaluationOperation<DescriptorRecordBatch>(completion)
+    IMemoryBudget destinationBudget,
+    bool retainImmutable) : EvaluationOperation<DescriptorRecordBatch>(completion)
 {
     public FileDescriptor Descriptor { get; } = descriptor;
     public byte Delimiter { get; } = delimiter;
     public int Limit { get; } = limit;
     public IMemoryBudget DestinationBudget { get; } = destinationBudget;
+    public bool RetainImmutable { get; } = retainImmutable;
 }

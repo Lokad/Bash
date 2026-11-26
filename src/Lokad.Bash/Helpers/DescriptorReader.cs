@@ -50,32 +50,33 @@ public static class DescriptorReader
     public static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         int limit, IMemoryBudget? destinationBudget, CancellationToken cancellationToken)
-        => ReadLinesAsync(source, read, limit, destinationBudget, sourceDestination: null, cancellationToken);
+        => ReadLinesAsync(source, read, limit, destinationBudget, sourceDestination: null, retainImmutable: false, cancellationToken);
 
     internal static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
-        int limit, IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, CancellationToken cancellationToken)
+        int limit, IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, bool retainImmutable,
+        CancellationToken cancellationToken)
         => ReadRecordsCoreAsync(source, read, (byte)'\n', limit, destinationBudget, reusableLine: null, sourceDestination,
-            static batch => batch.AsLines(), cancellationToken);
+            retainImmutable || sourceDestination != null, static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Copies one LF record into caller-owned storage, valid until the next read.</summary>
     public static ValueTask<ReadResult> ReadReusableLineAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         ByteMemoryBuilder output, CancellationToken cancellationToken) =>
         ReadRecordsCoreAsync(source, read, (byte)'\n', 1, destinationBudget: null, output, sourceDestination: null,
-            static batch => batch.AsLines(), cancellationToken);
+            retainImmutable: false, static batch => batch.AsLines(), cancellationToken);
 
-    /// <summary>Retains records and offsets in the supplied destination budget.</summary>
+    /// <summary>Retains offsets and any necessary record copy in the supplied destination budget.</summary>
     internal static ValueTask<DescriptorRecordBatch> ReadRecordBatchAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
-        byte delimiter, int limit, IMemoryBudget destinationBudget, CancellationToken cancellationToken) =>
+        byte delimiter, int limit, IMemoryBudget destinationBudget, bool retainImmutable, CancellationToken cancellationToken) =>
         ReadRecordsCoreAsync(source, read, delimiter, limit, destinationBudget, reusableLine: null, sourceDestination: null,
-            static batch => batch, cancellationToken);
+            retainImmutable, static batch => batch, cancellationToken);
 
     private static async ValueTask<TBatch> ReadRecordsCoreAsync<T, TBatch>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         byte delimiter, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
-        SourceLineDestination? sourceDestination,
+        SourceLineDestination? sourceDestination, bool retainImmutable,
         Func<DescriptorRecordBatch, TBatch> project, CancellationToken cancellationToken)
     {
         if (limit <= 0)
@@ -142,7 +143,7 @@ public static class DescriptorReader
                         destination.Buffer.Append(bytes.Span[..length], exactCapacity: reachedEof);
                         content = destination.Buffer.ToMemory()[start..];
                     }
-                    else if (destinationBudget == null || (sourceDestination != null && buffer.CanRetain))
+                    else if (destinationBudget == null || (retainImmutable && buffer.CanRetain))
                         content = buffer.Retain(length);
                     else
                         content = ScopedMemory.Copy(bytes[..length], destinationBudget);

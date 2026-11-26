@@ -69,7 +69,10 @@ evaluation. Its generated command has a source owner that survives any
 function definition retained from that command. The saved array is charged
 through settlement while the visible array receives individually admitted
 records. Refusal by the array reader or cancellation restores the saved
-binding.
+binding. Skipped records and ordinary bulk input can reuse an immutable host
+batch through immediate consumption. The batch scope owns its offsets and any
+copy needed for a reusable host window. Bulk publication admits its independent
+record values as it stages them.
 
 Charge storage to its owner, including caller collections or caches grown by a child.
 Borrowed input retains its existing charge; substantial copies need their own.

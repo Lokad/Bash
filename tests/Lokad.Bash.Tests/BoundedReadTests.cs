@@ -23,7 +23,7 @@ public sealed class BoundedReadTests
         var result = readFails ? ByteReadResult.Failure(content.Length, error, reachedEoF: false)
             : ByteReadResult.Success(content.Length, reachedEoF: true);
 
-        var batch = await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, destination, CancellationToken.None);
+        var batch = await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, destination, retainImmutable: false, CancellationToken.None);
 
         Assert.Empty(batch.Content.ToArray());
         Assert.Empty(batch.LineStartOffsets);
@@ -42,7 +42,7 @@ public sealed class BoundedReadTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(false, false)]
-    public async Task OnlySourceCanRetainAnImmutableBatchWithAnExplicitDestination(bool sourceRead, bool canRetain)
+    public async Task SourceMayRetainAnImmutableBatchWithAnExplicitDestination(bool sourceRead, bool canRetain)
     {
         const int OffsetBytes = 32 + sizeof(int);
         ReadOnlyMemory<byte> input = new byte[] { 0xff, 13, 10, (byte)'b', 13 };
@@ -54,7 +54,8 @@ public sealed class BoundedReadTests
         var owner = new DescriptorReadBufferOwner(consumed => Assert.Equal(input.Length, consumed), budget);
 
         var batch = sourceRead
-            ? await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, new SourceLineDestination(output, 64), CancellationToken.None)
+            ? await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, new SourceLineDestination(output, 64),
+                retainImmutable: false, CancellationToken.None)
             : await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, CancellationToken.None);
 
         Assert.Equal(reusesHostBytes, owner.WasRetained);

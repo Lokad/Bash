@@ -418,6 +418,73 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData(false, true, "", "")]
+    [InlineData(true, true, "", "")]
+    [InlineData(false, false, "", "")]
+    [InlineData(true, false, "", "")]
+    [InlineData(false, true, "", "-C : -c2")]
+    [InlineData(true, true, "", "-C : -c2")]
+    [InlineData(false, true, "declare -ai arr; ", "")]
+    [InlineData(true, true, "declare -ai arr; ", "")]
+    public async Task ArrayReadersReuseImmutableBytesForSkippedAndOrdinaryRecords(
+        bool customDelimiter, bool canRetain, string setup, string callback)
+    {
+        var reader = customDelimiter ? "readarray -d:" : "mapfile";
+        var separator = customDelimiter ? (byte)':' : (byte)'\n';
+        var stagedConsumer = setup.Length != 0 || callback.Length != 0;
+        byte[] last = stagedConsumer ? [(byte)'7'] : [(byte)'7', 0xff, 13];
+        byte[] input = [(byte)'9', separator, (byte)'5', separator, .. last];
+        var state = new Eval(Parser.Parse($"{setup}{reader} -ts1 -n2 {callback} arr"));
+        var memory = new MemoryGovernor(1024 * 1024);
+        using var evaluation = memory.CreateScope();
+        using var readMemory = memory.CreateScope();
+        var observations = new List<(int Bytes, long Admission)>();
+        var retained = new List<bool>();
+        var offset = 0;
+        var beforeBorrow = 0L;
+        var buffer = new DescriptorReadBufferOwner(Commit, readMemory);
+        var host = new TestOperationVisitor([]) { MemoryBudget = memory, ReadOverride = Read };
+
+        await new Engine().RunAsync(state, host, evaluation, CancellationToken.None);
+
+        const int OffsetBytes = 32 + sizeof(int);
+        var retainCollected = canRetain && !stagedConsumer;
+        Assert.Equal([canRetain, retainCollected], retained);
+        Assert.Equal<(int, long)>([
+            (2, canRetain ? 0 : 2),
+            (input.Length - 2, OffsetBytes + (retainCollected ? 0 : input.Length - 2))
+        ], observations);
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal([ShellValue.FromText("5"), ShellValue.FromBytes(last)], state.IndexedArrays["arr"]);
+        Assert.Equal(input.Length, offset);
+        evaluation.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+
+        void Commit(int consumed)
+        {
+            observations.Add((consumed, memory.ReservedBytes - beforeBorrow));
+            offset += consumed;
+        }
+
+        ValueTask<DescriptorReadBuffer> Read(CancellationToken _)
+        {
+            Assert.True(offset < input.Length);
+            beforeBorrow = memory.ReservedBytes;
+            ReadOnlyMemory<byte> unread = input.AsMemory(offset);
+            var result = ByteReadResult.Success(unread.Length, reachedEoF: true);
+            var scratch = canRetain ? null : unread.ToArray();
+            var borrow = buffer.Borrow(scratch is null ? unread : scratch, result, canRetain);
+            borrow.ReleaseWith(() =>
+            {
+                retained.Add(buffer.WasRetained);
+                if (scratch != null)
+                    Array.Clear(scratch);
+            });
+            return ValueTask.FromResult(borrow);
+        }
+    }
+
+    [Theory]
     [InlineData("arr=(old)", "old")]
     [InlineData("declare -ai arr=(99)", "99")]
     public async Task Evaluation_MapfileBuiltin_RefundsSkippedBatchesBeforeCollecting(string setup, string previous)

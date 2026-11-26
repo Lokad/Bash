@@ -115,6 +115,7 @@ public sealed partial class Evaluation
                 var limit = (int)Math.Min(ReadBatchRecords, skipping ? skip : remaining);
                 // A skipped batch never reaches arithmetic or array publication.
                 var retainedInput = skipping ? null : integerInputMemory;
+                var retainImmutable = skipping || (!integer && !callback.HasValue);
                 var readMemory = (retainedInput ?? Memory.Budget).CreateScope();
                 lastBorrowedOffset = -1;
                 try
@@ -123,7 +124,8 @@ public sealed partial class Evaluation
                     IReadOnlyList<int> recordStarts;
                     if (delimiter == (byte)'\n')
                     {
-                        var batch = await ExecuteReadAsync(input.Handle, limit, readMemory).ConfigureAwait(false);
+                        var batch = await ExecuteReadAsync(input.Handle, limit, readMemory, reusableLine: null,
+                            sourceDestination: null, retainImmutable).ConfigureAwait(false);
                         batch.ThrowIfError();
                         content = batch.Content;
                         recordStarts = batch.LineStartOffsets;
@@ -132,7 +134,7 @@ public sealed partial class Evaluation
                     else
                     {
                         var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        PublishOperation(new ReadRecordBatchOperation(completion, input.Handle, delimiter, limit, readMemory));
+                        PublishOperation(new ReadRecordBatchOperation(completion, input.Handle, delimiter, limit, readMemory, retainImmutable));
                         var batch = await completion.Task.ConfigureAwait(false);
                         CheckCancellation();
                         batch.Result.ThrowIfError();

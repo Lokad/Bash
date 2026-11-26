@@ -293,7 +293,7 @@ public sealed partial class Evaluation
                     try
                     {
                         result = await ExecuteReadAsync(inputBinding.Handle, 1, destinationBudget: null, reusableLine: physicalLine,
-                                sourceDestination: null)
+                                sourceDestination: null, retainImmutable: false)
                             .ConfigureAwait(false);
                     }
                     catch (ByteMemoryBuilder.LimitExceededException)

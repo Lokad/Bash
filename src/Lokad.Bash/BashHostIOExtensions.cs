@@ -213,19 +213,19 @@ public static class BashHostIOExtensions
     /// <summary>Frames retained LF-delimited batches above the host's byte-read contract.</summary>
     public static ValueTask<ReadResult> ReadLinesAsync(this IBashHost host,
         FileDescriptor descriptor, int limit, CancellationToken cancellationToken) =>
-        ReadLinesAsync(host, descriptor, limit, destinationBudget: null, sourceDestination: null, cancellationToken);
+        ReadLinesAsync(host, descriptor, limit, destinationBudget: null, sourceDestination: null, retainImmutable: false, cancellationToken);
 
     /// <summary>Copies LF-delimited batches into the supplied owner, including their line offsets.
     /// All consumers of the returned bytes must finish before that owner is disposed.</summary>
     public static ValueTask<ReadResult> ReadLinesAsync(this IBashHost host,
         FileDescriptor descriptor, int limit, IMemoryBudget destinationBudget, CancellationToken cancellationToken) =>
-        ReadLinesAsync(host, descriptor, limit, destinationBudget, sourceDestination: null, cancellationToken);
+        ReadLinesAsync(host, descriptor, limit, destinationBudget, sourceDestination: null, retainImmutable: false, cancellationToken);
 
     internal static ValueTask<ReadResult> ReadLinesAsync(this IBashHost host, FileDescriptor descriptor, int limit,
-        IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, CancellationToken cancellationToken) =>
+        IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, bool retainImmutable, CancellationToken cancellationToken) =>
         DescriptorReader.ReadLinesAsync((host, descriptor),
             static (state, request, token) => state.host.ReadAsync(state.descriptor, request, token),
-            limit, destinationBudget, sourceDestination, cancellationToken);
+            limit, destinationBudget, sourceDestination, retainImmutable, cancellationToken);
 
     /// <summary>
     /// Reads a single line from a descriptor, preserving the previous single-line behavior.

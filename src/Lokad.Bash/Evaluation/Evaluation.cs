@@ -6284,16 +6284,16 @@ public sealed partial class Evaluation : IFileTester
     /// <param name="fileDescriptor">The host descriptor to read.</param>
     /// <param name="limit">The positive maximum number of records to return.</param>
     public Task<ReadResult> ExecuteReadAsync(FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget) =>
-        ExecuteReadAsync(fileDescriptor, limit, destinationBudget, reusableLine: null, sourceDestination: null);
+        ExecuteReadAsync(fileDescriptor, limit, destinationBudget, reusableLine: null, sourceDestination: null, retainImmutable: false);
 
     private async Task<ReadResult> ExecuteReadAsync(
         FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
-        SourceLineDestination? sourceDestination)
+        SourceLineDestination? sourceDestination, bool retainImmutable)
     {
         CheckCancellation();
         // The host may still be reading into storage owned by the caller after cancellation.
         var result = await ReadLineOperation.AsTask(PublishOperation, fileDescriptor, limit, destinationBudget, reusableLine,
-                sourceDestination)
+                sourceDestination, retainImmutable)
             .ConfigureAwait(false);
         CheckCancellation();
         return result;
@@ -6333,7 +6333,7 @@ public sealed partial class Evaluation : IFileTester
                 var sourceDestination = new SourceLineDestination(output, Parser.MaximumScriptBytes);
                 using var reader = AsyncLineReader.CreateStreaming(
                     (limit, memory, _) => new ValueTask<ReadResult>(
-                        ExecuteReadAsync(descriptor.Value, limit, memory, reusableLine: null, sourceDestination)),
+                        ExecuteReadAsync(descriptor.Value, limit, memory, reusableLine: null, sourceDestination, retainImmutable: false)),
                     _cancellationToken, batchSize: 128, sourceMemory.Budget);
                 input = await reader.TryReadToEndAsync(Parser.MaximumScriptBytes, output).ConfigureAwait(false);
                 readFailed = input is not BoundedReadResult.Complete;
