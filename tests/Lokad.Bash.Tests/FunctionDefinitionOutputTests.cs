@@ -453,6 +453,13 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ printf '%s' `((n=1)); printf hi`; }", "f () \n{ \n    printf '%s' `((n=1)); printf hi`\n}\n")]
     [InlineData("f(){ printf '%s' `\\\n(printf hi)`; }", "f () \n{ \n    printf '%s' `\\\n(printf hi)`\n}\n")]
     [InlineData("f(){ TIMEFORMAT=''; time printf x; }", "f () \n{ \n    TIMEFORMAT='';\n    time printf x\n}\n")]
+    [InlineData("f(){ TIMEFORMAT=tick; time (printf x); }", "f () \n{ \n    TIMEFORMAT=tick;\n    time ( printf x )\n}\n")]
+    [InlineData("f(){ TIMEFORMAT=tick; (time printf x); }", "f () \n{ \n    TIMEFORMAT=tick;\n    ( time printf x )\n}\n")]
+    [InlineData("f(){ TIMEFORMAT=tick; ! time (time printf x) 2>err; }",
+        "f () \n{ \n    TIMEFORMAT=tick;\n    time ! ( time printf x ) 2> err\n}\n")]
+    [InlineData("f(){ TIMEFORMAT=tick; (time (printf x)); }", "f () \n{ \n    TIMEFORMAT=tick;\n    ( time ( printf x ) )\n}\n")]
+    [InlineData("f(){ TIMEFORMAT=tick; printf '<%s>' \"$(time (printf x))\"; }",
+        "f () \n{ \n    TIMEFORMAT=tick;\n    printf '<%s>' \"$(time ( printf x ))\"\n}\n")]
     [InlineData("f(){ printf a; printf b; true && echo c || echo d;\n}", "f () \n{ \n    printf a;\n    printf b;\n    true && echo c || echo d\n}\n")]
     [InlineData("f(){ { echo x; echo y; };\n}", "f () \n{ \n    { \n        echo x;\n        echo y\n    }\n}\n")]
     [InlineData("f(){ (echo x; echo y);\n}", "f () \n{ \n    ( echo x;\n    echo y )\n}\n")]
@@ -581,6 +588,18 @@ public sealed class FunctionDefinitionOutputTests
                         await EndToEndHarness.ReadFileAsync(after.Host, path));
             }
         }
+    }
+
+    [Theory]
+    [InlineData("time -p (time printf x)", "time -p ( time printf x )")]
+    [InlineData("time (time -p printf x)", "time ( time -p printf x )")]
+    public void DefinitionOutput_PreservesEachAuthoredPortableTimingFlag(string command, string expected)
+    {
+        var function = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse("f(){ " + command + "; }").Commands));
+        using var output = new ByteMemoryBuilder(0, new MemoryGovernor(TestMemoryBudget.FunctionFormattingBytes));
+
+        Assert.True(FunctionDefinitionFormatter.TryAppend(function, output));
+        Assert.Equal("f () \n{ \n    " + expected + "\n}\n", Utf8Text.Decode(output.ToMemory()));
     }
 
     [Fact]

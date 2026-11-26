@@ -7,4 +7,8 @@ namespace Lokad.Bash.Syntax;
 /// Subshells execute lists in a separate shell environment.
 /// </remarks>
 /// <param name="Body">The list body executed in the subshell.</param>
-public sealed record SubshellCommand(ICommand Body) : ICommand;
+public sealed record SubshellCommand(ICommand Body) : ICommand
+{
+    // Timing runs inside the subshell, but renders at the authored prefix.
+    internal bool? AuthoredTimingPortable { get; init; }
+}

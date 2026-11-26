@@ -101,7 +101,8 @@ internal static class FunctionDefinitionFormatter
             {
                 switch (first)
                 {
-                    case SubshellCommand or ArithmeticCommand: return true;
+                    case SubshellCommand subshell: return !subshell.AuthoredTimingPortable.HasValue;
+                    case ArithmeticCommand: return true;
                     case RedirectedCommand redirected: first = redirected.Body; break;
                     case ListCommand list: first = list.Left; break;
                     case PipelineCommand { Negated: false } pipe: first = pipe.Left; break;
@@ -473,7 +474,7 @@ internal static class FunctionDefinitionFormatter
                     Push(new Step.Text(arm < 0 || capture || substitutionSource ? "if " : "elif "), new Step.Command(condition, indent), new Step.Text("; then"),
                         new Step.Layout(indent + 4), new Step.Command(thenBody, indent + 4), new Step.Line(indent, Terminate: true));
                     break;
-                case Step.Command(var command, var indent):
+                case Step.Command(var command, var indent) commandStep:
                     if (lines != null && command is not (ListCommand or NegatedCommand))
                         unitFirstCommand ??= command;
                     if (lines != null && locations?.TryGet(command, out var physical) == true)
@@ -538,24 +539,34 @@ internal static class FunctionDefinitionFormatter
                                     new Step.Command(group.Body, indent + 4), new Step.Line(indent, Terminate: false), new Step.Text("}"));
                             break;
                         case SubshellCommand subshell:
+                            if (subshell.AuthoredTimingPortable is { } portable
+                                && !AppendTimingPrefix(portable, commandStep.NegateAfterTiming)) return false;
                             if (capture)
                                 Push(new Step.Command(subshell.Body, indent), new Step.FlushDocuments());
                             else Push(new Step.Text("( "), new Step.Command(subshell.Body, indent),
                                 displayRedirections ? new Step.CompactEnd(" )", Terminate: false) : new Step.Text(" )"));
                             break;
                         case RedirectedCommand redirected:
-                            Push(new Step.Command(redirected.Body, indent),
+                            Push(new Step.Command(redirected.Body, indent) { NegateAfterTiming = commandStep.NegateAfterTiming },
                                 new Step.Redirections(redirected.Redirections, LeadingSpace: true, FirstElement: null));
                             break;
-                        case NegatedCommand { Inner: TimedCommand { Inner: SimpleCommand { IsEmpty: true } } timed }
+                        case NegatedCommand { Inner: TimedCommand { Inner: SimpleCommand { IsEmpty: true }, Spelling: TimingSpelling.AsEvaluated } timed }
                             when captureSpelling == CaptureSpelling.Diagnostic:
-                            if (!Append(timed.Portable ? "time -p ! " : "time ! ")) return false;
+                            if (!AppendTimingPrefix(timed.Portable, negated: true)) return false;
+                            break;
+                        case NegatedCommand negated when negated.Inner is TimedCommand { Spelling: not TimingSpelling.Omitted }
+                            or SubshellCommand { AuthoredTimingPortable: not null }
+                            or RedirectedCommand { Body: SubshellCommand { AuthoredTimingPortable: not null } }:
+                            PushStep(new Step.Command(negated.Inner, indent) { NegateAfterTiming = true });
                             break;
                         case NegatedCommand negated:
                             Push(new Step.Text("! "), new Step.Command(negated.Inner, indent));
                             break;
                         case TimedCommand timed:
-                            Push(new Step.Text(timed.Portable ? "time -p " : "time "), new Step.Command(timed.Inner, indent));
+                            if (timed.Spelling != TimingSpelling.Omitted
+                                && !AppendTimingPrefix(timed.Portable && timed.Spelling != TimingSpelling.Ordinary,
+                                    commandStep.NegateAfterTiming)) return false;
+                            PushStep(new Step.Command(timed.Inner, indent));
                             break;
                         case PipelineCommand pipeline:
                             if (pipeline.Negated && !Append("! ")) return false;
@@ -723,6 +734,9 @@ internal static class FunctionDefinitionFormatter
             }
             return !doubleQuoted || Append("\"");
         }
+
+        bool AppendTimingPrefix(bool portable, bool negated) =>
+            Append(portable ? "time -p " : "time ") && (!negated || Append("! "));
 
         bool Append(string text)
         {
@@ -1063,6 +1077,9 @@ internal static class FunctionDefinitionFormatter
         public sealed record Redirections(IReadOnlyList<Syntax.Redirection> Values, bool LeadingSpace, SimpleCommand? FirstElement) : Step;
         public sealed record Function(FunctionDefinition Value, int Indent, bool Nested) : Step;
         public sealed record IfArm(IfCommand Value, int Arm, int Indent) : Step;
-        public sealed record Command(ICommand Value, int Indent) : Step;
+        public sealed record Command(ICommand Value, int Indent) : Step
+        {
+            public bool NegateAfterTiming { get; init; }
+        }
     }
 }

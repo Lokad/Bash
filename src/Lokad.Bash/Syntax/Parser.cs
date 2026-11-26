@@ -753,18 +753,32 @@ public static class Parser
 
             // A timed subshell prints from inside that subshell, after its redirections
             // and with its final TIMEFORMAT. Other commands print in the enclosing shell.
-            return Time(body);
+            return Time(body, inherited: false);
 
-            ICommand Time(ICommand inner) => inner switch
+            ICommand Time(ICommand inner, bool inherited) => inner switch
             {
-                NegatedCommand negative => negative with { Inner = Time(negative.Inner) },
+                NegatedCommand negative => negative with { Inner = Time(negative.Inner, inherited) },
                 RedirectedCommand { Body: SubshellCommand subshell } redirected =>
-                    redirected with { Body = subshell with { Body = Time(subshell.Body) } },
-                SubshellCommand subshell => subshell with { Body = Time(subshell.Body) },
+                    redirected with { Body = TimeSubshell(subshell, inherited) },
+                SubshellCommand subshell => TimeSubshell(subshell, inherited),
                 // Bash propagates timing flags into a subshell's sole command. Merge them
-                // with an existing timer, but keep separate timers inside lists and groups.
-                TimedCommand existing => existing with { Portable = existing.Portable || portable },
+                // for evaluation while retaining each authored prefix for serialization.
+                TimedCommand { Portable: false } existing when portable => existing with
+                {
+                    Portable = true,
+                    Spelling = existing.Spelling == TimingSpelling.AsEvaluated ? TimingSpelling.Ordinary : existing.Spelling
+                },
+                TimedCommand existing => existing,
                 _ => new TimedCommand(inner, portable)
+                {
+                    Spelling = inherited ? TimingSpelling.Omitted : TimingSpelling.AsEvaluated
+                }
+            };
+
+            SubshellCommand TimeSubshell(SubshellCommand subshell, bool inherited) => subshell with
+            {
+                Body = Time(subshell.Body, inherited: true),
+                AuthoredTimingPortable = inherited ? subshell.AuthoredTimingPortable : portable
             };
         }
     }

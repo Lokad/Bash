@@ -1124,6 +1124,10 @@ separator can distinguish a capture from an arithmetic expansion.
 Definition listings use Bash's spelling for default descriptors in file and
 here-input redirections. Descriptor duplications distinguish literal numbers
 from quoted or expanded target words.
+Timing prefixes keep their authored side of a subshell's parentheses in a
+listing. An authored inner timer keeps its own `-p` spelling. A timed and
+negated command prints `time` or `time -p` before `!`. Timing for a sole
+subshell still runs inside it, with its active descriptors and `TIMEFORMAT`.
 
 `getopts` scans explicit arguments or the current positional parameters one option
 byte at a time, including bundled flags. A colon after an option byte requires an
