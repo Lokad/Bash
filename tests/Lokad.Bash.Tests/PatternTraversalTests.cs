@@ -9,6 +9,43 @@ namespace Lokad.Bash.Tests;
 public sealed class PatternTraversalTests
 {
     [Theory]
+    [InlineData(4095)]
+    [InlineData(4096)]
+    [InlineData(4097)]
+    public void PatternPreparationPreservesActivityAcrossScanBoundaries(int escapeOffset)
+    {
+        var spelling = new byte[escapeOffset + 3];
+        spelling.AsSpan().Fill((byte)'x');
+        spelling[0] = (byte)'\\';
+        spelling[1] = 0xff;
+        "\\*?"u8.CopyTo(spelling.AsSpan(escapeOffset));
+        var activity = new byte[spelling.Length];
+        activity.AsSpan(1).Fill(GlobMask.Active);
+        var mask = new GlobMask(activity);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.True(mask.TryUnescape(ShellValue.FromBytes(spelling), memory, CancellationToken.None,
+                out var value, out var unescapedMask));
+            byte[] expected = [.. spelling.AsSpan(0, escapeOffset), .. "*?"u8];
+            Assert.Equal(expected, value.Bytes.ToArray());
+            Assert.Equal((byte)0, unescapedMask.Memory.Span[0]);
+            Assert.Equal((byte)0, unescapedMask.Memory.Span[escapeOffset]);
+            Assert.Equal(GlobMask.Active, unescapedMask.Memory.Span[^1]);
+
+            var pattern = ShellPattern.FromUnescaped(value, unescapedMask, memory, CancellationToken.None);
+            expected[^1] = (byte)'z';
+            Assert.True(pattern.TryMatchPrefix(expected, shortest: false, CancellationToken.None, out var length));
+            Assert.Equal(expected.Length, length);
+            expected[^2] = (byte)'y';
+            Assert.False(pattern.TryMatchPrefix(expected, shortest: false, CancellationToken.None, out _));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void PatternProjectionPreservesByteActivityAcrossSegments(bool quotedContent)

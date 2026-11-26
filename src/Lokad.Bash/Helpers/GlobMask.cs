@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
@@ -25,16 +26,7 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
         unescapedMask = this;
         var bytes = value.Bytes.Span;
         var activityMask = AsSpan();
-        var firstEscape = -1;
-        for (var index = 0; index < bytes.Length; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (bytes[index] == (byte)'\\' && activityMask[index] == Active)
-            {
-                firstEscape = index;
-                break;
-            }
-        }
+        var firstEscape = activityMask.IndexOfActiveByte(bytes, "\\"u8, cancellationToken);
         if (firstEscape < 0)
             return true;
 
@@ -42,8 +34,10 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
         var content = new byte[bytes.Length];
         var activity = new byte[bytes.Length];
         bytes[..firstEscape].CopyTo(content);
-        for (var index = 0; index < firstEscape; index++)
-            activity[index] = activityMask[index];
+        if (mask.IsEmpty)
+            activity.AsSpan(0, firstEscape).Fill(Active);
+        else
+            mask.Span[..firstEscape].CopyTo(activity);
         var count = firstEscape;
         var escapedQuote = false;
         for (var index = firstEscape; index < bytes.Length; index++)
@@ -82,4 +76,37 @@ public readonly ref struct GlobMaskSpan(ReadOnlySpan<byte> mask)
     private readonly ReadOnlySpan<byte> _mask = mask;
 
     public byte this[int index] => _mask.IsEmpty ? GlobMask.Active : _mask[index];
+
+    internal int IndexOfActiveByte(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> candidates,
+        CancellationToken cancellationToken)
+    {
+        const int ScanBytes = 4096;
+        Debug.Assert(candidates.Length is >= 1 and <= 3);
+        var first = candidates[0];
+        var second = candidates.Length > 1 ? candidates[1] : first;
+        var third = candidates.Length > 2 ? candidates[2] : second;
+        for (var offset = 0; offset < bytes.Length;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = Math.Min(ScanBytes, bytes.Length - offset);
+            var hit = bytes.Slice(offset, length).IndexOfAny(first, second, third);
+            var end = offset + length;
+            if (hit >= 0)
+            {
+                var index = offset + hit;
+                if (this[index] == GlobMask.Active)
+                    return index;
+
+                // A dense quoted chunk uses one scan after its first hit.
+                for (index++; index < end; index++)
+                {
+                    var value = bytes[index];
+                    if ((value == first || value == second || value == third) && _mask[index] == GlobMask.Active)
+                        return index;
+                }
+            }
+            offset = end;
+        }
+        return -1;
+    }
 }

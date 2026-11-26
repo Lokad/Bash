@@ -86,16 +86,8 @@ internal sealed class ShellPattern
         return (value, mask);
     }
 
-    private static bool IsLiteral(ReadOnlySpan<byte> bytes, GlobMaskSpan mask, CancellationToken cancellationToken)
-    {
-        for (var index = 0; index < bytes.Length; index++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (mask[index] == GlobMask.Active && bytes[index] is (byte)'*' or (byte)'?' or (byte)'[')
-                return false;
-        }
-        return true;
-    }
+    private static bool IsLiteral(ReadOnlySpan<byte> bytes, GlobMaskSpan mask, CancellationToken cancellationToken) =>
+        mask.IndexOfActiveByte(bytes, "*?["u8, cancellationToken) < 0;
 
     /// <summary>Selects byte traversal for a glob with malformed pattern or subject bytes.</summary>
     public bool UsesByteCharacters(ReadOnlySpan<byte> text) =>
