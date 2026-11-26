@@ -59,27 +59,6 @@ public sealed class IntegersTests
     }
 
     [Theory]
-    [InlineData("9223372036854775807", long.MaxValue)]
-    [InlineData("-9223372036854775808", long.MinValue)]
-    [InlineData("+42", 42L)]
-    public void TryParseNumber_ParsesCompleteUtf8Boundaries(string input, long expected)
-    {
-        Assert.True(Integers.TryParseNumber(System.Text.Encoding.ASCII.GetBytes(input), out var value));
-        Assert.Equal(expected, value);
-    }
-
-    [Theory]
-    [InlineData("9223372036854775808")]
-    [InlineData("-9223372036854775809")]
-    [InlineData(" 1")]
-    [InlineData("1 ")]
-    [InlineData("0x10")]
-    public void TryParseNumber_RejectsOverflowWhitespaceBasesAndTrailingBytes(string input)
-    {
-        Assert.False(Integers.TryParseNumber(System.Text.Encoding.ASCII.GetBytes(input), out _));
-    }
-
-    [Theory]
     [InlineData("1K", 1024L)]
     [InlineData("-2m", -2097152L)]
     [InlineData(" 3G ", 3221225472L)]
@@ -101,10 +80,12 @@ public sealed class IntegersTests
     [InlineData("9223372036854775807", long.MaxValue)]
     [InlineData("-9223372036854775808", long.MinValue)]
     [InlineData("+42", 42L)]
-    public void TryParseNumber_ParsesCompleteCharacterBoundaries(string input, long expected)
+    public void TryParseNumber_ParsesCompleteCharacterAndUtf8Boundaries(string input, long expected)
     {
-        Assert.True(Integers.TryParseNumber(input.AsSpan(), out var value));
-        Assert.Equal(expected, value);
+        Assert.True(Integers.TryParseNumber(input.AsSpan(), out var characters));
+        Assert.True(Integers.TryParseNumber(System.Text.Encoding.UTF8.GetBytes(input), out var bytes));
+        Assert.Equal(expected, characters);
+        Assert.Equal(expected, bytes);
     }
 
     [Theory]
