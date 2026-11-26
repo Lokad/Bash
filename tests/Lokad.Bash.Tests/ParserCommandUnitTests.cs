@@ -40,25 +40,6 @@ public sealed class ParserCommandUnitTests
         Assert.False(commands.MoveNext());
     }
 
-    [Theory]
-    [InlineData("{ cat <<EOF\nbody")]
-    [InlineData("if true; then\nprintf wrong\n")]
-    [InlineData("for 1 in value; do :")]
-    [InlineData("printf A &&")]
-    public void SharedGrammarFailuresAreReturnedOnceAfterEarlierCompleteUnits(string invalidUnit)
-    {
-        var source = ShellSource.FromText("value=changed\n" + invalidUnit).Bytes;
-        var wholeScriptError = Assert.Throws<SyntaxException>(() => Parser.Parse(source));
-
-        var results = Parser.TryParseCommandUnits(source).ToArray();
-
-        Assert.Equal(2, results.Length);
-        Assert.IsType<SimpleCommand>(Assert.IsType<CommandUnitParseResult.Parsed>(results[0]).Command);
-        var failure = Assert.IsType<CommandUnitParseResult.Failed>(results[1]);
-        Assert.Equal(wholeScriptError.Message, failure.Error.Message);
-        Assert.Equal(wholeScriptError.Offset, failure.Error.Offset);
-    }
-
     [Fact]
     public void LaterUnitErrorsRetainAbsoluteByteOffsetsAndFullScriptValidation()
     {

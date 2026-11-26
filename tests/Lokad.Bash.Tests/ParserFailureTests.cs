@@ -47,7 +47,7 @@ public sealed class ParserFailureTests
             Assert.Equal(Encoding.UTF8.GetCharCount(bytes.AsSpan(0, failure.Offset)), textFailure.Offset);
             var units = Parser.TryParseCommandUnits(bytes).ToArray();
             Assert.Equal(2, units.Length);
-            Assert.IsType<CommandUnitParseResult.Parsed>(units[0]);
+            Assert.IsType<SimpleCommand>(Assert.IsType<CommandUnitParseResult.Parsed>(units[0]).Command);
             Assert.Equal(failure, Assert.IsType<CommandUnitParseResult.Failed>(units[1]).Error);
 
             Assert.Null(ShellCommandParser.TryParse(source));
