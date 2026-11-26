@@ -142,16 +142,22 @@ public sealed class ShellQuotedOutputTests
         }
     }
 
-    [Fact]
-    public void LiteralSingleQuotesPreserveTheWrittenPrefixAtEveryLimit()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LiteralSingleQuotesPreserveTheWrittenPrefixAtEveryLimit(bool includeApostrophes)
     {
-        byte[] input = [0xff, (byte)'x', (byte)'\'', (byte)'\'', 0, (byte)'\n', (byte)'y'];
+        ReadOnlySpan<byte> apostrophes = includeApostrophes ? "''"u8 : [];
+        byte[] input = [0xff, (byte)'x', .. apostrophes, 0, (byte)'\n', (byte)'y'];
+        byte[][] escaped = includeApostrophes ? ["'\\''"u8.ToArray(), "'\\''"u8.ToArray()] : [];
         byte[][] atoms =
         [
-            "'"u8.ToArray(), [0xff], "x"u8.ToArray(), "'\\''"u8.ToArray(), "'\\''"u8.ToArray(),
+            "'"u8.ToArray(), [0xff], "x"u8.ToArray(), .. escaped,
             [0], "\n"u8.ToArray(), "y"u8.ToArray(), "'"u8.ToArray(),
         ];
         AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input));
+        var length = ShellArgumentEscaping.GetLiteralSingleQuotedLength(input);
+        AssertPrefixes(atoms, output => ShellArgumentEscaping.TryAppendLiteralSingleQuoted(output, input, length));
     }
 
     [Fact]

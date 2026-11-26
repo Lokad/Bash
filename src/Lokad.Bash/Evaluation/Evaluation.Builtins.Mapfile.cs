@@ -379,7 +379,8 @@ public sealed partial class Evaluation
         Span<byte> indexText = stackalloc byte[11];
         if (!Utf8Formatter.TryFormat(index, indexText, out var digits))
             throw new InvalidOperationException("The callback index did not fit.");
-        var length = action.Bytes.Length + 2L + digits + ShellArgumentEscaping.GetLiteralSingleQuotedLength(record.Bytes.Span);
+        var quotedLength = ShellArgumentEscaping.GetLiteralSingleQuotedLength(record.Bytes.Span);
+        var length = action.Bytes.Length + 2L + digits + quotedLength;
         if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
 
@@ -390,7 +391,7 @@ public sealed partial class Evaluation
                 sourceMemory.OwnDiagnosticPath(path, prefixCurrentDirectory: false);
             using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
             builder.Append(action.Bytes).Append((byte)' ').Append(indexText[..digits]).Append((byte)' ');
-            if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(builder, record.Bytes.Span))
+            if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(builder, record.Bytes.Span, quotedLength))
                 throw new ByteMemoryBuilder.LimitExceededException();
             // Bash evaluates the callback with errexit active even if the mapfile status is tested.
             var context = scope.Context with { SourceMemory = sourceMemory, ErrexitIgnored = false };

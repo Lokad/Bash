@@ -136,7 +136,7 @@ public sealed partial class Evaluation
                 throw new ByteMemoryBuilder.LimitExceededException();
             Memory.Charge(checked(4L * length));
             var quoted = BoundedByteMemoryBuilder.CreateUnaccounted((int)length, (int)length);
-            if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(quoted, value.Bytes.Span))
+            if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(quoted, value.Bytes.Span, length))
                 throw new InvalidOperationException("Precomputed literal quoting length was too small.");
             return ShellValue.FromBytes(quoted.ToMemory());
         }

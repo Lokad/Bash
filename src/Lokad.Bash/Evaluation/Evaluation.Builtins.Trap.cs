@@ -156,7 +156,7 @@ public sealed partial class Evaluation
                 throw new ByteMemoryBuilder.LimitExceededException();
             using var output = new BoundedByteMemoryBuilder((int)length, (int)length, Memory.Budget);
             if (!output.TryAppend("trap -- "u8)
-                || !ShellArgumentEscaping.TryAppendBashSingleQuoted(output, handlerBytes)
+                || !ShellArgumentEscaping.TryAppendBashSingleQuoted(output, handlerBytes, quotedLength)
                 || !output.TryAppend((byte)' ')
                 || !output.TryAppend(name)
                 || !output.TryAppend((byte)'\n'))

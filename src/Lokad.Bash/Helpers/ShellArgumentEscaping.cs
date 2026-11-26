@@ -289,11 +289,21 @@ public static class ShellArgumentEscaping
         literal is [(byte)'\''] ? 2 : GetLiteralSingleQuotedLength(literal);
 
     internal static bool TryAppendBashSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal) =>
-        literal is [(byte)'\''] ? target.TryAppend("\\'"u8) : TryAppendLiteralSingleQuoted(target, literal);
+        TryAppendBashSingleQuoted(target, literal, quotedLength: null);
+
+    internal static bool TryAppendBashSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal, long? quotedLength) =>
+        literal is [(byte)'\''] ? target.TryAppend("\\'"u8) : TryAppendLiteralSingleQuoted(target, literal, quotedLength);
 
     /// <summary>Quotes literal bytes without introducing ANSI-C syntax; false leaves an incomplete suffix.</summary>
     public static bool TryAppendLiteralSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal) =>
-        target.TryAppend((byte)'\'') && TryAppendSingleQuotedContent(target, literal) && target.TryAppend((byte)'\'');
+        TryAppendLiteralSingleQuoted(target, literal, quotedLength: null);
+
+    /// <summary>Uses the measured length of this literal to skip the escape search when no apostrophes were counted.</summary>
+    internal static bool TryAppendLiteralSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal, long? quotedLength) =>
+        target.TryAppend((byte)'\'')
+        && (quotedLength == 2L + literal.Length
+            ? AppendLiteralRun(target, literal) : TryAppendSingleQuotedContent(target, literal))
+        && target.TryAppend((byte)'\'');
 
     /// <summary>Appends a literal fragment inside an open single-quoted word.</summary>
     internal static bool TryAppendSingleQuotedContent(IByteMemoryWriter target, ReadOnlySpan<byte> literal)
