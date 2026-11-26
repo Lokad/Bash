@@ -953,13 +953,14 @@ public class EngineTests
     }
 
     [Fact]
-    public async Task RunPipelineEvaluations_AwaitsEndpointCleanupToCompletion()
+    public async Task RunPipelineEvaluations_PublishesOrderedStatusesAfterEndpointCleanup()
     {
         var descriptor = new FileDescriptor(10);
-        var operation = new RunPipelineEvaluations(
-            new TaskCompletionSource<IReadOnlyList<int>>(TaskCreationOptions.RunContinuationsAsynchronously),
+        var result = new TaskCompletionSource<IReadOnlyList<int>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = new RunPipelineEvaluations(result,
             [
-                new PipelineEvaluationStage(new Eval(Parser.Parse(":")), [descriptor]),
+                new PipelineEvaluationStage(new Eval(Parser.Parse("exit 7")), [descriptor]),
+                new PipelineEvaluationStage(new Eval(Parser.Parse("exit 3")), []),
                 new PipelineEvaluationStage(new Eval(Parser.Parse(":")), [])
             ]);
         var closeCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -967,13 +968,19 @@ public class EngineTests
         visitor.EnqueueCloseDescriptorTask(closeCompletion.Task);
 
         var dispatch = ShellOperationDispatcher.DispatchAsync(operation, visitor, CancellationToken.None);
-        await Task.Yield();
-
-        Assert.Contains(descriptor, visitor.ClosedDescriptors);
-        Assert.False(dispatch.IsCompleted);
-
-        closeCompletion.SetResult();
+        try
+        {
+            await Task.Yield();
+            Assert.Contains(descriptor, visitor.ClosedDescriptors);
+            Assert.False(dispatch.IsCompleted);
+            Assert.False(result.Task.IsCompleted);
+        }
+        finally
+        {
+            closeCompletion.SetResult();
+        }
         await dispatch;
+        Assert.Equal([7, 3, 0], await result.Task);
     }
 
     [Fact]

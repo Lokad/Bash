@@ -253,7 +253,8 @@ internal static class ShellOperationDispatcher
 
             try
             {
-                return await Task.WhenAll(tasks).ConfigureAwait(false);
+                // The nongeneric join avoids retaining a second vector of stage tasks.
+                await Task.WhenAll((Task[])tasks).ConfigureAwait(false);
             }
             catch
             {
@@ -264,6 +265,11 @@ internal static class ShellOperationDispatcher
                 cancellationToken.ThrowIfCancellationRequested();
                 throw;
             }
+
+            var statuses = new int[tasks.Length];
+            for (var index = 0; index < statuses.Length; index++)
+                statuses[index] = tasks[index].Result;
+            return statuses;
 
             void StopStages(Exception failure)
             {
