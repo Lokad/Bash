@@ -137,6 +137,20 @@ public sealed class PrintfFieldSizeTests
         bool prepared, string name, string source, int status, string outputHex, string diagnosticHex) =>
         CheckAsync(prepared, name, source, status, outputHex, diagnosticHex);
 
+    [Theory]
+    [InlineData("printf '<%.*Q:%s>' 3 'a b z' next", """<a\ b\ z:next>""", 0, "")]
+    [InlineData("printf '<%.*Q><%.0Q>' 0 'a b z' 'a b z'", """<a\ b\ z><''>""", 0, "")]
+    [InlineData("printf '<%*.*Q><%*.*Q>' -8 3 'a b z' 8 3 'a b z'", """<a\ b\ z >< a\ b\ z>""", 0, "")]
+    [InlineData("printf '<%.*Q>' bad 'a b z'", """<a\ b\ z>""", 1, "line 1: printf: bad: invalid number\n")]
+    public async Task QuoteInputPrecisionConsumesTheStarWithoutTruncating(
+        string source, string output, int status, string diagnostic)
+    {
+        var outputHex = Convert.ToHexString(ShellValue.FromText(output).Bytes.Span);
+        var diagnosticHex = Convert.ToHexString(ShellValue.FromText(diagnostic).Bytes.Span);
+        await CheckAsync(false, source, source, status, outputHex, diagnosticHex);
+        await CheckAsync(true, source, source, status, outputHex, diagnosticHex);
+    }
+
     // GNU Bash 5.2.21 Linux, LC_ALL=C. The diagnostic executable prefix is omitted.
     private static readonly object[][] PrecisionOverflowSamples =
     [

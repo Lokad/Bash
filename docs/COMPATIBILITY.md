@@ -1592,8 +1592,11 @@ reached source location and stderr mapping.
 still contribute to `%n` and the output length limit. Later conversions
 retain their normal diagnostic and count-assignment effects.
 `%q` and `%Q` use ANSI-C spelling for nonprinting or malformed bytes.
-Their backslash form protects commas so the quoted result can be reused in a
-brace list. Their `#` flag selects the Bash 5.3 single-quote form for printable
+`%q` limits the quoted output by its precision. For `%Q`, literal precision
+limits the operand before quoting, and `*` precision consumes and validates
+its argument without limiting the operand.
+The backslash form protects commas so the quoted result can be reused in a
+brace list. The `#` flag selects the Bash 5.3 single-quote form for printable
 bytes.
 
 `unset` follows the same help status and output rules. Leading option groups
@@ -1647,8 +1650,9 @@ precision dot produces a canonicalized format spelling for ordinary
 conversions. The operand is consumed and numeric operand diagnostics still
 apply. For Bash-specific text conversions that spelling selects zero
 precision. Their literal width and positive literal precision accumulate with
-signed 64-bit wrapping. `%Q` uses a signed 32-bit precision accumulator before
-quoting. The minimum dynamic width leaves empty formatted values unpadded.
+signed 64-bit wrapping. `%Q` uses a signed 32-bit literal precision
+accumulator before quoting. The minimum dynamic width leaves empty formatted
+values unpadded.
 Padding for nonempty values is subject to the ordinary output representation
 and budget limits.
 

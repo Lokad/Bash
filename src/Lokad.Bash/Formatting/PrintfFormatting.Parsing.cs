@@ -184,6 +184,7 @@ public static partial class PrintfFormatting
                     literalWidthOverflow = true;
 
                 int? precision = null;
+                int? dynamicPrecision = null;
                 long literalPrecision = 0;
                 var literalPrecisionOverflow = false;
                 ReadOnlyMemory<byte> signedLiteralPrecision = default;
@@ -193,9 +194,7 @@ public static partial class PrintfFormatting
                     if (index < format.Length && (char)format.Span[index] == '*')
                     {
                         index++;
-                        var dynamicPrecision = ReadDynamicField();
-                        if (dynamicPrecision >= 0)
-                            precision = dynamicPrecision;
+                        dynamicPrecision = ReadDynamicField();
                     }
                     else
                     {
@@ -256,6 +255,10 @@ public static partial class PrintfFormatting
                     index += 2;
                     conversion = 'T';
                 }
+
+                // %Q consumes the '*' argument and uses literal precision to limit the operand.
+                if (dynamicPrecision is >= 0 && conversion != 'Q')
+                    precision = dynamicPrecision;
 
                 var suppressOutput = (literalWidthOverflow || literalPrecisionOverflow) && UsesSystemConversion(conversion);
                 if (literalWidthOverflow && !suppressOutput)
