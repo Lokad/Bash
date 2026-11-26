@@ -104,15 +104,15 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_Assignment_AssociativeCompoundKeyWithMissingValue()
+    public async Task AssociativeCompoundKeyWithOmittedValueExpandsAsPresentAndEmpty()
     {
-        // This test verifies associative compound assignments handle missing values as empty.
-        // The script assigns map=(alpha) and echoes map[alpha], which must produce an empty line.
-        // If missing values are rejected, the exit code or output would differ.
-        var script = @"declare -A map; map=(alpha); echo ${map[alpha]}";
+        var script = """
+            declare -A map; map=(alpha)
+            printf '<%s>' "${map[alpha]-missing}" "${map[beta]-missing}"
+            """;
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("\n", result.StdOut);
+        Assert.Equal("<><missing>", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }

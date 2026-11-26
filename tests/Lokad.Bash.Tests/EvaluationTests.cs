@@ -2253,17 +2253,16 @@ public partial class EvaluationTests
     }
 
     [Fact]
-    public async Task Evaluation_Assignment_AssociativeCompoundKeyWithMissingValue()
+    public async Task Evaluation_Assignment_StoresOddAssociativeKeyWithEmptyValue()
     {
-        var script = Parser.Parse("declare -A map; map=(alpha); echo ${map[alpha]}");
+        var script = Parser.Parse("declare -A map; map=(alpha)");
         var state = new Eval(script);
-
-        var append = await NextWriteAsync(state);
-        Assert.Equal("\n", Text(append.Content));
-        append.SetResult(DescriptorWriteResult.Open);
 
         Assert.Null(await NextStepAsync(state));
         Assert.Equal(0, state.LastExitCode);
+        var entry = Assert.Single(state.AssociativeArrays["map"]);
+        Assert.Equal(ShellValue.FromText("alpha"), entry.Key);
+        Assert.Equal(ShellValue.Empty, entry.Value);
     }
 
     [Fact]
