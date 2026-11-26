@@ -1,6 +1,7 @@
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tree;
 namespace Lokad.Bash.Tests.EndToEnd;
 
@@ -118,6 +119,54 @@ public sealed class ArithmeticErrorTestsEndToEnd
             Assert.Empty(host.StandardOutput.TextContent);
             Assert.Equal(expectedError, host.StandardError.TextContent);
         }
+    }
+
+    [Theory]
+    [InlineData("v=0\nprintf \"%s\" \"$((++v + # note))\"\nprintf \"<%s:%s>\" \"$?\" \"$v\"",
+        0, "<1:0>", "line 2: bad substitution: no closing `)' in \"$((++v + # note))\"\n")]
+    [InlineData("present=kept; v=0\nprintf \"<%s>\" $((v=7))\"$((1 # note))\"\nprintf \"[after:%s:%s]\" \"$?\" \"$v\"",
+        0, "[after:1:7]", "line 2: bad substitution: no closing `)' in $((v=7))\"$((1 # note))\"\n")]
+    [InlineData("present=kept; v=0\nprintf \"<%s>\" \"${present:-$((1 # note))}\"\nprintf \"[after:%s:%s]\" \"$?\" \"$v\"",
+        0, "[after:1:0]", "line 2: bad substitution: no closing `)' in \"${present:-$((1 # note))}\"\n")]
+    [InlineData("present=kept\nprintf \"<%s>\" \"${present:-$(printf %s \"$((2 + $((1 # note))))\")}\"\nprintf \"[after:%s]\" \"$?\"",
+        0, "<kept>[after:0]", "")]
+    [InlineData("present=kept; v=0\nprintf \"<%s>\" \"$((1 # note) )\"\nprintf \"[after:%s:%s]\" \"$?\" \"$v\"",
+        0, "[after:1:0]", "line 2: bad substitution: no closing `)' in \"$((1 # note) )\"\n")]
+    [InlineData("present=kept\nprintf \"<%s>\" \"$((1 # hidden ))\n2 ))\"\nprintf \"[after:%s]\" \"$?\"",
+        0, "<>[after:0]", "line 2: 1: command not found\nline 3: 2: command not found\n")]
+    [InlineData("{ IFS= read -r value; printf \"<%s>\" \"$value\"; } <<DOC\n$((1 # note))\nDOC\nprintf \"<%s>\" \"$?\"",
+        0, "<1>", "line 3: bad substitution: no closing `)' in $((1 # note))\n\n")]
+    [InlineData("set -e\ntrap 'printf \"exit:%s\" \"$?\"' EXIT\nprintf \"%s\" \"$((1 # note))\"\nprintf later",
+        1, "exit:1", "line 3: bad substitution: no closing `)' in \"$((1 # note))\"\n")]
+    public async Task ModernArithmeticCommentDelimitersAreCheckedBeforeOperandExpansion(
+        string script, int expectedStatus, string expectedOutput, string expectedError)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(expectedStatus, status);
+            Assert.Equal(expectedOutput, host.StandardOutput.TextContent);
+            Assert.Equal(expectedError, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task UnquotedAdjacentCommentPreservesTheScriptUnitBoundary()
+    {
+        const string script = "printf '<%s>' $((1 + # ) )\n2))\nprintf '[done:%s]' \"$?\"\n";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal("line 1: bad substitution: no closing `)' in $((1 + # ) )\n"
+            + "syntax error near unexpected token `)'\n`2))'\n", host.StandardError.TextContent);
+        Assert.Throws<SyntaxException>(() => Parser.Parse(script));
     }
 
     [Fact]

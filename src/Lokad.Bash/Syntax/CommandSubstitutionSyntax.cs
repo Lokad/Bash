@@ -33,7 +33,10 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
     }
 
     /// <summary>Balanced adjacent subshell spelling to parse in complete units when reached.</summary>
-    internal sealed record AdjacentSubshell(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText);
+    internal sealed record AdjacentSubshell(ShellSource SourceText) : CommandSubstitutionSyntax(SourceText)
+    {
+        internal bool MissingReachedParenthesis { get; init; }
+    }
 }
 
 /// <summary>Known syntax failures when Bash rereads the spelling of a parsed substitution.</summary>

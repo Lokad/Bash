@@ -169,6 +169,11 @@ parenthesized substitution's rendered spelling. Reached expansion reports the
 failure before setting up capture descriptors. Prepared top-level lists retain
 complete command-unit boundaries. Both execution paths use the same recovery
 policy and publish the failure status before resuming the next unit.
+For modern arithmetic expansions, the reached word reader checks parentheses
+with comment handling before expanding the arithmetic operand. A missing
+closer uses the word-syntax failure path. Effects from earlier word parts
+remain visible. When the reached delimiter selects an adjacent subshell, the
+existing command substitution path reads and executes its body.
 
 Printf retains byte numeric operands through prefix validation, range classification
 and diagnostics. Integer accumulation stays bounded after overflow while validity

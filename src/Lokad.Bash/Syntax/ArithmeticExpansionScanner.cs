@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Syntax;
 
@@ -145,6 +147,92 @@ internal static class ArithmeticExpansionScanner
             captureExpression: false, form: ArithmeticForm.AdjacentSubshell, trackRenderedLines: false,
             trackIncompleteDelimiter: false) == ShellScanStatus.Complete;
 
+    // The reached word reader extracts the outer pair before choosing arithmetic.
+    internal static ShellScanStatus ScanReachedParentheses(ShellScanContext context, ShellSource text, int startIndex,
+        out int endIndex, out bool containsCommandSubstitution, out int renderedLineAdjustment, out ParserFailure? error) =>
+        ScanCore(context, text, startIndex, out endIndex, out _, out containsCommandSubstitution, out _, out _,
+            out renderedLineAdjustment, out error, captureExpression: false, form: ArithmeticForm.AdjacentSubshell,
+            trackRenderedLines: false, trackIncompleteDelimiter: true);
+
+    internal static bool HasPossibleExpansionComment(ReadOnlySpan<byte> source)
+    {
+        while (source.IndexOf((byte)'#') is >= 0 and var hash)
+        {
+            if (hash > 0 && source[hash - 1] is (byte)' ' or (byte)'\t' or (byte)'\n')
+                return true;
+            source = source[(hash + 1)..];
+        }
+        return false;
+    }
+
+    internal readonly record struct ReachedParentheses(int End, CommandSubstitutionSyntax.AdjacentSubshell? Subshell, bool Missing);
+
+    internal static ReachedParentheses ReadReachedArithmeticParentheses(ShellSource text, int start, int authoredEnd,
+        MemoryCapacity? memory)
+    {
+        if (!HasPossibleExpansionComment(text.AsSpan(start, authoredEnd - start + 1)))
+            return new ReachedParentheses(authoredEnd, null, false);
+        return RescanReachedArithmeticParentheses(text, start, authoredEnd, memory);
+    }
+
+    internal static bool TrySelectCommentedAdjacentSubshell(ShellSource text, int start, int? commandEnd, bool quoted,
+        MemoryCapacity? memory, out int end,
+        [NotNullWhen(true)] out CommandSubstitutionSyntax.AdjacentSubshell? substitution)
+    {
+        end = start;
+        substitution = null;
+        if (!ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), start, "$((", out _))
+            return false;
+        if (commandEnd is int completeEnd
+            && !HasPossibleExpansionComment(text.AsSpan(start, completeEnd - start + 1)))
+            return false;
+
+        var context = new ShellScanContext { SyntaxMemory = memory };
+        if (!TryScanAdjacentSubshell(context, text, start, out var authoredEnd)
+            || !HasPossibleExpansionComment(text.AsSpan(start, authoredEnd - start + 1)))
+            return false;
+
+        // Only the enclosing double-quoted word can carry a later closer here.
+        var limit = authoredEnd + 1;
+        if (quoted)
+        {
+            while (limit < text.Length && text[limit] != (byte)'"')
+            {
+                if (text[limit] == (byte)'\\' && limit + 1 < text.Length)
+                    limit++;
+                limit++;
+            }
+        }
+        var reached = RescanReachedArithmeticParentheses(text[..limit], start, authoredEnd, memory);
+        if (!reached.Missing && reached.Subshell == null)
+            return false;
+
+        end = reached.End;
+        substitution = reached.Subshell ?? ReadAdjacentBody(text, start, end, memory) with { MissingReachedParenthesis = true };
+        return true;
+    }
+
+    private static ReachedParentheses RescanReachedArithmeticParentheses(ShellSource text, int start, int authoredEnd,
+        MemoryCapacity? memory)
+    {
+        var context = new ShellScanContext { SyntaxMemory = memory, ReadArithmeticExpansionComments = true };
+        var status = ScanReachedParentheses(context, text, start, out var reachedEnd, out _, out _, out _);
+        if (context.MissingReachedArithmeticParenthesis)
+            return new ReachedParentheses(authoredEnd, null, true);
+        if (status == ShellScanStatus.Complete && reachedEnd != authoredEnd)
+            return new ReachedParentheses(reachedEnd, ReadAdjacentBody(text, start, reachedEnd, memory), false);
+        return new ReachedParentheses(authoredEnd, null, false);
+    }
+
+    private static CommandSubstitutionSyntax.AdjacentSubshell ReadAdjacentBody(ShellSource text, int start, int end,
+        MemoryCapacity? memory)
+    {
+        _ = ShellSourceCursor.TryMatchLogicalText(text.AsSpan(), start, "$(", out var bodyStart);
+        var context = new ShellScanContext { SyntaxMemory = memory };
+        var body = ShellSourceCursor.RemoveLineContinuations(context, text.Slice(bodyStart, end - bodyStart));
+        return new CommandSubstitutionSyntax.AdjacentSubshell(body);
+    }
+
     private static ParserFailure? ReadPartialCommandCloser(ShellScanContext context, ShellSource text,
         int expressionStart, int closer, bool forHeader, ref int endIndex)
     {
@@ -236,12 +324,19 @@ internal static class ArithmeticExpansionScanner
             var opening = bracketed ? (byte)'[' : (byte)'(';
             var closing = bracketed ? (byte)']' : (byte)')';
             var depth = adjacentSubshell ? 1 : 0;
+            var readComments = adjacentSubshell && context.ReadArithmeticExpansionComments;
+            var sawComment = false;
             while (!cursor.IsAtEnd)
             {
                 if (cursor.TrySkipReadAheadBodies())
                     continue;
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
+                if (readComments && cursor.TrySkipArithmeticExpansionComment())
+                {
+                    sawComment = true;
+                    continue;
+                }
 
                 var nestedResult = cursor.SkipNestedExpansion(isCommand
                     ? BracedParameterRecognition.DoubleQuotedOnly
@@ -357,6 +452,7 @@ internal static class ArithmeticExpansionScanner
 
             if (isCommand || trackIncompleteDelimiter)
                 error = ReadIncomplete();
+            context.MissingReachedArithmeticParenthesis |= sawComment;
             return ShellScanStatus.Incomplete;
 
             ParserFailure ReadIncomplete() => new(

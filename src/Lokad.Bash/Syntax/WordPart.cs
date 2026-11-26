@@ -74,8 +74,9 @@ public sealed class SourceWordPart : WordPart
     internal IReadOnlyList<SpellingCapture>? SpellingCaptures { get; init; }
     internal int SourceOffset { get; }
 
-    /// <summary>The selected lexical span and its operand. A missing operand fails if reached.</summary>
-    internal readonly record struct ArithmeticExpansion(int End, ArithmeticSource? Operand, bool Bracketed);
+    /// <summary>The selected lexical span and its reached arithmetic or adjacent subshell.</summary>
+    internal readonly record struct ArithmeticExpansion(int End, int RequiredEnd, ArithmeticSource? Operand, bool Bracketed,
+        CommandSubstitutionSyntax.AdjacentSubshell? Subshell);
     internal SourceWordPart(WordPartKind kind, ShellSource source, MemoryCapacity? memory) : base(kind)
     {
         Source = source;
@@ -113,9 +114,9 @@ public sealed class SourceWordPart : WordPart
     internal bool TryGetArithmetic(int start, out ArithmeticExpansion expansion)
     {
         if (_arithmetic.TryGetValue(checked(start + SourceOffset), out var cached)
-            && cached.End < (long)SourceOffset + Source.Length)
+            && cached.RequiredEnd < (long)SourceOffset + Source.Length)
         {
-            expansion = cached with { End = cached.End - SourceOffset };
+            expansion = cached with { End = cached.End - SourceOffset, RequiredEnd = cached.RequiredEnd - SourceOffset };
             return true;
         }
         expansion = default;
@@ -143,13 +144,18 @@ public sealed class SourceWordPart : WordPart
                 continue;
             memory?.Grow(256);
             var expression = spelling.Source;
-            var operand = bracketed && kind == WordPartKind.DoubleQuoted
-                && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression)
+            var reached = bracketed ? new ArithmeticExpansionScanner.ReachedParentheses(end, null, false)
+                : ArithmeticExpansionScanner.ReadReachedArithmeticParentheses(source, index, end, memory);
+            var operand = (bracketed
+                ? kind == WordPartKind.DoubleQuoted
+                    && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression)
+                : reached.Missing || reached.Subshell != null)
                 ? null
                 : new ArithmeticSource(expression, memory);
+            var requiredEnd = Math.Max(end, reached.End);
             (result ??= new Dictionary<int, ArithmeticExpansion>())
-                .Add(index, new ArithmeticExpansion(end, operand, bracketed));
-            cursor = end + 1;
+                .Add(index, new ArithmeticExpansion(reached.End, requiredEnd, operand, bracketed, reached.Subshell));
+            cursor = requiredEnd + 1;
         }
         return result ?? NoArithmetic;
     }

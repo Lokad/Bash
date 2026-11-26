@@ -1872,6 +1872,15 @@ internal sealed class Tokenizer
                 out var endIndex,
                 out var payload,
                 out var error);
+        if (_scanContext.LimitError == null
+            && ArithmeticExpansionScanner.TrySelectCommentedAdjacentSubshell(_input, start,
+                status == ShellScanStatus.Complete ? endIndex : null,
+                kind == WordPartKind.CommandSubstitutionQuoted, _scanContext.SyntaxMemory,
+                out var selectedEnd, out var selected))
+        {
+            Position = selectedEnd + 1;
+            return new CommandSubstitutionWordPart(kind, selected);
+        }
         if (status != ShellScanStatus.Complete)
         {
             if (syntax == ExpansionWordSyntax.BraceExpanded && _scanContext.LimitError == null)

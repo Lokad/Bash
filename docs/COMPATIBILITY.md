@@ -481,8 +481,13 @@ including its sign. The pinned Bash 5.2 profile formats padded results as signed
 increments remain literal.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
 An adjacent subshell opener can begin a command substitution, as in
-`$((printf value);)`. A complete `$((…))` arithmetic shape selects arithmetic
-even when its expression is invalid. The command grammar handles the subshell
+`$((printf value);)`. A complete authored `$((…))` shape selects arithmetic
+even when its expression is invalid. When rereading a reached arithmetic
+expansion, an unquoted `#` after a space, tab or LF covers the rest of that
+physical line for delimiter matching. A missing closer fails before operand
+expansion. Comment bytes remain in the arithmetic operand when the same
+closer is visible. A shifted closer can select the adjacent subshell form.
+The command grammar handles the subshell
 form and consumes case arm closers, comments and completed here-documents.
 Both pinned Bash builds reject some adjacent forms containing a case arm
 without its optional opening parenthesis or an unpaired parenthesis in a

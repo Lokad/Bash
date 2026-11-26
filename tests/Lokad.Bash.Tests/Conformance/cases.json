@@ -221,7 +221,7 @@
     {
       "id": "adjacent-capture-comment-paren",
       "classification": "deviation",
-      "reason": "The capture uses the command grammar to ignore the closing parenthesis in the comment. Both Bash pins reject this adjacent spelling.",
+      "reason": "The anonymous streamed reader omits the command name and line prefixes from the outer grammar diagnostic.",
       "locale": "C",
       "script": "trap 'printf \"|exit:%s\" \"$?\"' EXIT\n: >before\nprintf before\nv=$((printf '%s' ')'; # ) ignored\nprintf ok);)\nprintf '|status:%s|<%s>' \"$?\" \"${v-unset}\"\n: >after\nprintf after\n",
       "scriptSha256": "21d37922abee9de380c0675e6d21878eec593533c1ba49331fbc950201bf42a8",
@@ -237,14 +237,10 @@
         }
       ],
       "managedExpectation": {
-        "exitCode": 0,
-        "stdoutHex": "6265666f72657c7374617475733a307c3c296f6b3e61667465727c657869743a30",
-        "stderrHex": "",
+        "exitCode": 2,
+        "stdoutHex": "6265666f72657c657869743a32",
+        "stderrHex": "73796e746178206572726f72206e65617220756e657870656374656420746f6b656e206029270a607072696e7466206f6b293b29270a",
         "fileEffects": [
-          {
-            "path": "after",
-            "contentHex": ""
-          },
           {
             "path": "before",
             "contentHex": ""

@@ -306,15 +306,26 @@ internal static partial class WordExpansion
         ScopedEvaluation scope, ShellScanContext? captures = null) =>
         ReportParameterWordSyntaxAsync(word, segment, missingBrace, scope, captures, quoteSegment: false);
 
-    private static async Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
+    private static Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
+        ScopedEvaluation scope, ShellScanContext? captures, bool quoteSegment) =>
+        ReportWordSyntaxAsync(word, segment, ParameterSyntaxFailure(missingBrace), scope, captures, quoteSegment);
+
+    private enum WordSyntaxFailure { BadSubstitution, MissingBrace, MissingArithmeticParenthesis }
+
+    private static WordSyntaxFailure ParameterSyntaxFailure(bool missingBrace) =>
+        missingBrace ? WordSyntaxFailure.MissingBrace : WordSyntaxFailure.BadSubstitution;
+
+    private static async Task ReportWordSyntaxAsync(Word? word, ShellSource segment, WordSyntaxFailure failure,
         ScopedEvaluation scope, ShellScanContext? captures, bool quoteSegment)
     {
         if (word != null)
             word = scope.ExpansionWord ?? word;
+        var hereDocument = failure == WordSyntaxFailure.MissingArithmeticParenthesis
+            && scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument;
         if (word == null && !quoteSegment || captures == null && word?.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
         {
             var spelling = word?.Parts is [SourceWordPart unquoted] ? unquoted.Source : segment;
-            await ReportParameterSyntaxAsync(spelling.ToValue(), missingBrace, scope, hereDocument: false).ConfigureAwait(false);
+            await ReportWordSyntaxAsync(spelling.ToValue(), failure, scope, hereDocument).ConfigureAwait(false);
             return;
         }
         using var source = new ByteMemoryBuilder(0, scope.Effects.Memory.Budget);
@@ -323,15 +334,23 @@ internal static partial class WordExpansion
         else if (!FunctionDefinitionFormatter.TryAppendWordSource(word, source, scope.Effects.Memory.Budget,
                 scope.Effects.CancellationToken, captures))
             throw new ByteMemoryBuilder.LimitExceededException();
-        await ReportParameterSyntaxAsync(ShellValue.FromBytes(source.ToMemory()), missingBrace, scope, hereDocument: false)
+        await ReportWordSyntaxAsync(ShellValue.FromBytes(source.ToMemory()), failure, scope, hereDocument)
             .ConfigureAwait(false);
     }
 
-    private static Task ReportParameterSyntaxAsync(ShellValue spelling, bool missingBrace, ScopedEvaluation scope, bool hereDocument)
+    private static Task ReportParameterSyntaxAsync(ShellValue spelling, bool missingBrace, ScopedEvaluation scope, bool hereDocument) =>
+        ReportWordSyntaxAsync(spelling, ParameterSyntaxFailure(missingBrace), scope, hereDocument);
+
+    private static Task ReportWordSyntaxAsync(ShellValue spelling, WordSyntaxFailure failure, ScopedEvaluation scope, bool hereDocument)
     {
         var badSubstitution = ShellValue.FromText("bad substitution");
-        ReadOnlySpan<ShellValue> subject = missingBrace ? [badSubstitution] : [spelling];
-        ReadOnlySpan<ShellValue> message = missingBrace ? [ShellValue.FromText("no closing `}' in "), spelling] : [badSubstitution];
+        ReadOnlySpan<ShellValue> subject = failure == WordSyntaxFailure.BadSubstitution ? [spelling] : [badSubstitution];
+        ReadOnlySpan<ShellValue> message = failure switch
+        {
+            WordSyntaxFailure.MissingBrace => [ShellValue.FromText("no closing `}' in "), spelling],
+            WordSyntaxFailure.MissingArithmeticParenthesis => [ShellValue.FromText("no closing `)' in "), spelling],
+            _ => [badSubstitution]
+        };
         return hereDocument
             ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
             : scope.Effects.ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
@@ -686,6 +705,7 @@ internal static partial class WordExpansion
     {
         var length = content.Length;
         ShellScanContext? parameterScan = null;
+        var checkArithmeticComments = false;
         var trackSourceIfs = output.Purpose == ExpansionPurpose.Normal && allowWordSplitting && !globQuoted
             && quoteContext == ExpansionQuoteContext.Unquoted;
         // Selected operands and here-document operands assign provenance to individual literal bytes.
@@ -823,7 +843,9 @@ internal static partial class WordExpansion
             var expression = ShellSource.Empty;
             var arithmeticStatus = ShellScanStatus.Complete;
             ParserFailure? arithmeticError = null;
-            var invalidQuotedBracket = prepared is { Operand: null };
+            var invalidQuotedBracket = prepared is { Operand: null, Bracketed: true };
+            var missingReachedParenthesis = prepared is { Operand: null, Bracketed: false, Subshell: null };
+            var reachedSubshell = prepared?.Subshell;
             var bracketed = prepared?.Bracketed ?? false;
             if (!prepared.HasValue)
             {
@@ -834,9 +856,29 @@ internal static partial class WordExpansion
                 invalidQuotedBracket = arithmeticStatus == ShellScanStatus.Complete && bracketed
                     && quoteContext == ExpansionQuoteContext.DoubleQuoted
                     && !ArithmeticExpansionScanner.TryPrepareDoubleQuotedBracketOperand(context, ref expression);
+                if (arithmeticStatus == ShellScanStatus.Complete && !bracketed)
+                {
+                    var reached = ArithmeticExpansionScanner.ReadReachedArithmeticParentheses(content, index, arithmeticEnd,
+                        context.SyntaxMemory);
+                    arithmeticEnd = reached.End;
+                    missingReachedParenthesis = reached.Missing;
+                    reachedSubshell = reached.Subshell;
+                }
             }
             if (arithmeticStatus == ShellScanStatus.Complete)
             {
+                if (missingReachedParenthesis)
+                {
+                    await ReportMissingReachedParenthesisAsync().ConfigureAwait(false);
+                    return null;
+                }
+                if (reachedSubshell != null)
+                {
+                    await ExpandCommandSubstitutionAsync(reachedSubshell, scope, output, allowWordSplitting, globQuoted)
+                        .ConfigureAwait(false);
+                    index = arithmeticEnd;
+                    continue;
+                }
                 if (invalidQuotedBracket)
                 {
                     await scope.Effects.ReportFatalExpansionAsync(ShellValue.FromText("$["),
@@ -964,9 +1006,20 @@ internal static partial class WordExpansion
 
             if (BracedParameterScanner.HasPrefix(content, index))
             {
-                parameterScan ??= CreateExpansionScanContext(scope);
+                if (parameterScan == null)
+                {
+                    parameterScan = CreateExpansionScanContext(scope);
+                    checkArithmeticComments = ArithmeticExpansionScanner.HasPossibleExpansionComment(content.AsSpan());
+                }
+                parameterScan.ReadArithmeticExpansionComments = checkArithmeticComments;
                 var parameterStatus = BracedParameterScanner.ScanExpansion(parameterScan, content, index, capturePayload: true,
                     out var closingIndex, out var payload, out var parameterError, out var subscriptFailure, out var rejectedSelector);
+                parameterScan.ReadArithmeticExpansionComments = false;
+                if (parameterScan.MissingReachedArithmeticParenthesis)
+                {
+                    await ReportMissingReachedParenthesisAsync().ConfigureAwait(false);
+                    return null;
+                }
                 if (subscriptFailure == ParameterSubscriptFailure.Nested)
                 {
                     await ReportParameterWordSyntaxAsync(originalWord, content, missingBrace: true, scope).ConfigureAwait(false);
@@ -1065,6 +1118,11 @@ internal static partial class WordExpansion
         }
         return null;
 
+        Task ReportMissingReachedParenthesisAsync() => ReportWordSyntaxAsync(
+            quoteContext == ExpansionQuoteContext.HereDocument ? null : scope.ExpansionWord,
+            content, WordSyntaxFailure.MissingArithmeticParenthesis, scope, captures: null,
+            quoteSegment: quoteContext == ExpansionQuoteContext.DoubleQuoted);
+
         void AppendLiteral(ShellSource literal)
         {
             // A batched append copies into the result, just like the earlier byte-wise appends.
@@ -1127,6 +1185,13 @@ internal static partial class WordExpansion
         if (script is CommandSubstitutionSyntax.Parsed { Failure: not SubstitutionSyntaxFailure.None } parsed)
         {
             await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parsed.Failure, parsed, scope, globQuoted, default).ConfigureAwait(false);
+            return;
+        }
+
+        if (script is CommandSubstitutionSyntax.AdjacentSubshell { MissingReachedParenthesis: true })
+        {
+            await ReportWordSyntaxAsync(scope.ExpansionWord, script.Source, WordSyntaxFailure.MissingArithmeticParenthesis,
+                scope, captures: null, quoteSegment: globQuoted).ConfigureAwait(false);
             return;
         }
 

@@ -114,6 +114,15 @@ internal sealed class ShellSourceCursor
         return length < 0 ? source.Length : position + length;
     }
 
+    internal bool TrySkipArithmeticExpansionComment()
+    {
+        if (IsQuoted || Current != (byte)'#' || Position == 0
+            || _text[Position - 1] is not ((byte)' ' or (byte)'\t' or (byte)'\n'))
+            return false;
+        Position = SkipComment(_text.AsSpan(), Position);
+        return true;
+    }
+
     /// <summary>Reads one ordinary or ANSI-C literal, retaining its physical span even after decoded NUL.</summary>
     internal bool TryReadQuotedLiteral(out ShellValue value) =>
         TryReadQuotedLiteral(out value, allowUnterminated: false);
@@ -627,15 +636,11 @@ internal sealed class ShellSourceCursor
         UnclosedDelimiter? arithmeticOpening = null;
         if (ArithmeticExpansionScanner.HasPrefix(_text, start) && !_context.TryGetCommandSubstitution(_text, start, out _))
         {
-            var status = ArithmeticExpansionScanner.ScanShape(
-                _context,
-                _text,
-                start,
-                out var endIndex,
-                out var containsCommandSubstitution,
-                out var renderedLineAdjustment,
-                out var error,
-                trackRenderedLines);
+            var status = _context.ReadArithmeticExpansionComments && TryMatchLogicalText(_text.AsSpan(), start, "$((", out _)
+                ? ArithmeticExpansionScanner.ScanReachedParentheses(_context, _text, start, out var endIndex,
+                    out var containsCommandSubstitution, out var renderedLineAdjustment, out var error)
+                : ArithmeticExpansionScanner.ScanShape(_context, _text, start, out endIndex,
+                    out containsCommandSubstitution, out renderedLineAdjustment, out error, trackRenderedLines);
             if (status == ShellScanStatus.Complete)
             {
                 Position = endIndex + 1;
@@ -766,6 +771,8 @@ internal sealed class ShellScanContext
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
+    internal bool ReadArithmeticExpansionComments { get; set; }
+    internal bool MissingReachedArithmeticParenthesis { get; set; }
     internal SubstitutionSyntaxFailure SubstitutionFailure { get; set; }
     internal int RejectedCaptureReads { get; set; }
     internal SubstitutionSyntaxFailure LastRejectedCaptureRead { get; set; }

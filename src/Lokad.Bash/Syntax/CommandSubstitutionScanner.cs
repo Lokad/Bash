@@ -94,8 +94,11 @@ internal static class CommandSubstitutionScanner
             return ShellScanStatus.Complete;
         }
         var previousPeak = context.BeginLookahead();
+        var readArithmeticComments = context.ReadArithmeticExpansionComments;
         try
         {
+            // A nested command reader locates its syntax before the command's words expand.
+            context.ReadArithmeticExpansionComments = false;
             var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution, out error);
             // Reading the same capture again must reuse the bodies already taken from its source.
             if (substitution != null
@@ -106,6 +109,7 @@ internal static class CommandSubstitutionScanner
         }
         finally
         {
+            context.ReadArithmeticExpansionComments = readArithmeticComments;
             context.EndLookahead(previousPeak);
         }
     }
