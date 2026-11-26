@@ -54,6 +54,10 @@ public sealed class EvaluationHelpTestsEndToEnd
     [InlineData("help -s typ type", "type: type [-aftpP] [--] [name ...]\n"
         + "typeset: typeset [-aAcfFgiIlnprux] [name[=value] ...]\ntype: type [-aftpP] [--] [name ...]\n")]
     [InlineData("help -s 't\\ype' 'tr[ua]e' '['", "type: type [-aftpP] [--] [name ...]\ntrue: true\n[: [ expression ]\n")]
+    [InlineData("help -s 'typ*' 'typ*' missing missing true 'typ*'", "type: type [-aftpP] [--] [name ...]\n"
+        + "typeset: typeset [-aAcfFgiIlnprux] [name[=value] ...]\ntype: type [-aftpP] [--] [name ...]\n"
+        + "typeset: typeset [-aAcfFgiIlnprux] [name[=value] ...]\ntrue: true\ntype: type [-aftpP] [--] [name ...]\n"
+        + "typeset: typeset [-aAcfFgiIlnprux] [name[=value] ...]\n")]
     [InlineData("help -s apply_patch true", "true: true\n")]
     [InlineData("help -m true", "NAME\n    true - Return success.\n\nSYNOPSIS\n    true\n\nDESCRIPTION\n    Return success.\n\n")]
     [InlineData("help -m '['", "NAME\n    [ - Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax.\n\n"
@@ -191,11 +195,13 @@ public sealed class EvaluationHelpTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
-    [Fact]
-    public async Task HelpKeepsTheAdmittedOutputUntilTheWriteSettles()
+    [Theory]
+    [InlineData("true")]
+    [InlineData("'t\\rue'")]
+    public async Task HelpKeepsTheAdmittedOutputUntilTheWriteSettles(string topic)
     {
         const int topics = 512;
-        var source = "help -d" + string.Concat(Enumerable.Repeat(" true", topics));
+        var source = "help -d" + string.Concat(Enumerable.Repeat(" " + topic, topics));
         var record = "true - Return success.\n"u8.ToArray();
         const int allowance = 72 * 1024;
         var governor = new MemoryGovernor(allowance);

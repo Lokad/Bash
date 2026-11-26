@@ -53,22 +53,41 @@ public sealed partial class Evaluation
         else
         {
             GlobMask? allActive = null;
+            ReadOnlyMemory<byte> previousTopic = default;
+            var previousStart = 0;
+            var previousLength = 0;
             for (var index = firstPattern; index < words.Count; index++)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
                 var topic = words[index];
+                if (index != firstPattern && topic.Bytes.Span.SequenceEqual(previousTopic.Span))
+                {
+                    if (previousLength != 0)
+                    {
+                        // Read the source range after the builder admits any required growth.
+                        var destination = output.AppendSpan(previousLength);
+                        output.ToMemory().Span.Slice(previousStart, previousLength).CopyTo(destination);
+                    }
+                    continue;
+                }
+
+                previousTopic = topic.Bytes;
+                previousStart = output.Length;
+                matched |= AppendTopics(topic);
+                previousLength = output.Length - previousStart;
+            }
+
+            bool AppendTopics(ShellValue topic)
+            {
                 if (topic.Bytes.Span.IndexOfAny("*?[\\"u8) >= 0)
                 {
                     allActive ??= new GlobMask(ReadOnlyMemory<byte>.Empty);
                     if (!allActive.TryUnescape(topic, Memory, _cancellationToken, out var pattern, out var mask))
-                        continue;
+                        return false;
                     if (AppendPatternTopics(pattern, mask))
-                    {
-                        matched = true;
-                        continue;
-                    }
+                        return true;
                 }
-                matched |= AppendLiteralTopics(topic.Bytes.Span);
+                return AppendLiteralTopics(topic.Bytes.Span);
             }
         }
 
