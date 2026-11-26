@@ -219,22 +219,23 @@ public static class ShellArgumentEscaping
         2L + literal.Length + 3L * literal.Count((byte)'\'');
 
     /// <summary>Quotes literal bytes without introducing ANSI-C syntax; false leaves an incomplete suffix.</summary>
-    public static bool TryAppendLiteralSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal)
-    {
-        if (!target.TryAppend((byte)'\''))
-            return false;
+    public static bool TryAppendLiteralSingleQuoted(IByteMemoryWriter target, ReadOnlySpan<byte> literal) =>
+        target.TryAppend((byte)'\'') && TryAppendSingleQuotedContent(target, literal) && target.TryAppend((byte)'\'');
 
+    /// <summary>Appends a literal fragment inside an open single-quoted word.</summary>
+    internal static bool TryAppendSingleQuotedContent(IByteMemoryWriter target, ReadOnlySpan<byte> literal)
+    {
         while (!literal.IsEmpty)
         {
             var quote = literal.IndexOf((byte)'\'');
             if (quote < 0)
-                return AppendLiteralRun(target, literal) && target.TryAppend((byte)'\'');
+                return AppendLiteralRun(target, literal);
             if (!AppendLiteralRun(target, literal[..quote]) || !target.TryAppend("'\\''"u8))
                 return false;
             literal = literal[(quote + 1)..];
         }
 
-        return target.TryAppend((byte)'\'');
+        return true;
     }
 
     private static bool AppendLiteralRun(IByteMemoryWriter target, ReadOnlySpan<byte> bytes)

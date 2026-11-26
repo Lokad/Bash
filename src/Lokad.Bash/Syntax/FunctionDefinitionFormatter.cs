@@ -147,6 +147,7 @@ internal static class FunctionDefinitionFormatter
         };
         var substitutionSource = format is Format.SubstitutionSource or Format.SubstitutionDisplay or Format.SubstitutionDiagnostic;
         var displayRedirections = display || substitutionSource;
+        var displayHereDocumentDelimiters = display || format is Format.SubstitutionDisplay or Format.SubstitutionDiagnostic;
         var inlineSource = format == Format.BraceSource || substitutionSource;
         var lines = output as LineCounter;
         var capture = lines != null;
@@ -413,9 +414,17 @@ internal static class FunctionDefinitionFormatter
                     else if (redirection.HereDocumentDelimiter is { } delimiterWord)
                     {
                         QueueDocument(redirection);
-                        PushStep(redirection.DelimiterSyntax is { } syntax
-                            ? new Step.Source(syntax.Spelling)
-                            : new Step.Word(delimiterWord));
+                        // Body collection marks a protected delimiter by storing a literal body.
+                        if (displayHereDocumentDelimiters && redirection.Target.Parts is [{ Kind: WordPartKind.SingleQuoted }])
+                        {
+                            if (!output.TryAppend((byte)'\'')
+                                || !AppendHereDocumentDelimiterValue(redirection, delimiterWord, singleQuoted: true)
+                                || !output.TryAppend((byte)'\'')) return false;
+                        }
+                        else
+                            PushStep(redirection.DelimiterSyntax is { } syntax
+                                ? new Step.Source(syntax.Spelling)
+                                : new Step.Word(delimiterWord));
                     }
                     else PushStep(new Step.Word(redirection.Target));
                     break;
@@ -816,23 +825,33 @@ internal static class FunctionDefinitionFormatter
                 flushedHereDocuments = true;
             while (hereDocuments.TryDequeue(out var redirection))
             {
-                if (!AppendUnexpandedParts(redirection.Target)) return false;
+                if (!AppendUnexpandedParts(redirection.Target, singleQuoted: false)) return false;
                 var delimiter = redirection.HereDocumentDelimiter
                     ?? throw new InvalidOperationException("A here-document requires its delimiter syntax.");
-                var written = redirection.DelimiterSyntax is { } syntax
-                    ? output.TryAppend(syntax.Value.AsSpan()) : AppendUnexpandedParts(delimiter);
-                if (!written || !Append("\n")) return false;
+                if (!AppendHereDocumentDelimiterValue(redirection, delimiter, singleQuoted: false) || !Append("\n")) return false;
             }
             return true;
         }
 
-        bool AppendUnexpandedParts(Word word)
+        bool AppendHereDocumentDelimiterValue(Redirection redirection, Word delimiter, bool singleQuoted) =>
+            redirection.DelimiterSyntax is { } syntax
+                ? AppendLiteralBytes(syntax.Value.AsSpan(), singleQuoted)
+                : AppendUnexpandedParts(delimiter, singleQuoted);
+
+        bool AppendUnexpandedParts(Word word, bool singleQuoted)
         {
             var parts = word.Parts;
             for (var index = 0; index < parts.Count; index++)
-                if (!output.TryAppend(parts[index].GetUnexpandedValue().Bytes.Span)) return false;
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!AppendLiteralBytes(parts[index].GetUnexpandedValue().Bytes.Span, singleQuoted)) return false;
+            }
             return true;
         }
+
+        bool AppendLiteralBytes(ReadOnlySpan<byte> bytes, bool singleQuoted) => singleQuoted
+            ? ShellArgumentEscaping.TryAppendSingleQuotedContent(output, bytes)
+            : output.TryAppend(bytes);
 
         void Push(params Step[] steps)
         {

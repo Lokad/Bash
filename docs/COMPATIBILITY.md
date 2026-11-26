@@ -1112,8 +1112,9 @@ the optional empty `()` header is distinguished from a subshell body beginning w
 When listing a definition, parsed `$(...)` bodies use Bash's command layout.
 Newlines between commands and in literal data remain part of the spelling.
 Trailing comments and blank lines are omitted, and a here-document keeps the
-newlines needed to delimit its body. Reloading the listing with `eval` locates
-commands using the printed lines.
+newlines needed to delimit its body. A protected delimiter is displayed as a
+single-quoted word, with escaped apostrophes where needed. Reloading the listing
+with `eval` locates commands using the printed lines.
 When a command substitution starts with an authored adjacent parenthesis,
 its spelling keeps internal whitespace, comments and any final separator.
 Lexical quote preparation and nested substitutions still apply. The final

@@ -238,6 +238,23 @@ public sealed class FunctionDefinitionOutputTests
     }
 
     [Fact]
+    public async Task ProtectedHereDocumentListingsPreserveRawDelimiterBytesThroughReload()
+    {
+        byte[] delimiter = [(byte)'E', 0xff, (byte)'\r'];
+        byte[] source = [.. "x=expanded\nf(){ cat <<\""u8, .. delimiter, .. "\"\n$x\n"u8, .. delimiter,
+            .. "\n}\ndeclare -f f\nsaved=$(declare -f f)\nunset -f f\neval \"$saved\"\nf\n"u8];
+        byte[] expected = [.. "f () \n{ \n    cat <<'"u8, .. delimiter, .. "'\n$x\n"u8, .. delimiter,
+            .. "\n\n}\n$x\n"u8];
+        await using var host = new TestHost();
+
+        var result = await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(source)), host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
     public void LongDescriptorNameEncodingReleasesItsScratchOnRefusal()
     {
         const int bufferSize = 2048;
@@ -495,7 +512,13 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ cat <<END\n$x\nEND\n\n}", "f () \n{ \n    cat <<END\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<ONE | cat <<'TWO'\nfirst\nONE\nsecond\nTWO\n\n}", "f () \n{ \n    cat <<ONE |\nfirst\nONE\n  cat <<'TWO'\nsecond\nTWO\n\n}\n")]
     [InlineData("f(){ cat <<END\nx\nEND\necho after;\n}", "f () \n{ \n    cat <<END\nx\nEND\n\n    echo after\n}\n")]
-    [InlineData("f(){ cat <<E'ND'\n$x\nEND\n}", "f () \n{ \n    cat <<E'ND'\n$x\nEND\n\n}\n")]
+    [InlineData("f(){ cat <<E'ND'\n$x\nEND\n}", "f () \n{ \n    cat <<'END'\n$x\nEND\n\n}\n")]
+    [InlineData("f(){ cat <<E\\'N\\'D\n$x\nE'N'D\n}", "f () \n{ \n    cat <<'E'\\''N'\\''D'\n$x\nE'N'D\n\n}\n")]
+    [InlineData("f(){ cat <<\"\"\n$x\n\n}", "f () \n{ \n    cat <<''\n$x\n\n\n}\n")]
+    [InlineData("f(){ cat <<-$(printf 'END')''\n\t$x\n\t$(printf END)\n}",
+        "f () \n{ \n    cat <<-'$(printf END)'\n$x\n$(printf END)\n\n}\n")]
+    [InlineData("f(){ printf '%s' \"$(cat <<E\"ND\"\n$x\nEND\n)\"; }",
+        "f () \n{ \n    printf '%s' \"$(cat <<'END'\n$x\nEND\n)\"\n}\n")]
     [InlineData("f(){ (cat <<END\nbody\nEND\n); printf '%s' after; }",
         "f () \n{ \n    ( cat <<END\nbody\nEND\n )\n    printf '%s' after\n}\n")]
     [InlineData("f(){ { { cat <<END\nbody\nEND\n}; :; }; printf '%s' after; }",
