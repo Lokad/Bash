@@ -78,6 +78,8 @@ The array destination is checked after reading, and positional names receive
 no assignments. A record with no fields assigns an empty array. At EOF it
 publishes fields from the partial record, or an empty array, and returns failure.
 
+`read` with no positional or array destination assigns the whole normalized
+record to `REPLY`, preserving leading and trailing whitespace.
 `read` skips unquoted NUL bytes unless NUL is the chosen delimiter. With
 escape processing enabled, a quoted NUL ends the text available for assignment
 and counts as a protected empty field when it occurs on its own. The read still

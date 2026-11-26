@@ -10,6 +10,31 @@ namespace Lokad.Bash.Tests;
 public sealed class ReadTargetBindingTests
 {
     [Theory]
+    [InlineData("", "  one\\ two  \nnext\n", "<0><  one two  ><next>")]
+    [InlineData("-d :", " a\\:b  :next\n", "<0>< a:b  ><next>")]
+    [InlineData("-n 4", " a\\ bnext\n", "<0>< a b><next>")]
+    [InlineData("", "  a\\ b  ", "<1><  a b  ><>")]
+    public async Task ReadDecodesTheWholeImplicitReplyAcrossRecordRoutes(string options, string input, string expected)
+    {
+        var script = $$"""
+            separator=' :'
+            unset IFS
+            declare -n IFS=separator
+            read {{options}}
+            status=$?
+            read -r tail
+            printf '<%s><%s><%s>' "$status" "$REPLY" "$tail"
+            """;
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host, System.Text.Encoding.UTF8.GetBytes(input));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("", "a\\ b c\nnext word\n", "<0:a b:c><0:next:word>")]
     [InlineData("-d :", "a\\ b c:next word:", "<0:a b:c><0:next:word>")]
     [InlineData("-n 5", "a\\ b cnext ", "<0:a b:c><0:next:>")]

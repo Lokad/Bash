@@ -16,20 +16,12 @@ internal static class ReadFieldSplitter
     {
         var fieldSeparators = options.FieldSeparators;
         const int FieldListOverheadBytes = 32;
-        var capacity = options.FieldMode switch
-        {
-            ReadFieldMode.PreserveInput => 1,
-            ReadFieldMode.SplitAll => 0,
-            _ => fieldCount
-        };
+        var capacity = options.FieldMode == ReadFieldMode.SplitAll ? 0 : fieldCount;
         scratch.Grow(FieldListOverheadBytes + MemoryCapacity.ArrayBackingBytes<ShellValue>(capacity));
         return SplitReadFields(content.Length);
 
         List<ShellValue> SplitReadFields(int contentEnd)
         {
-            if (options.FieldMode == ReadFieldMode.PreserveInput)
-                return [BuildValue(0, contentEnd)];
-
             var separatorBytes = fieldSeparators.Bytes;
             // Span searches specialize sets of up to three bytes.
             var asciiRaw = options.BackslashMode == ReadBackslashMode.Preserve
@@ -239,52 +231,55 @@ internal static class ReadFieldSplitter
                     : fieldSeparators.Contains(character.Bytes.Span[0]);
             }
 
-            ShellValue BuildValue(int start, int valueEnd)
-            {
-                if (start >= valueEnd)
-                    return ShellValue.Empty;
-
-                var source = content[start..valueEnd];
-                if (options.BackslashMode == ReadBackslashMode.Preserve)
-                    return ShellValue.FromBytes(source);
-                var remaining = source.Span;
-                var runEnd = remaining.IndexOfAny((byte)'\\', (byte)0);
-                if (runEnd < 0)
-                    return ShellValue.FromBytes(source);
-
-                if (EndsField(remaining[runEnd..]))
-                {
-                    // Only truncation is needed. The unchanged prefix can borrow the record.
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return runEnd == 0 ? ShellValue.Empty : ShellValue.FromBytes(source[..runEnd]);
-                }
-
-                scratch.Grow(remaining.Length);
-                var value = new byte[remaining.Length];
-                var written = 0;
-                while (true)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    remaining[..runEnd].CopyTo(value.AsSpan(written));
-                    written += runEnd;
-                    remaining = remaining[runEnd..];
-                    if (EndsField(remaining))
-                        break;
-                    // Removing an escape preserves the rest of the original byte spelling.
-                    value[written++] = remaining[1];
-                    remaining = remaining[2..];
-                    runEnd = remaining.IndexOfAny((byte)'\\', (byte)0);
-                    if (runEnd < 0)
-                        runEnd = remaining.Length;
-                }
-
-                return ShellValue.FromBytes(value.AsMemory(0, written));
-
-                // A quoted NUL can create a field but ends the assigned bytes.
-                static bool EndsField(ReadOnlySpan<byte> suffix) =>
-                    suffix.Length <= 1 || suffix[0] == 0 || suffix[1] == 0;
-            }
+            ShellValue BuildValue(int start, int valueEnd) => start >= valueEnd ? ShellValue.Empty
+                : DecodeField(content[start..valueEnd], options.BackslashMode, scratch, cancellationToken);
         }
+    }
+
+    /// <summary>Decodes a selected field, borrowing unchanged bytes and admitting rewritten backing to scratch.</summary>
+    internal static ShellValue DecodeField(ReadOnlyMemory<byte> source, ReadBackslashMode backslashMode,
+        MemoryCapacity scratch, CancellationToken cancellationToken)
+    {
+        if (source.IsEmpty)
+            return ShellValue.Empty;
+        if (backslashMode == ReadBackslashMode.Preserve)
+            return ShellValue.FromBytes(source);
+        var remaining = source.Span;
+        var runEnd = remaining.IndexOfAny((byte)'\\', (byte)0);
+        if (runEnd < 0)
+            return ShellValue.FromBytes(source);
+
+        if (EndsField(remaining[runEnd..]))
+        {
+            // Only truncation is needed. The unchanged prefix can borrow the record.
+            cancellationToken.ThrowIfCancellationRequested();
+            return runEnd == 0 ? ShellValue.Empty : ShellValue.FromBytes(source[..runEnd]);
+        }
+
+        scratch.Grow(remaining.Length);
+        var value = new byte[remaining.Length];
+        var written = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            remaining[..runEnd].CopyTo(value.AsSpan(written));
+            written += runEnd;
+            remaining = remaining[runEnd..];
+            if (EndsField(remaining))
+                break;
+            // Removing an escape preserves the rest of the original byte spelling.
+            value[written++] = remaining[1];
+            remaining = remaining[2..];
+            runEnd = remaining.IndexOfAny((byte)'\\', (byte)0);
+            if (runEnd < 0)
+                runEnd = remaining.Length;
+        }
+
+        return ShellValue.FromBytes(value.AsMemory(0, written));
+
+        // A quoted NUL can create a field but ends the assigned bytes.
+        static bool EndsField(ReadOnlySpan<byte> suffix) =>
+            suffix.Length <= 1 || suffix[0] == 0 || suffix[1] == 0;
     }
 
     /// <summary>Retains input bytes and escape provenance; malformed bytes have no Unicode scalar.</summary>

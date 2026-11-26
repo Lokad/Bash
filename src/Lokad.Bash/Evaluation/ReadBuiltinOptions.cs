@@ -1,7 +1,7 @@
 namespace Lokad.Bash.Evaluation;
 
 /// <summary>Controls how the <c>read</c> builtin interprets input.</summary>
-internal sealed record ReadBuiltinOptions(
+internal readonly record struct ReadBuiltinOptions(
     FieldSeparators FieldSeparators,
     ReadBackslashMode BackslashMode,
     ReadFieldMode FieldMode);
@@ -13,10 +13,9 @@ internal enum ReadBackslashMode
     Preserve,
 }
 
-/// <summary>Controls whether the <c>read</c> builtin splits input into fields.</summary>
+/// <summary>Selects positional or array field splitting.</summary>
 internal enum ReadFieldMode
 {
-    PreserveInput,
     Split,
     SplitAll,
 }

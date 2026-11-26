@@ -364,12 +364,8 @@ public sealed class ByteStoredValueTests
     [InlineData(16384)]
     public void ReadFieldEndingAtAQuotedNulBorrowsItsUnchangedPrefix(int length)
     {
-        var governor = new MemoryGovernor(64 * 1024);
+        var governor = new MemoryGovernor(0);
         using var owner = governor.CreateScope();
-        var memory = new EvaluationMemory(owner);
-        var variables = Variables.CreateEmpty();
-        var options = new ReadBuiltinOptions(FieldSeparators.Empty,
-            ReadBackslashMode.InterpretEscapes, ReadFieldMode.PreserveInput);
         var record = new byte[length + 2];
         record.AsSpan(0, length).Fill(0xff);
         record[length] = (byte)'\\';
@@ -378,16 +374,14 @@ public sealed class ByteStoredValueTests
         using (var plain = new MemoryCapacity(owner, 0))
         using (var truncated = new MemoryCapacity(owner, 0))
         {
-            var control = Assert.Single(ReadFieldSplitter.Split(prefix, 1, options, plain,
-                variables, memory, CancellationToken.None));
-            var field = Assert.Single(ReadFieldSplitter.Split(record, 1, options, truncated,
-                variables, memory, CancellationToken.None));
+            var control = ReadFieldSplitter.DecodeField(prefix, ReadBackslashMode.InterpretEscapes,
+                plain, CancellationToken.None);
+            var field = ReadFieldSplitter.DecodeField(record, ReadBackslashMode.InterpretEscapes,
+                truncated, CancellationToken.None);
 
             Assert.Equal(control, field);
-            Assert.Equal(plain.Bytes, truncated.Bytes);
             Assert.True(field.Bytes.Equals(length == 0 ? ShellValue.Empty.Bytes : prefix));
         }
-        memory.Finish(retainVariables: false);
         Assert.Equal(0, governor.ReservedBytes);
     }
 

@@ -127,7 +127,7 @@ public sealed partial class Evaluation
         var argumentIndex = options.ArgumentIndex;
         var hasPositionals = argumentIndex < words.Count;
         var implicitReply = arrayName == null && !hasPositionals;
-        var fieldCount = arrayName.HasValue ? 0 : implicitReply ? 1 : words.Count - argumentIndex;
+        var fieldCount = arrayName.HasValue ? 0 : words.Count - argumentIndex;
         var firstReference = implicitReply ? VariableReference.ForName("REPLY") : default;
         // A first positional operand is validated even when -a selects the only assignment destination.
         if (hasPositionals && !TryParseTarget(words[argumentIndex], out firstReference))
@@ -142,8 +142,16 @@ public sealed partial class Evaluation
             if (input.Failed)
                 return await FinishAsync(input.ExitCode).ConfigureAwait(false);
             exitCode = input.ExitCode;
+            if (implicitReply)
+            {
+                using var scratch = new MemoryCapacity(Memory.Budget, 0);
+                var reply = ReadFieldSplitter.DecodeField(input.Content, input.FieldBackslashMode, scratch, _cancellationToken);
+                var assignment = await AssignReadFieldAsync(firstReference, reply, input.Content).ConfigureAwait(false);
+                return await FinishAsync(assignment == BuiltinAssignmentResult.Failed ? 1 : exitCode).ConfigureAwait(false);
+            }
+
             IndexedInputTarget? arrayTarget = null;
-            var fieldMode = implicitReply ? ReadFieldMode.PreserveInput : ReadFieldMode.Split;
+            var fieldMode = ReadFieldMode.Split;
             if (arrayName is { } destination)
             {
                 // Bash consumes the record before checking an array destination.
@@ -189,8 +197,7 @@ public sealed partial class Evaluation
                 var reference = firstReference;
                 if (index != 0 && !TryParseTarget(words[argumentIndex + index], out reference))
                     return await InvalidTargetAsync(words[argumentIndex + index]).ConfigureAwait(false);
-                var assignment = await AssignBuiltinAsync(reference, RetainField(fields[index], input.Content.Span), scope,
-                    bindings, BuiltinAssignmentKind.Read, command, expansionWriteTarget: null).ConfigureAwait(false);
+                var assignment = await AssignReadFieldAsync(reference, fields[index], input.Content).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
                     exitCode = 1;
@@ -210,6 +217,10 @@ public sealed partial class Evaluation
                 ReleaseReadWorkspace();
         }
         return await FinishAsync(exitCode).ConfigureAwait(false);
+
+        Task<BuiltinAssignmentResult> AssignReadFieldAsync(VariableReference reference, ShellValue value, ReadOnlyMemory<byte> record) =>
+            AssignBuiltinAsync(reference, RetainField(value, record.Span), scope,
+                bindings, BuiltinAssignmentKind.Read, command, expansionWriteTarget: null);
 
         ShellValue RetainField(ShellValue value, ReadOnlySpan<byte> record)
         {
