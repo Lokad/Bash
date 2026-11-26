@@ -8,6 +8,11 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private static readonly ReadOnlyMemory<byte> ErrexitOnOutput = "errexit\ton\n"u8.ToArray();
+    private static readonly ReadOnlyMemory<byte> ErrexitOffOutput = "errexit\toff\n"u8.ToArray();
+    private static readonly ReadOnlyMemory<byte> ErrexitEnableCommand = "set -o errexit\n"u8.ToArray();
+    private static readonly ReadOnlyMemory<byte> ErrexitDisableCommand = "set +o errexit\n"u8.ToArray();
+
     /// <summary>
     /// Handles <c>unset</c> namespace selection and readonly protection.
     /// </summary>
@@ -333,7 +338,12 @@ public sealed partial class Evaluation
                 if (flag == (byte)'e')
                 {
                     _state.ErrexitEnabled = enabled;
-                    continue;
+                    // An inspection or invalid flag can observe the state after the run.
+                    var nextFlag = option.Bytes.Span[(flagIndex + 1)..].IndexOfAnyExcept((byte)'e');
+                    if (nextFlag < 0)
+                        break;
+                    flagIndex += nextFlag + 1;
+                    flag = option.Bytes.Span[flagIndex];
                 }
                 if (flag != (byte)'o')
                     return await RejectFlagAsync(option, flagIndex, 1).ConfigureAwait(false);
@@ -350,9 +360,9 @@ public sealed partial class Evaluation
                 if (inspectionClosed || (index + 1 < words.Count && GetStdOutDescriptor().IsClosed))
                     continue;
                 var inspection = enabled
-                    ? (_state.ErrexitEnabled ? "errexit\ton\n" : "errexit\toff\n")
-                    : (_state.ErrexitEnabled ? "set -o errexit\n" : "set +o errexit\n");
-                var written = await WriteBuiltinOutputAsync(words[0], Utf8Text.Encode(inspection), sourcePrefix).ConfigureAwait(false);
+                    ? (_state.ErrexitEnabled ? ErrexitOnOutput : ErrexitOffOutput)
+                    : (_state.ErrexitEnabled ? ErrexitEnableCommand : ErrexitDisableCommand);
+                var written = await WriteBuiltinOutputAsync(words[0], inspection, sourcePrefix).ConfigureAwait(false);
                 if (written.IsError)
                     status = 1;
                 else

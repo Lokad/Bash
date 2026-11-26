@@ -42,6 +42,38 @@ public sealed class ErrexitTests
     }
 
     [Theory]
+    [InlineData('-', "+e", "errexit\toff\n", "errexit\ton\n", "e")]
+    [InlineData('+', "-e", "set -o errexit\n", "set +o errexit\n", "")]
+    public async Task GroupedSetInspectionsObserveFlagRunsAndReuseStableOutput(
+        char sign, string initial, string before, string after, string flags)
+    {
+        var run = new string('e', 128);
+        var evaluation = new Eval(Parser.Parse($"set {initial}; set {sign}o{run}o{run}o -- tail; flags=$-"));
+
+        var first = await ReadInspectionAsync();
+        var second = await ReadInspectionAsync();
+        var third = await ReadInspectionAsync();
+        Assert.Null(await evaluation.GetNextStep());
+
+        Assert.All(new[] { first, second, third }, write => Assert.Equal(FileDescriptor.StdOut, write.FileDescriptor));
+        Assert.Equal(ShellValue.FromText(before).Bytes.ToArray(), first.Bytes);
+        Assert.Equal(ShellValue.FromText(after).Bytes.ToArray(), second.Bytes);
+        Assert.Equal(ShellValue.FromText(after).Bytes.ToArray(), third.Bytes);
+        Assert.True(second.Content.Equals(third.Content));
+        Assert.Equal(0, evaluation.LastExitCode);
+        Assert.Equal(ShellValue.FromText(flags), evaluation.Variables["flags"]);
+        Assert.Equal(ShellValue.FromText("tail"), Assert.Single(evaluation.PositionalParameters));
+
+        async Task<(FileDescriptor FileDescriptor, ReadOnlyMemory<byte> Content, byte[] Bytes)> ReadInspectionAsync()
+        {
+            var write = Assert.IsType<WriteOperation>(await evaluation.GetNextStep());
+            var inspection = (write.FileDescriptor, write.Content, write.Content.ToArray());
+            write.SetResult(DescriptorWriteResult.Open);
+            return inspection;
+        }
+    }
+
+    [Theory]
     [InlineData("-o -o -e -o")]
     [InlineData("-ooe +o")]
     public async Task SetContinuesApplyingOptionsAndPositionalsAfterInspectionCloses(string options)
@@ -207,6 +239,7 @@ public sealed class ErrexitTests
     [InlineData("-e + --help ignored", "--", "on")]
     [InlineData("-e + +ezq ignored", "+z", "off")]
     [InlineData("-oz errexit", "-z", "on")]
+    [InlineData("-oeezq errexit", "-z", "on")]
     public async Task InvalidFlagReachedDuringSetApplicationKeepsEarlierChanges(
         string options, string flagSpelling, string expectedMode)
     {
