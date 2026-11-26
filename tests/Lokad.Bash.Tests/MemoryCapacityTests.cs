@@ -83,6 +83,58 @@ public sealed class MemoryCapacityTests
     }
 
     [Fact]
+    public void RefusedBaselineLeavesTheCurrentWorkspaceGrowthInPlace()
+    {
+        const int Retained = 172;
+        var governor = new MemoryGovernor(260);
+        using var owner = governor.CreateScope();
+        using var capacity = new MemoryCapacity(owner, 0);
+
+        capacity.ResizeWithRetainedBaseline(Retained, Retained);
+        Assert.Throws<MemoryBudgetExceededException>(() => capacity.ResizeWithRetainedBaseline(400, 400));
+        Assert.Equal(Retained, capacity.Bytes);
+        Assert.Equal(Retained, governor.ReservedBytes);
+
+        Assert.True(capacity.TryResize(Retained + 32));
+        Assert.False(capacity.TryResize(Retained + 80));
+        Assert.Equal(Retained + 32, capacity.Bytes);
+        Assert.Equal(Retained + 32, governor.ReservedBytes);
+
+        capacity.ResizeWithRetainedBaseline(Retained + 16, Retained + 16);
+        Assert.Equal(Retained + 32, governor.ReservedBytes);
+        capacity.DetachReservation();
+        Assert.Equal(Retained + 16, governor.ReservedBytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(0L, 128 * 1024L)]
+    [InlineData(172L, 128 * 1024L)]
+    [InlineData(64 * 1024L + 8, 192 * 1024L)]
+    public void RetainedBaselineUsesTheSameSmallWorkspaceStepsAndRespectsTheTotalBoundary(long baseline, long largeCapacity)
+    {
+        const int Increment = 64 * 1024;
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        using var capacity = new MemoryCapacity(owner, 0);
+
+        capacity.ResizeWithRetainedBaseline(baseline, baseline);
+        Assert.Equal(baseline, governor.ReservedBytes);
+        capacity.Resize(baseline + 64);
+        Assert.Equal(baseline + 64, governor.ReservedBytes);
+        capacity.Resize(baseline + 80);
+        Assert.Equal(baseline + 256, governor.ReservedBytes);
+        capacity.Resize(baseline + Increment + 1);
+        Assert.Equal(largeCapacity, governor.ReservedBytes);
+
+        capacity.DetachReservation();
+        Assert.Equal(baseline + Increment + 1, governor.ReservedBytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void AdaptedEmptyReservationGrowsWithOneAdmissionAndRejectsAfterDisposal()
     {
         var governor = new MemoryGovernor(1024);

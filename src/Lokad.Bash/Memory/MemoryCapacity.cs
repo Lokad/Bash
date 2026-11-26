@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace Lokad.Bash.Memory;
@@ -18,9 +19,12 @@ public sealed class MemoryCapacity : IDisposable
 {
     private const long CapacityIncrementBytes = 64 * 1024;
     private const long MinimumGrowthBytes = 256;
+    private const long DisposedBaseline = -1;
     private readonly IMemoryBudget _budget;
     private IMemoryReservation? _reservation;
-    private bool _disposed;
+    private long _retainedBaseline;
+
+    private bool IsDisposed => _retainedBaseline == DisposedBaseline;
 
     internal IMemoryBudget Budget => _budget;
 
@@ -76,17 +80,35 @@ public sealed class MemoryCapacity : IDisposable
     /// <remarks>Disposing or detaching this helper clears the estimate. The enclosing scope controls the live charge.</remarks>
     public long Bytes { get; private set; }
 
-    public bool TryResize(long bytes)
+    public bool TryResize(long bytes) => TryResize(bytes, _retainedBaseline);
+
+    /// <summary>Admits logical usage and updates the retained share used for workspace growth.</summary>
+    internal void ResizeWithRetainedBaseline(long bytes, long retainedBaseline)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!TryResize(bytes, retainedBaseline))
+            throw new MemoryBudgetExceededException();
+        _retainedBaseline = retainedBaseline;
+    }
+
+    private bool TryResize(long bytes, long retainedBaseline)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         var previous = _reservation?.Bytes ?? 0;
         if (bytes > previous)
         {
-            var capacity = previous == 0 ? bytes : bytes <= CapacityIncrementBytes
-                ? Math.Max(bytes, Math.Min(CapacityIncrementBytes, Math.Max(MinimumGrowthBytes, previous * 2)))
-                : bytes > long.MaxValue - (CapacityIncrementBytes - 1)
-                    ? bytes : (bytes + CapacityIncrementBytes - 1) / CapacityIncrementBytes * CapacityIncrementBytes;
+            var capacity = GrowthCapacity(previous, bytes);
+            if (retainedBaseline != 0)
+            {
+                var retained = Math.Min(bytes, retainedBaseline);
+                var requiredWorkspace = bytes - retained;
+                var workspace = previous <= retained || requiredWorkspace > CapacityIncrementBytes
+                    ? GrowthCapacity(Math.Max(0, previous - retained), requiredWorkspace)
+                    : Math.Max(MinimumGrowthBytes, BitOperations.RoundUpToPowerOf2((uint)requiredWorkspace));
+                // Excluding retained bytes must not move a request above its original
+                // total-capacity rounding boundary.
+                capacity = retained + Math.Min(workspace, capacity - retained);
+            }
             var admitted = _reservation is { } reservation
                 ? reservation.TryResize(capacity)
                 : _budget.TryReserve(capacity, out _reservation);
@@ -101,6 +123,12 @@ public sealed class MemoryCapacity : IDisposable
         return true;
     }
 
+    private static long GrowthCapacity(long previous, long required) =>
+        previous == 0 ? required : required <= CapacityIncrementBytes
+            ? Math.Max(required, Math.Min(CapacityIncrementBytes, Math.Max(MinimumGrowthBytes, previous * 2)))
+            : required > long.MaxValue - (CapacityIncrementBytes - 1)
+                ? required : (required + CapacityIncrementBytes - 1) / CapacityIncrementBytes * CapacityIncrementBytes;
+
     public void Resize(long bytes)
     {
         if (!TryResize(bytes))
@@ -109,7 +137,7 @@ public sealed class MemoryCapacity : IDisposable
 
     public void Grow(long bytes)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         Resize(checked(Bytes + bytes));
     }
@@ -174,7 +202,7 @@ public sealed class MemoryCapacity : IDisposable
     /// <summary>Returns large amounts of unused credit after a batch has relinquished its storage.</summary>
     public void TrimExcess()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         var prepaid = _reservation?.Bytes ?? 0;
         if (prepaid == 0)
         {
@@ -190,7 +218,7 @@ public sealed class MemoryCapacity : IDisposable
     /// <summary>Returns spare credit so a refused operation does not starve later work.</summary>
     public void ReleaseUnusedCapacity()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         if (_reservation is { } reservation)
             reservation.Resize(Bytes);
         else
@@ -200,7 +228,7 @@ public sealed class MemoryCapacity : IDisposable
     /// <summary>Returns spare credit before publication when the live reservation accepts shrinking.</summary>
     internal void ReleaseUnusedCapacityOnPublication()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         if (_reservation is { } reservation && reservation.Bytes > Bytes)
             _ = reservation.TryResize(Bytes);
     }
@@ -212,7 +240,7 @@ public sealed class MemoryCapacity : IDisposable
         ReleaseUnusedCapacity();
         _reservation = null;
         Bytes = 0;
-        _disposed = true;
+        _retainedBaseline = DisposedBaseline;
     }
 
     private void CheckEmptyCapacityLifetime()
@@ -232,9 +260,9 @@ public sealed class MemoryCapacity : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (IsDisposed)
             return;
-        _disposed = true;
+        _retainedBaseline = DisposedBaseline;
         Bytes = 0;
         _reservation?.Dispose();
     }

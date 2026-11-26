@@ -173,6 +173,11 @@ Completed sibling commands reuse workspace; pending parents and overlapping
 replacements stay charged. These reservations describe live ownership, with no
 lifetime expansion credits. A nested host must receive a memory budget under the
 same root; command inheritance does not copy or create a memory allowance.
+The evaluator starts with the existing retained estimate as its workspace
+growth baseline. As retained storage grows, the baseline advances by powers of
+two from that starting estimate so adjacent additions can use prepaid capacity.
+Settled usage reflects all retained bytes. Workspace growth uses relative size
+classes within the usual total-capacity rounding.
 
 Conditional evaluation admits its traversal buffer before growing it, including
 overlap during replacement. Reached predicates reuse the buffer, which stays

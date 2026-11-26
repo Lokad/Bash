@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Threading;
 using Lokad.Bash.Memory;
 
@@ -17,6 +18,7 @@ internal sealed class EvaluationMemory
     private IMemoryBudget _budget;
     private Command? _command;
     private long _retainedBytes;
+    private long? _initialRetainedBytes;
     private bool _refused;
 
     internal bool HasCommand => _command != null;
@@ -40,6 +42,7 @@ internal sealed class EvaluationMemory
             _budget = value;
             _memory = new MemoryCapacity(value, 0);
             _retainedBytes = 0;
+            _initialRetainedBytes = null;
         }
     }
 
@@ -47,8 +50,10 @@ internal sealed class EvaluationMemory
     {
         if (_command == null)
         {
-            _retainedBytes = RetainedBytes(scope);
-            _memory.Resize(_retainedBytes);
+            var retained = RetainedBytes(scope);
+            _memory.ResizeWithRetainedBaseline(retained, GrowthBaseline(retained));
+            _initialRetainedBytes ??= retained;
+            _retainedBytes = retained;
         }
         var command = new Command(this, scope, _command,
             _memory.Bytes - _retainedBytes);
@@ -91,6 +96,16 @@ internal sealed class EvaluationMemory
             _memory.Dispose();
     }
 
+    // Preserve prepaid growth as new bindings settle. Rebase only at increasing
+    // size classes beyond the retained storage observed at evaluator entry.
+    private long GrowthBaseline(long retained)
+    {
+        var initial = _initialRetainedBytes ?? retained;
+        return retained <= initial
+            ? retained
+            : initial + (1L << BitOperations.Log2((ulong)(retained - initial)));
+    }
+
     private static long RetainedBytes(ScopedEvaluation scope)
     {
         var savedBytes = scope.Context.FunctionContext?.Locals.SavedMemoryTracker?.Bytes ?? 0;
@@ -125,7 +140,8 @@ internal sealed class EvaluationMemory
         internal void ResetWorkspace(long liveWorkspaceBytes)
         {
             var retained = RetainedBytes(scope);
-            owner._memory.Resize(checked(baseline + retained + liveWorkspaceBytes));
+            owner._memory.ResizeWithRetainedBaseline(checked(baseline + retained + liveWorkspaceBytes),
+                owner.GrowthBaseline(retained));
             if (owner._refused)
             {
                 owner._memory.ReleaseUnusedCapacity();

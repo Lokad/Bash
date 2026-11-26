@@ -4,11 +4,35 @@ using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Tests.EndToEnd;
 using Lokad.Bash.Helpers;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class ByteFunctionLifecycleTests
 {
+    [Theory]
+    [InlineData(128)]
+    [InlineData(512)]
+    public async Task PreparedDefinitionsReuseReservationAcrossGrowingNamespace(int count)
+    {
+        var definitions = string.Concat(Enumerable.Range(0, count).Select(index => $"probe_{index:D4}(){{ :; }}\n"));
+        var state = new Eval(Parser.Parse(definitions + ":"));
+        var governor = new MemoryGovernor(1024 * 1024);
+        var budget = new CountingMemoryBudget(governor);
+        using var owner = budget.CreateScope();
+        await using var host = new TestHost { MemoryBudget = governor };
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(256L * count, state.RetainedFunctionMemoryBytes);
+        Assert.InRange(budget.AdmissionCalls, 1, 64);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     // Bash 5.2.21/UTF-8; only executable/function/line prefixes are omitted.
     [Theory]
     [InlineData("probe_f(){ :; }; declare -fp $'\\377' probe_f; printf '%s' \"$?\"", "70726F62655F66202829200A7B200A202020203A0A7D0A31", "6C696E6520313A206465636C6172653A20FF3A206E6F7420666F756E640A")]
