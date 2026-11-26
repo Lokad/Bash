@@ -55,7 +55,12 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
             "Print arguments separated by spaces. Leading option groups may repeat or combine n, e and E.\n    -n omits the final newline. The last -e or -E enables or disables backslash escapes, which are disabled by default."),
         BuiltinKind.Printf => new("[-v var] format [arguments]", "Format and print arguments, or assign the result to var with -v."),
         BuiltinKind.Read => new("[-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]",
-            "Read one record and split it into fields using IFS; without names, assign REPLY.\n    -a replaces an indexed array with all split fields.\n    -d uses the first byte of delim instead of newline; an empty delim selects NUL.\n    -n stops at the byte count or delimiter. -N reads to the count without delimiter or field splitting.\n    -r preserves backslashes; -u fd reads from an open descriptor. Return failure on early EOF.\n    -e, -i text, -p prompt and -s are accepted for non-interactive input without terminal effects."),
+            "Read one record. With no destination, assign the whole record to REPLY.\n"
+            + "    Split fields using IFS for named destinations. -a replaces an indexed array with all split fields.\n"
+            + "    -d uses the first byte of delim instead of newline; an empty delim selects NUL.\n"
+            + "    -n stops at the byte count or delimiter. -N reads to the count without delimiter or field splitting.\n"
+            + "    -r preserves backslashes; -u fd reads from an open descriptor. Return failure on early EOF.\n"
+            + "    -e, -i text, -p prompt and -s are accepted for non-interactive input without terminal effects."),
         BuiltinKind.Unset => new("[-f] [-v] [-n] [name ...]",
             "Remove variables or functions. -f selects functions, -v variables, and -n removes a name reference itself."),
         BuiltinKind.Dirs => new("[-clpv] [+N] [-N]",

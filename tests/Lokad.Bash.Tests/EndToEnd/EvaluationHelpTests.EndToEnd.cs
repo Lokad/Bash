@@ -48,7 +48,7 @@ public sealed class EvaluationHelpTestsEndToEnd
     [Theory]
     [InlineData("help true", "true: true\n    Return success.\n")]
     [InlineData("help -d true tru", "true - Return success.\ntrue - Return success.\n")]
-    [InlineData("help -d read", "read - Read one record and split it into fields using IFS; without names, assign REPLY.\n")]
+    [InlineData("help -d read", "read - Read one record. With no destination, assign the whole record to REPLY.\n")]
     [InlineData("help -s '['", "[: [ expression ]\n")]
     [InlineData("help -s 'tr?e'", "true: true\n")]
     [InlineData("help -s typ type", "type: type [-aftpP] [--] [name ...]\n"
