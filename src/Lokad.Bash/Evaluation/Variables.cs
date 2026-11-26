@@ -203,15 +203,68 @@ public sealed partial class Variables
     /// <summary>Immutable snapshot of the last resolved IFS; completed membership belongs to this variable owner.</summary>
     private FieldSeparators _fieldSeparators = FieldSeparators.Default;
     private bool _deferFieldSeparators;
+    private (bool ReadIndex, ShellValue First)? _indexedIfs;
 
     internal FieldSeparators? DeferredFieldSeparators => _deferFieldSeparators ? _fieldSeparators : null;
+    internal bool IndexedFieldSplittingSuppressed => _indexedIfs is { ReadIndex: false };
 
-    internal void UseVisibleFieldSeparators() => _deferFieldSeparators = false;
+    internal void UseVisibleFieldSeparators()
+    {
+        _deferFieldSeparators = false;
+        RefreshIndexedFieldSeparators();
+    }
 
     private void UpdateFieldSeparatorBinding(BindingName name)
     {
-        if (_deferFieldSeparators && name == FieldSeparators.Name)
+        if (name == FieldSeparators.Name)
             UseVisibleFieldSeparators();
+    }
+
+    internal void RefreshIndexedFieldSeparators()
+    {
+        _indexedIfs = GetFieldSeparatorSlot(out _) is IndexedSlot indexed
+            ? (true, FieldSeparators.ProjectIndex(indexed.Value.MaxIndex ?? -1, firstOnly: true))
+            : null;
+    }
+
+    internal bool TryGetFieldSeparatorValue(out ShellValue value, out long? indexedMaximum)
+    {
+        value = ShellValue.Empty;
+        indexedMaximum = null;
+        switch (GetFieldSeparatorSlot(out var name))
+        {
+            case ScalarSlot scalar:
+                return TryReadScalarSlot(name, scalar, out value);
+            case IndexedSlot indexed:
+                indexedMaximum = indexed.Value.MaxIndex ?? -1;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private VariableSlot? GetFieldSeparatorSlot(out BindingName name) =>
+        TryResolveWholeName(FieldSeparators.Name, out name) && !name.IsEmpty
+            && TryGetBinding(name, detachBorrowed: false, out var slot) ? slot : null;
+
+    internal ShellValue FirstFieldJoin(FieldSeparators separators)
+    {
+        if (separators.UsesIndexedBinding && _indexedIfs is { } indexed)
+            return indexed.First;
+        return separators.IsEmpty ? ShellValue.Empty : separators.First;
+    }
+
+    private void ReplaceIndexedPreservingFieldJoin(BindingName name, IndexedArray array)
+    {
+        var selected = _indexedIfs;
+        if (name == FieldSeparators.Name && selected == null)
+        {
+            var separators = FieldSeparators.FromVariables(this);
+            selected = (false, separators.IsEmpty ? ShellValue.Empty : separators.CompactFirst);
+        }
+        ReplaceValue(name, new IndexedSlot(array));
+        if (name == FieldSeparators.Name)
+            _indexedIfs = selected;
     }
 
     internal FieldSeparators CachedFieldSeparators
@@ -262,6 +315,7 @@ public sealed partial class Variables
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
             clone.StoreBinding(entry.Key, entry.Value.Clone());
+        clone._indexedIfs = _indexedIfs;
         clone._deferFieldSeparators = _deferFieldSeparators;
         clone._positional = _positional.CopyActiveValues();
         clone._argumentZero = _argumentZero;
@@ -310,6 +364,7 @@ public sealed partial class Variables
             _retained = new Variables();
             _retainedNames = new HashSet<BindingName>();
             var deferFieldSeparators = suppressTemporaryLookup && prefixes.Contains(FieldSeparators.Name);
+            var indexedIfs = owner._indexedIfs;
             if (deferFieldSeparators)
                 _ = FieldSeparators.FromVisibleBinding(owner);
             foreach (var name in prefixes)
@@ -326,7 +381,10 @@ public sealed partial class Variables
                 owner.SetAttribute(name, BindingAttributes.Temporary, true);
             }
             if (deferFieldSeparators)
+            {
                 owner._deferFieldSeparators = true;
+                owner._indexedIfs = indexedIfs;
+            }
         }
 
         private CommandBindings(Variables owner, CommandBindings source)
@@ -976,6 +1034,7 @@ public sealed partial class Variables
                     _saved.ClearBinding(name);
             }
             _names.Clear();
+            _owner.RefreshIndexedFieldSeparators();
         }
     }
 
@@ -1381,7 +1440,7 @@ public sealed partial class Variables
     {
         if (resolved.IsEmpty || IsReadonlyBinding(resolved))
             return false;
-        ReplaceValue(resolved, new IndexedSlot(array));
+        ReplaceIndexedPreservingFieldJoin(resolved, array);
         return true;
     }
 
@@ -1419,7 +1478,7 @@ public sealed partial class Variables
             if (namerefValue is { } raw)
                 promoted.Set(default, raw);
             promoted.SetSequential(origin, values, memory: null, CancellationToken.None);
-            ReplaceValue(resolved, new IndexedSlot(promoted));
+            ReplaceIndexedPreservingFieldJoin(resolved, promoted);
         }
         return true;
     }
@@ -1529,7 +1588,7 @@ public sealed partial class Variables
                 && previous.Value.TryGet(AssociativeArrayKey.Zero, out var element))
                 array.Set(default, element, memory);
             array.Set(index, value, memory, prepaidBytes);
-            ReplaceValue(resolved, new IndexedSlot(array));
+            ReplaceIndexedPreservingFieldJoin(resolved, array);
         }
         if (index.Value == 0)
             ResetGetoptsPosition(resolved);
@@ -2028,7 +2087,10 @@ public sealed partial class Variables
         var resolved = SelectArrayDeclarationBinding(name, binding).Name;
         if (NamerefTargets.ContainsKey(resolved))
             ClearBinding(resolved);
-        return TryDeclareResolvedArray(resolved, kind, promotion);
+        var declared = TryDeclareResolvedArray(resolved, kind, promotion);
+        if (declared && resolved == FieldSeparators.Name && kind == ArrayKind.Indexed)
+            RefreshIndexedFieldSeparators();
+        return declared;
     }
 
     /// <summary>Changes the selected binding's array kind, removing its nameref attribute.</summary>

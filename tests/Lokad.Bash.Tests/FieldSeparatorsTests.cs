@@ -228,8 +228,9 @@ public sealed class FieldSeparatorsTests : IDisposable
         Assert.Same(defaults, Prepare(variables));
 
         Assert.True(variables.TryAssignArray("IFS", [ShellValue.FromText(",")], ArrayKind.Indexed));
-        // The existing scalar-only IFS contract uses defaults for array bindings.
-        Assert.Same(defaults, Prepare(variables));
+        var atZero = Prepare(variables);
+        Assert.True(atZero.IsEmpty);
+        Assert.Same(atZero, Prepare(variables));
         Assert.True(colon.Contains(new Rune(':')));
     }
 

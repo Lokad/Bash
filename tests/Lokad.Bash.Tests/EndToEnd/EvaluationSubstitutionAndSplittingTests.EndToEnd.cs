@@ -1241,4 +1241,110 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData(":", ':')]
+    [InlineData("readonly IFS", ':')]
+    [InlineData("export IFS", ':')]
+    [InlineData(": 3>&-", ':')]
+    [InlineData(": >scratch", '=')]
+    [InlineData("f() { :; }; f", '=')]
+    [InlineData("IFS=, :", '=')]
+    [InlineData("IFS[61]=value", '=')]
+    public async Task IndexedIfsSeparatesCurrentSplittingFromTheSavedJoin(string command, char join)
+    {
+        var script = "IFS=([58]=value); (( IFS[61]=7 )); " + command + "\n"
+            + "value='left:middle=right'; printf '<%s>' $value\n"
+            + "set -- left right; values=(left right); printf '[%s][%s]' \"$*\" \"${values[*]}\"\n";
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal($"<left:middle><right>[left{join}right][left{join}right]", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ReadUsesTheCurrentIndexWhileQuotedStarKeepsTheSavedJoin()
+    {
+        const string script = """
+            IFS=([58]=value)
+            (( IFS[61]=7 ))
+            read -r left right <<'DATA'
+            left:middle=right
+            DATA
+            printf '<%s><%s>' "$left" "$right"
+            set -- left right
+            printf '[%s]' "$*"
+            """;
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal("<left:middle><right>[left:right]", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("58", "61", ":")]
+    [InlineData("256", "317", "")]
+    [InlineData("58", "256", " ")]
+    public async Task IndexedIfsAssignmentJoinsFollowTheSavedSeparatorWhenCurrentSeparatorsExist(
+        string initial, string current, string separator)
+    {
+        var script = "IFS=([" + initial + "]=x); (( IFS[" + current + "]=7 ));\n"
+            + """
+            a=([1]=left [3]=right)
+            set -- left right
+            keys="${!a[@]}" quoted="${@@Q}" inspect="${a[@]@k}"
+            b=( [0]="$@" [1]="${a[@]}" )
+            printf '[%s][%s][%s][%s][%s]' "$keys" "$quoted" "$inspect" "${b[0]}" "${b[1]}"
+            """;
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        var values = $"left{separator}right";
+        Assert.Equal($"[1{separator}3]['left'{separator}'right'][1{separator}left{separator}3{separator}right][{values}][{values}]",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("1", "515", "\\001", "\u0001", false)]
+    [InlineData("127", "515", "\\177", "\u007f", false)]
+    [InlineData("1", "258", "\\001", "\u0001", true)]
+    [InlineData("127", "32573", "\\177", "\u007f", true)]
+    public async Task IndexedIfsSeparatesInsertedJoinBytesFromFieldValues(
+        string initial, string current, string escape, string marker, bool delimiter)
+    {
+        var script = "IFS=([" + initial + "]=x); (( IFS[" + current + "]=7 ));\n"
+            + "set -- $'le" + escape + "ft' right\n"
+            + """
+            a=("$@")
+            printf '[%s][%s]' "$*" "${a[*]}"
+            printf '<%s>' $*
+            printf '<%s>' ${a[*]}
+            """;
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        var quoted = $"[le{marker}ft{marker}right]";
+        var unquoted = delimiter ? "<le><ft><right>" : $"<le{marker}ftright>";
+        Assert.Equal(quoted + quoted + unquoted + unquoted, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("IFS=(); value=$'left\\377right'; printf '<%s>' $value; set -- left right; printf '[%q]' \"$*\"",
+        "<left><right>[$'left\\377right']")]
+    [InlineData("IFS=:; (( IFS[61]=7 )); value='left=right'; printf '<%s>' $value; set -- left right; printf '[%s]' \"$*\"",
+        "<left=right>[left:right]")]
+    [InlineData("separator=([61]=x); declare -n IFS=separator; unset separator; separator=:; value='left:right'; printf '<%s>' $value; set -- left right; printf '[%s]' \"$*\"",
+        "<left><right>[left:right]")]
+    public async Task IndexedIfsUsesTheDeterministicBindingProfile(string script, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
 }

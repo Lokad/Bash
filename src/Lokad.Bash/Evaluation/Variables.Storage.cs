@@ -144,6 +144,8 @@ public sealed partial class Variables
         if (exported && _commandSource?.PrefixCollectionMemory is { } collections)
             collections.PrepareSetCapacity(_exportedIndex, name, BindingNameSetEntryBytes);
         using var memory = TrackBindingMemory(name);
+        var sameIfsBinding = name == FieldSeparators.Name
+            && TryGetBinding(name, detachBorrowed: false, out var previous) && ReferenceEquals(slot, previous);
         slot.Attributes = attributes;
         _bindings[name] = slot;
         _bindingCapacity = Math.Max(_bindingCapacity, _bindings.Count);
@@ -151,7 +153,10 @@ public sealed partial class Variables
             _exportedIndex.Add(name);
         else
             _exportedIndex.Remove(name);
-        UpdateFieldSeparatorBinding(name);
+        if (!sameIfsBinding)
+            UpdateFieldSeparatorBinding(name);
+        else if (_deferFieldSeparators)
+            UseVisibleFieldSeparators();
     }
 
     private void ClearBinding(BindingName name)
@@ -165,7 +170,6 @@ public sealed partial class Variables
         PreparePrefixTableEntry(name);
         using var memory = TrackBindingMemory(name);
         ResetGetoptsPosition(name);
-        UpdateFieldSeparatorBinding(name);
         if (_commandSource == null)
             _bindings.Remove(name);
         else
@@ -173,6 +177,7 @@ public sealed partial class Variables
             _bindings[name] = new MissingSlot();
             _bindingCapacity = Math.Max(_bindingCapacity, _bindings.Count);
         }
+        UpdateFieldSeparatorBinding(name);
     }
 
     private void PreparePrefixTableEntry(BindingName name)

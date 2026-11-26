@@ -259,7 +259,11 @@ internal static partial class WordExpansion
         {
             case ResolvedVariableReference.Indexed indexed:
                 if (variables.IndexedArrays.TryGetValue(indexed.Name, out var array))
+                {
                     array.Remove(indexed.Index);
+                    if (indexed.Name == FieldSeparators.Name && reference.Name == indexed.Name)
+                        variables.RefreshIndexedFieldSeparators();
+                }
                 else if (indexed.Index.Value == 0)
                     return new(true, indexed.Name);
                 else if (kind == UnsetReferenceKind.Direct)
@@ -324,7 +328,11 @@ internal static partial class WordExpansion
         if (!scope.CanExpand || target == null)
             return false;
         if (await target.AssignValueAsync(scope, reference.Name, value, operation).ConfigureAwait(false) is not null)
+        {
+            if (target.Name == FieldSeparators.Name && reference.Name == target.Name)
+                scope.Variables.RefreshIndexedFieldSeparators();
             return true;
+        }
         if (scope.Variables.IsReadonly(target.Name))
             await scope.Effects.ReportAssignmentTargetFailureAsync(
                 (reference.Kind == VariableReferenceKind.Name ? target.Name : reference.Name).ToValue(),

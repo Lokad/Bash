@@ -47,6 +47,7 @@ public sealed partial class Variables
             _argumentZero = caller._argumentZero,
             _getoptsCursor = caller._getoptsCursor,
             _deferFieldSeparators = caller._deferFieldSeparators,
+            _indexedIfs = caller._indexedIfs,
             CachedFieldSeparators = caller.CachedFieldSeparators
         };
     }
@@ -82,8 +83,10 @@ public sealed partial class Variables
         slot = slot.Clone();
         source.CancellationToken.ThrowIfCancellationRequested();
         var deferFieldSeparators = _deferFieldSeparators;
+        var indexedIfs = _indexedIfs;
         StoreBinding(name, slot);
         _deferFieldSeparators = deferFieldSeparators;
+        _indexedIfs = indexedIfs;
         return true;
     }
 

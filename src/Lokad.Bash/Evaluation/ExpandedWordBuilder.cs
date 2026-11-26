@@ -407,7 +407,7 @@ internal sealed class ExpandedWordBuilder
             || Purpose == ExpansionPurpose.IndexedCompoundOperand && quoteContext == ExpansionQuoteContext.DoubleQuoted)
         {
             // Compound @ joins use IFS except in unquoted parameter operands; empty IFS uses a space.
-            var compoundSeparator = fieldSeparators.IsEmpty ? Space : fieldSeparators.First;
+            var compoundSeparator = fieldSeparators.IsEmpty ? Space : _variables.FirstFieldJoin(fieldSeparators);
             var hasFields = AppendSeparatedFields(fields, compoundSeparator, allowWordSplitting, globQuoted);
             _hasQuotedFieldlessAt |= !hasFields && quoteContext == ExpansionQuoteContext.DoubleQuoted;
             return hasFields;
@@ -690,7 +690,13 @@ internal sealed class ExpandedWordBuilder
         }
 
         _hasUnquotedAggregate |= Purpose == ExpansionPurpose.Normal && allowWordSplitting;
-        var separator = fieldSeparators.IsEmpty ? ShellValue.Empty : fieldSeparators.First;
+        var separator = _variables.FirstFieldJoin(fieldSeparators);
+        // A saved quoting byte only separates unquoted star fields while it remains a delimiter.
+        // Apply this to the inserted separator so the payload of each field stays byte-preserving.
+        if (Purpose == ExpansionPurpose.Normal && allowWordSplitting && !globQuoted
+            && fieldSeparators.UsesIndexedBinding && separator.Bytes.Span is [CaseQuoteEscape or CaseQuoteNull]
+            && !fieldSeparators.Bytes.Span.Contains(separator.Bytes.Span[0]))
+            separator = ShellValue.Empty;
         AppendSeparatedFields(fields, separator, allowWordSplitting, globQuoted,
             preserveQuotedEmpty && globQuoted && _doubleQuote != DoubleQuoteState.Outside);
     }
@@ -775,7 +781,9 @@ internal sealed class ExpandedWordBuilder
         if (join == ParameterFieldJoin.Default)
             return false;
         var ifs = FieldSeparators.FromVariables(_variables);
-        var separator = join == ParameterFieldJoin.Space || ifs.IsEmpty ? Space : ifs.First;
+        var separator = Space;
+        if (join == ParameterFieldJoin.IfsOrSpace && !ifs.IsEmpty)
+            separator = Purpose == ExpansionPurpose.Assignment ? _variables.FirstFieldJoin(ifs) : ifs.First;
         if (quoteContext == ExpansionQuoteContext.HereDocument)
             AppendHereDocumentFields(fields, separator, PartOrigin.Protected, preserveEmptyFields: false);
         else

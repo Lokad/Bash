@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -18,6 +19,7 @@ internal sealed class FieldSeparators
     /// <summary>The shared separators used when <c>IFS</c> is unset.</summary>
     internal static readonly FieldSeparators Default = new(DefaultValue, null, null);
     internal static readonly FieldSeparators Empty = new(ShellValue.Empty, null, null);
+    private static readonly FieldSeparators SuppressedIndexed = new(ShellValue.Empty, null, null);
 
     /// <summary>The separator bytes, including any malformed UTF-8.</summary>
     private readonly ShellValue _value;
@@ -26,8 +28,11 @@ internal sealed class FieldSeparators
     // belongs to a replacement snapshot in the active variable scope.
     private readonly HashSet<Rune>? _characters;
     private readonly ByteMembership? _byteMembership;
+    private long? _indexedMaximum;
     private volatile CaseQuoteBytes _caseQuoteDelimiters;
     private byte[]? _compactFirst;
+
+    internal bool UsesIndexedBinding => _indexedMaximum.HasValue || ReferenceEquals(this, SuppressedIndexed);
 
     /// <summary>Initializes separators from an <c>IFS</c> value.</summary>
     private FieldSeparators(ShellValue value, HashSet<Rune>? characters, ByteMembership? byteMembership)
@@ -102,14 +107,40 @@ internal sealed class FieldSeparators
 
     internal static FieldSeparators FromVisibleBinding(Variables variables)
     {
-        if (!variables.TryGetScalar(Name, out var value))
+        if (!variables.TryGetFieldSeparatorValue(out var value, out var indexedMaximum))
             return variables.CachedFieldSeparators = Default;
 
-        // Resolve aliases every time; immutable memory identity detects changes without value scans.
         var cached = variables.CachedFieldSeparators;
-        if (!cached.Bytes.Equals(value.Bytes))
+        if (indexedMaximum is { } maximum)
+        {
+            if (variables.IndexedFieldSplittingSuppressed)
+                return variables.CachedFieldSeparators = SuppressedIndexed;
+            if (cached._indexedMaximum == maximum)
+                return cached;
+            return variables.CachedFieldSeparators = new FieldSeparators(ProjectIndex(maximum, firstOnly: false), null, null)
+                { _indexedMaximum = maximum };
+        }
+
+        // Resolve aliases every time; immutable memory identity detects changes without value scans.
+        if (cached.UsesIndexedBinding || !cached.Bytes.Equals(value.Bytes))
             variables.CachedFieldSeparators = cached = new FieldSeparators(value, null, null);
         return cached;
+    }
+
+    internal static ShellValue ProjectIndex(long maximum, bool firstOnly)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(long)];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, maximum);
+        var end = bytes.IndexOf((byte)0);
+        var value = end == -1 ? bytes : bytes[..end];
+        if (firstOnly && !value.IsEmpty)
+            value = value[..Utf8Text.FirstCharacterLength(value)];
+        return value.Length switch
+        {
+            0 => ShellValue.Empty,
+            1 => ShellValue.FromByte(value[0]),
+            _ => ShellValue.FromBytes(value.ToArray()),
+        };
     }
 
     /// <summary>Admits and prepares scalar membership in the active variable owner, preserving shared snapshots.</summary>
@@ -183,6 +214,7 @@ internal sealed class FieldSeparators
     {
         var prepared = new FieldSeparators(_value, characters, byteMembership)
         {
+            _indexedMaximum = _indexedMaximum,
             _caseQuoteDelimiters = _caseQuoteDelimiters,
             _compactFirst = Volatile.Read(ref _compactFirst),
         };

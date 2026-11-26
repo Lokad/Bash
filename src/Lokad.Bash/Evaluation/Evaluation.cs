@@ -4121,8 +4121,12 @@ public sealed partial class Evaluation : IFileTester
                     && writesTemporary && mayDeferPrefixPromotion
                     && destination.IsIntegerBinding(target.Name)
                     ? GetIntegerPromotionScope(writeScope, commandBindings) : writeScope;
-                return await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
+                var assigned = await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation,
                     ShellValue.FromText(commandName), declarationWrite, valueScope).ConfigureAwait(false) is not null;
+                if (assigned && target.Name == FieldSeparators.Name && reference.Name == target.Name
+                    && options.Builtin is BuiltinKind.Declare or BuiltinKind.Local)
+                    destination.RefreshIndexedFieldSeparators();
+                return assigned;
             }
 
             async Task ApplyNamedAttributesAsync(BindingName name, ShellValue? assignmentPrefix)

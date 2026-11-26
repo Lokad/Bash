@@ -403,6 +403,8 @@ public sealed partial class Evaluation
             if (target is WordExpansion.ResolvedVariableReference.Indexed element)
                 lastIndex = element.Index.Value;
         }
+        if (name == FieldSeparators.Name && sourceName == name)
+            targetVariables.RefreshIndexedFieldSeparators();
         return true;
 
         async Task<bool> VisitPreparedItemsAsync(Func<ExpandedArrayItem, ValueTask<bool>> accept)

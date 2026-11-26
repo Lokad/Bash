@@ -715,6 +715,19 @@ IFS lookup follows the current scalar value through namerefs, including mutation
 of their targets. Cached membership follows that value's byte-slice identity.
 This deliberately retains consistent target lookup where the two pinned GNU 5.2
 builds give different stale-cache results for IFS nameref-target changes.
+
+For an indexed `IFS`, current splitting reads the low-order bytes of the
+greatest index in little-endian order up to the first zero byte. The empty
+indexed array projects byte `FF` as a delimiter, matching the pinned Linux
+empty-array controls. Quoted stars and assignment joins can retain a saved
+first separator while arithmetic or an input builtin changes the current
+indices. A direct scalar-to-indexed promotion by one of these writers keeps the
+prior first separator and disables indexed splitting until the next refresh.
+Direct assignments and the tested declaration and scope-settlement boundaries
+refresh the saved separator. Scalar targets of namerefs always use their
+current value. An unquoted star omits an inserted SOH or DEL join byte when
+it is absent from the current indexed separators. Field data keeps its bytes.
+
 Valid input characters use scalar membership; malformed input bytes test every
 configured IFS byte, including bytes inside otherwise valid UTF-8 separators.
 Only space, tab and LF have IFS whitespace semantics.
