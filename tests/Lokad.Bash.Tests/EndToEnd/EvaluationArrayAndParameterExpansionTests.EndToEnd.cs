@@ -117,44 +117,30 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayAllElements()
+    [Theory]
+    [InlineData("arr=('first second' '' third); printf '<%s>' ${arr[@]}")]
+    [InlineData("arr=('first second' '' third); printf '<%s>' ${arr[*]}")]
+    [InlineData("set 'first second' '' third; printf '<%s>' $@")]
+    [InlineData("set 'first second' '' third; printf '<%s>' $*")]
+    public async Task UnquotedAggregateExpansionSplitsWordsAndDropsEmptyFields(string script)
     {
-        // This test verifies that ${arr[@]} expands to all indexed elements.
-        // The script sets arr=(a b) and echoes ${arr[@]}, which must output "a b\n".
-        // If expansion fails, STDOUT would be empty or incomplete.
-        var script = @"arr=(a b); echo ${arr[@]}";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("a b\n", result.StdOut);
+        Assert.Equal("<first><second><third>", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayStar()
+    [Theory]
+    [InlineData("arr=('first second' '' third); printf '<%s>' \"${arr[*]}\"", "<first second  third>")]
+    [InlineData("IFS=',:'; arr=('first second' '' third); printf '<%s>' \"${arr[*]}\"", "<first second,,third>")]
+    [InlineData("set 'first second' '' third; printf '<%s>' \"$*\"", "<first second  third>")]
+    [InlineData("IFS=',:'; set -- 'first second' '' third; printf '<%s>' \"$*\"", "<first second,,third>")]
+    public async Task QuotedStarJoinsFieldsWithTheFirstIfsCharacter(string script, string expected)
     {
-        // This test verifies that ${arr[*]} expands to all indexed elements.
-        // The script sets arr=(a b) and echoes ${arr[*]}, which must output "a b\n".
-        // If expansion fails, STDOUT would be empty.
-        var script = @"arr=(a b); echo ${arr[*]}";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("a b\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayStarQuoted()
-    {
-        // This test verifies that quoted ${arr[*]} preserves the joined string.
-        // The script sets arr=(a b) and echoes "${arr[*]}", which must output "a b\n".
-        // If quoting is mishandled, the output could be split or altered.
-        var script = @"arr=(a b); echo ""${arr[*]}""";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("a b\n", result.StdOut);
+        Assert.Equal(expected, result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
@@ -173,56 +159,23 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
     }
 
     [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsIndexedArrayStarQuotedWithFirstIfsCharacter()
+    public async Task QuotedPositionalAtPreservesFieldsAndEmptyArguments()
     {
-        // This test verifies that quoted ${arr[*]} joins elements with the first IFS character.
-        // The script sets IFS=, and must output "a,b,c\n" instead of joining with spaces.
-        var script = @"IFS=,; arr=(a b c); echo ""${arr[*]}""";
+        var script = "set 'first second' '' third; printf '<%s>' \"$@\"";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("a,b,c\n", result.StdOut);
+        Assert.Equal("<first second><><third>", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 
     [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsAtUnquoted()
+    public async Task UnquotedUnsetScalarDoesNotEmitAnEmptyArgument()
     {
-        // This test verifies that unquoted $@ expands to positional parameters.
-        // The script sets parameters and echoes $@, which must output "one two\n".
-        // If expansion fails, STDOUT would be empty.
-        var script = @"set one two; echo $@";
+        var script = "unset MISSING; printf '<%s>' before $MISSING after";
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("one two\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsAtQuoted()
-    {
-        // This test verifies that quoted "$@" preserves arguments as separate words.
-        // The script sets parameters and echoes "$@", which must output "one two\n".
-        // If "$@" collapses incorrectly, the output would differ.
-        var script = @"set one two; echo ""$@""";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("one two\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_CommandInvocation_UnquotedUnsetScalarDoesNotEmitEmptyArgument()
-    {
-        // This test verifies that an unquoted unset scalar disappears during word splitting.
-        // The script invokes printf with only its format argument, so STDOUT must be "0\n".
-        // If an empty argument is emitted, printf would report "1\n" instead.
-        var script = @"printf '%s\n' $# $MISSING";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("0\n", result.StdOut);
+        Assert.Equal("<before><after>", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
@@ -236,47 +189,6 @@ public sealed class EvaluationArrayAndParameterExpansionTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script);
 
         Assert.Equal("[a b]\n[c]\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsStarUnquoted()
-    {
-        // This test verifies that unquoted $* expands positional parameters.
-        // The script sets parameters and echoes $*, which must output "one two\n".
-        // If expansion fails, STDOUT would be empty.
-        var script = @"set one two; echo $*";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("one two\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsStarQuotedWithFirstIfsCharacter()
-    {
-        // This test verifies that quoted "$*" joins positional parameters with the first IFS character.
-        // The script sets IFS=, and must output "a,b,c\n" instead of joining with spaces.
-        var script = @"IFS=,; set -- a b c; echo ""$*""";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("a,b,c\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_EchoBuiltin_ExpandsStarQuoted()
-    {
-        // This test verifies that quoted "$*" joins parameters using IFS.
-        // The script sets parameters and echoes "$*", which must output "one two\n".
-        // If quoted expansion is mishandled, the output would differ.
-        var script = @"set one two; echo ""$*""";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("one two\n", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
