@@ -1490,6 +1490,7 @@ public static class Parser
         var commandLine = 0;
         var trackNextTokenLine = false;
         var lastWordEnd = 0;
+        var lastWordLine = 0;
         var redirectionDiagnosticLine = 0;
         var redirectionOpenLine = 0;
 
@@ -1550,10 +1551,7 @@ public static class Parser
                 case TokenKind.Redirection:
                     sawAny = true;
                     if (trackRedirectionLine)
-                    {
-                        redirectionOpenLine = tokenizer.GetLine(token.Source.Start.Value);
-                        RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(token));
-                    }
+                        RecordInitialRedirection(token, token.Source.Start.Value);
                     ReadRedirection(tokenizer, token, null, string.Empty, ref redirections);
                     if (trackRedirectionLine)
                         redirectionDiagnosticLine = tokenizer.GetLine(tokenizer.ConsumedPosition);
@@ -1571,10 +1569,7 @@ public static class Parser
                     if (TryGetFileDescriptor(tokenizer, wordToken, out var fileDescriptor, out var redirectionToken))
                     {
                         if (trackRedirectionLine)
-                        {
-                            redirectionDiagnosticLine = redirectionOpenLine = tokenizer.GetLine(token.Source.End.Value);
-                            RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(redirectionToken));
-                        }
+                            RecordInitialRedirection(redirectionToken, token.Source.End.Value);
                         ReadRedirection(tokenizer, redirectionToken, fileDescriptor, string.Empty, ref redirections);
                         continue;
                     }
@@ -1582,10 +1577,7 @@ public static class Parser
                     if (TryGetAllocationVariable(tokenizer, wordToken, out var variableName, out var allocationToken))
                     {
                         if (trackRedirectionLine)
-                        {
-                            redirectionDiagnosticLine = redirectionOpenLine = tokenizer.GetLine(token.Source.End.Value);
-                            RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(allocationToken));
-                        }
+                            RecordInitialRedirection(allocationToken, token.Source.End.Value);
                         var operandOffset = ReadRedirection(tokenizer, allocationToken, null, variableName, ref redirections);
                         if (trackRedirectionLine && operandOffset is { } offset
                             && allocationToken.RedirectionKind is RedirectionKind.Input or RedirectionKind.Output)
@@ -1661,8 +1653,7 @@ public static class Parser
                                 && kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local;
                     }
                     allowAssignments = false;
-                    (words ??= []).Add(wordToken.Word);
-                    lastWordEnd = tokenizer.ConsumedPosition;
+                    AddWord(wordToken.Word);
                     continue;
                 default:
                     const string message = "Unexpected token while parsing a simple command.";
@@ -1688,6 +1679,14 @@ public static class Parser
             trackNextTokenLine = false;
         }
 
+        void RecordInitialRedirection(Token redirection, int position)
+        {
+            // Keep the word coordinate before diagnostic reads move through the operand.
+            lastWordLine = tokenizer.GetLine(lastWordEnd);
+            redirectionDiagnosticLine = redirectionOpenLine = tokenizer.GetLine(position);
+            RecordNextTokenLine(tokenizer.GetRedirectionLookaheadLine(redirection));
+        }
+
         SimpleCommand CreateCommand(Token trailing)
         {
             if (trackNextTokenLine)
@@ -1701,7 +1700,8 @@ public static class Parser
                 words is null ? Array.Empty<Word>() : words,
                 redirections is null ? Array.Empty<Redirection>() : redirections,
                 declarationAssignments ?? SimpleCommand.NoDeclarationAssignments);
-            var lastWordLine = redirections != null && lastWordEnd != 0 ? tokenizer.GetLine(lastWordEnd) : 0;
+            if (redirections != null && lastWordEnd != 0 && lastWordLine == 0)
+                lastWordLine = tokenizer.GetLine(lastWordEnd);
             tokenizer.RecordLocation(command, startLine, commandLine, redirectionDiagnosticLine, redirectionOpenLine, lastWordLine);
             return command;
         }
@@ -1717,9 +1717,15 @@ public static class Parser
             }
 
             // Word identity survives command-field forwarding; numeric argument indices do not.
+            AddWord(word);
+            (declarationAssignments ??= new Dictionary<Word, AssignmentWord>()).Add(word, assignment);
+        }
+
+        void AddWord(Word word)
+        {
             (words ??= []).Add(word);
             lastWordEnd = tokenizer.ConsumedPosition;
-            (declarationAssignments ??= new Dictionary<Word, AssignmentWord>()).Add(word, assignment);
+            lastWordLine = 0;
         }
     }
 

@@ -57,6 +57,31 @@ public sealed class ParserCommandUnitTests
         Assert.False(commands.MoveNext());
     }
 
+    [Theory]
+    [InlineData(": >'a\nb'\n", 1, 2, 2)]
+    [InlineData(": 2>'a\nb'\n", 1, 2, 1)]
+    [InlineData(": {out}>'a\nb'\n", 1, 2, 1)]
+    [InlineData(": >'a\nb' 'later\nword'\n", 3, 3, 2)]
+    public void MultilineRedirectionsKeepTheLastCommandWordLine(
+        string source, int lastWordLine, int endLine, int diagnosticLine)
+    {
+        var bytes = ShellSource.FromText(source).Bytes;
+        var script = Parser.Parse(bytes);
+        var unit = Assert.IsType<CommandUnitParseResult.Parsed>(Assert.Single(Parser.TryParseCommandUnits(bytes)));
+
+        AssertLocation(Assert.Single(script.Commands), script.Locations);
+        AssertLocation(unit.Command, unit.Locations);
+
+        void AssertLocation(ICommand command, CommandLocations? locations)
+        {
+            Assert.NotNull(locations);
+            Assert.True(locations.TryGet(command, out var location));
+            Assert.Equal(lastWordLine, location.LastWordLine);
+            Assert.Equal(endLine, location.EndLine);
+            Assert.Equal(diagnosticLine, location.RedirectionDiagnosticLine);
+        }
+    }
+
     [Fact]
     public void LaterHereDocumentsDoNotChangeEarlierCompletedUnits()
     {
