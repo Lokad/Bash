@@ -34,7 +34,6 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         var evaluation = state.EnsureRunning(cancellation.Token);
 
         var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(deadline.Token));
-        var before = governor.ReservedBytes;
         var descriptor = new FileDescriptor(17);
         open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
         var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
@@ -62,10 +61,9 @@ public sealed class EvaluationGetoptsTestsEndToEnd
         Assert.Equal(descriptor, writeDescriptor);
         Assert.Equal(descriptor, close.Descriptor);
         Assert.StartsWith("getopts: getopts optstring name [arg ...]\nParse", Utf8Text.Decode(content));
-        Assert.Equal(content.Length, pending - before);
         Assert.Equal(pending, retained);
         Assert.False(closedBeforeWrite);
-        Assert.True(pending - afterWrite >= content.Length);
+        Assert.Equal(content.Length, pending - afterWrite);
         Assert.Empty(state.GetDescriptorsForCleanup());
         owner.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
