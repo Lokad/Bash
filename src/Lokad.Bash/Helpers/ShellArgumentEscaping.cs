@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Lokad.Bash.Helpers;
@@ -16,7 +17,23 @@ public static class ShellArgumentEscaping
     // Printable ASCII except the two bytes escaped inside ANSI-C quotes.
     private static readonly SearchValues<byte> AnsiCLiteralAscii = SearchValues.Create(
         " !\"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"u8);
+    // Comma is last so that assignment values and array keys can omit it from their search.
+    private static ReadOnlySpan<byte> UnquotedSpecialAscii => " !\"#$&'()*;<>?[\\]^`{|}~,"u8;
+    private static readonly SearchValues<byte> UnquotedSpecialBytes = SearchValues.Create(UnquotedSpecialAscii[..^1]);
+    private static readonly SearchValues<byte> BackslashQuoteBytes = SearchValues.Create(UnquotedSpecialAscii);
+    private const byte UnquotedSpecial = 1;
+    private const byte BackslashSpecial = 2;
+    private static readonly byte[] UnquotedSpecialLookup = CreateUnquotedSpecialLookup();
     private static readonly SearchValues<byte> DoubleQuoteEscapes = SearchValues.Create("\"$`\\"u8);
+
+    private static byte[] CreateUnquotedSpecialLookup()
+    {
+        var lookup = new byte[256];
+        foreach (var value in UnquotedSpecialAscii[..^1])
+            lookup[value] = UnquotedSpecial;
+        lookup[UnquotedSpecialAscii[^1]] = BackslashSpecial;
+        return lookup;
+    }
 
     /// <summary>Delimits a diagnostic operand without decoding or escaping its bytes.</summary>
     public static ShellValue QuoteDiagnosticOperand(ShellValue operand) =>
@@ -124,9 +141,8 @@ public static class ShellArgumentEscaping
         if (style is ShellQuoteStyle.AssociativeKey or ShellQuoteStyle.AssignmentValue)
         {
             // '@' is special as an entire array key, not as a scalar assignment value.
-            var needsQuotes = style == ShellQuoteStyle.AssociativeKey && input.Length == 1 && input[0] == (byte)'@';
-            for (var index = 0; !needsQuotes && index < input.Length; index++)
-                needsQuotes = !IsShellSafe(input, index);
+            var needsQuotes = style == ShellQuoteStyle.AssociativeKey && input is [(byte)'@']
+                || FindUnquotedSpecialByte(input, 0, escapeComma: false) >= 0;
             if (!needsQuotes)
                 return output.TryAppend(input);
             style = style == ShellQuoteStyle.AssociativeKey ? ShellQuoteStyle.DoubleQuoted : ShellQuoteStyle.SingleQuoted;
@@ -139,13 +155,15 @@ public static class ShellArgumentEscaping
             return output.TryAppend((byte)'\'') && AppendLiteralRun(output, input) && output.TryAppend((byte)'\'');
 
         var runStart = 0;
-        for (var index = 0; index < input.Length; index++)
+        while (runStart < input.Length)
         {
             // A reusable word can be inserted into a brace list.
-            if (input[index] != (byte)',' && IsShellSafe(input, index))
-                continue;
+            var index = FindUnquotedSpecialByte(input, runStart, escapeComma: true);
+            if (index < 0)
+                break;
 
-            if (!AppendLiteralRun(output, input[runStart..index]) || !AppendBackslashEscape(output, input[index]))
+            if ((index > runStart && !AppendLiteralRun(output, input[runStart..index]))
+                || !AppendBackslashEscape(output, input[index]))
                 return false;
             runStart = index + 1;
         }
@@ -230,19 +248,37 @@ public static class ShellArgumentEscaping
                 or UnicodeCategory.OtherNotAssigned ? 0 : length;
         }
 
-        static bool IsShellSafe(ReadOnlySpan<byte> bytes, int index)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static int FindUnquotedSpecialByte(ReadOnlySpan<byte> bytes, int start, bool escapeComma)
         {
-            var value = bytes[index];
-            // Tildes can also expand after '=' and ':'.
-            return value is >= (byte)'a' and <= (byte)'z'
-                or >= (byte)'A' and <= (byte)'Z'
-                or >= (byte)'0' and <= (byte)'9'
-                or (byte)'_' or (byte)'@' or (byte)'%' or (byte)'+'
-                or (byte)'=' or (byte)':' or (byte)',' or (byte)'.'
-                or (byte)'/' or (byte)'-'
-                || value >= 0x80
-                || value == (byte)'#' && index > 0
-                || value == (byte)'~' && index > 0 && bytes[index - 1] is not (byte)'=' and not (byte)':';
+            var mask = escapeComma ? UnquotedSpecial | BackslashSpecial : UnquotedSpecial;
+            // The caller already validated the printable UTF-8. Only ASCII can require quoting here.
+            while (start < bytes.Length)
+            {
+                var remaining = bytes[start..];
+                var offset = 0;
+                // Keep adjacent and alternating escapes in the scalar path.
+                if ((UnquotedSpecialLookup[remaining[0]] & mask) == 0)
+                {
+                    offset = remaining.Length > 1 && (UnquotedSpecialLookup[remaining[1]] & mask) != 0
+                        ? 1 : remaining.IndexOfAny(escapeComma ? BackslashQuoteBytes : UnquotedSpecialBytes);
+                }
+                if (offset < 0)
+                    return -1;
+
+                var index = start + offset;
+                var value = bytes[index];
+                if (value == (byte)'#' && index > 0
+                    || value == (byte)'~' && index > 0 && bytes[index - 1] is not (byte)'=' and not (byte)':')
+                {
+                    start = index + 1;
+                    continue;
+                }
+
+                return index;
+            }
+
+            return -1;
         }
     }
 

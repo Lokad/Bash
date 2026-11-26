@@ -106,8 +106,11 @@ public sealed class ShellQuotedOutputTests
             (ShellQuoteStyle.DoubleQuoted, "\r\n\t\u001b\u0001", "$'\\r\\n\\t\\E\\001'"),
             (ShellQuoteStyle.AssociativeKey, "@", "\"@\""),
             (ShellQuoteStyle.AssociativeKey, "a=b", "a=b"),
+            (ShellQuoteStyle.AssociativeKey, "a#,b~c", "a#,b~c"),
             (ShellQuoteStyle.AssociativeKey, "a:~", "\"a:~\""),
             (ShellQuoteStyle.AssignmentValue, "a=~", "'a=~'"),
+            (ShellQuoteStyle.AssignmentValue, "a#,b~é", "a#,b~é"),
+            (ShellQuoteStyle.AssignmentValue, "a#b,c:~d", "'a#b,c:~d'"),
             (ShellQuoteStyle.DoubleQuoted, "", "\"\"")
         ];
         foreach (var (style, input, expected) in cases)
@@ -164,6 +167,7 @@ public sealed class ShellQuotedOutputTests
 
     [Theory]
     [InlineData(ShellQuoteStyle.Backslash, "#é a=~:~b#", "\\#é\\ a=\\~:\\~b#")]
+    [InlineData(ShellQuoteStyle.Backslash, "#éabc,def~ghi#jkl=~mno:~pqr", "\\#éabc\\,def~ghi#jkl=\\~mno:\\~pqr")]
     [InlineData(ShellQuoteStyle.DoubleQuoted, "aé$\"`\\'!z", "\"aé\\$\\\"\\`\\\\'!z\"")]
     [InlineData(ShellQuoteStyle.AssociativeKey, "a é$\"`\\'!z", "\"a é\\$\\\"\\`\\\\'!z\"")]
     public void PrintableQuotesPreserveEveryBytePrefix(ShellQuoteStyle style, string input, string rendered)
