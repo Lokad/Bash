@@ -34,6 +34,7 @@ internal static class BraceExpansion
         public int PreviousCommas { get; } = previousCommas;
         public Boundary Closing { get; set; }
         public BraceKind Kind { get; set; }
+        public bool HasNestedBrace { get; set; }
         public bool HasSequenceSeparator { get; set; }
         public List<Boundary>? Commas { get; set; }
         public Sequence? Sequence { get; set; }
@@ -332,8 +333,9 @@ internal static class BraceExpansion
 
     private static List<Brace> Scan(IReadOnlyList<WordPart> parts, MemoryCapacity scratch, CancellationToken cancellationToken)
     {
+        const int BraceBytes = 192;
         var braces = new List<Brace>();
-        var open = new Stack<Brace>();
+        var open = new List<Brace>();
         var context = new ShellScanContext { SyntaxMemory = scratch };
         var rawCommas = 0;
         var parameterBraces = 0;
@@ -404,22 +406,29 @@ internal static class BraceExpansion
                                     rawCommas = 0;
                                 }
                                 else
+                                {
                                     CountRawCommas(bytes, offset, ref rawOffset);
-                                scratch.Grow(256);
+                                    open[^1].HasNestedBrace = true;
+                                }
+                                scratch.PrepareListCapacity(braces, 1);
+                                scratch.PrepareListCapacity(open, 1);
+                                scratch.Grow(BraceBytes);
                                 var candidate = new Brace(new(new(partIndex, offset), braces.Count + 1), rawCommas);
                                 braces.Add(candidate);
-                                open.Push(candidate);
+                                open.Add(candidate);
                                 break;
-                            case (byte)',' when open.TryPeek(out var enclosing):
+                            case (byte)',' when open.Count != 0:
                                 scratch.Grow(64);
-                                (enclosing.Commas ??= []).Add(new(new(partIndex, offset), braces.Count));
+                                (open[^1].Commas ??= []).Add(new(new(partIndex, offset), braces.Count));
                                 break;
-                            case (byte)'.' when open.TryPeek(out var sequence)
+                            case (byte)'.' when open.Count != 0
                                 && bytes[offset..].StartsWith(".."u8)
                                 && (offset + 2 == bytes.Length || bytes[offset + 2] != (byte)'}'):
-                                sequence.HasSequenceSeparator = true;
+                                open[^1].HasSequenceSeparator = true;
                                 break;
-                            case (byte)'}' when open.TryPop(out var brace):
+                            case (byte)'}' when open.Count != 0:
+                                var brace = open[^1];
+                                open.RemoveAt(open.Count - 1);
                                 CountRawCommas(bytes, offset, ref rawOffset);
                                 brace.Closing = new(new(partIndex, offset), braces.Count);
                                 var opening = brace.Opening;
@@ -428,13 +437,19 @@ internal static class BraceExpansion
                                 else if (brace.HasSequenceSeparator)
                                 {
                                     brace.Kind = BraceKind.LiteralSequence;
-                                    if (opening.Position.Part == partIndex && opening.BraceIndex == braces.Count
+                                    if (opening.Position.Part == partIndex && !brace.HasNestedBrace
                                         && TryParseSequence(bytes[(opening.Position.Offset + 1)..offset],
                                             cancellationToken, out var parsed))
                                     {
                                         brace.Sequence = parsed;
                                         brace.Kind = BraceKind.Sequence;
                                     }
+                                }
+                                else if (opening.BraceIndex == braces.Count)
+                                {
+                                    // Earlier boundaries still point to the next reached group at this index.
+                                    braces.RemoveAt(braces.Count - 1);
+                                    scratch.Resize(scratch.Bytes - BraceBytes);
                                 }
                                 break;
                         }

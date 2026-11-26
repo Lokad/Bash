@@ -75,6 +75,9 @@ public sealed class EvaluationBraceExpansionTests
     [InlineData("{a,\"$(printf '%s' 'b c')\"}", "<a><b c>")]
     [InlineData("x{a,{b,c}", "<x{a,b><x{a,c>")]
     [InlineData("{{a,b}}{1,2}", "<{a}1><{a}2><{b}1><{b}2>")]
+    [InlineData("{x}{a,b}{y}", "<{x}a{y}><{x}b{y}>")]
+    [InlineData("{a,{x}b,{y},c}", "<a><{x}b><{y}><c>")]
+    [InlineData("{a..{x}}{1,2}", "<{a..{x}}1><{a..{x}}2>")]
     [InlineData("{{a,b}..c} {{a..b}..c}{x,y}", "<a..c><b..c><{{a..b}..c}x><{{a..b}..c}y>")]
     public async Task BraceGrammarTraversesOpaqueFragmentsAndInvalidParents(string source, string expected)
     {
@@ -363,14 +366,17 @@ public sealed class EvaluationBraceExpansionTests
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
-    public void LiteralGroupsReleaseScanStorageBeforeReturningTheOriginalWord()
+    [Theory]
+    [InlineData(32)]
+    [InlineData(128)]
+    [InlineData(1024)]
+    public void ClosedLiteralGroupsReuseScanStorage(int groups)
     {
-        var governor = new MemoryGovernor(1024 * 1024);
+        var governor = new MemoryGovernor(5 * 1024);
         using var owner = governor.CreateScope();
         using var retained = owner.Reserve(4096);
         var memory = new EvaluationMemory(owner);
-        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, string.Concat(Enumerable.Repeat("{x}", 128)))]);
+        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, string.Concat(Enumerable.Repeat("{x}", groups)))]);
 
         Assert.Same(word, Assert.Single(BraceExpansion.Expand(word, memory, CancellationToken.None)));
         Assert.True(governor.PeakBytes > 4096);
@@ -454,7 +460,7 @@ public sealed class EvaluationBraceExpansionTests
         using var owner = governor.CreateScope();
         using var retained = owner.Reserve(4096);
         var memory = new EvaluationMemory(owner);
-        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, string.Concat(Enumerable.Repeat("{x}", 128)))]);
+        var word = new Word([WordPart.FromText(WordPartKind.Unquoted, new string('{', 128) + "x" + new string('}', 128))]);
 
         Assert.Throws<MemoryBudgetExceededException>(() => BraceExpansion.Expand(word, memory, CancellationToken.None));
         Assert.True(governor.PeakBytes > 4096);
