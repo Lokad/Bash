@@ -314,6 +314,19 @@ public sealed class ArithmeticEvaluationTests
     }
 
     [Theory]
+    [InlineData("00000000000000000000000000000052", 42L)]
+    [InlineData("0x00000000000000000000000000002A", 42L)]
+    [InlineData("-0X00000000000000000000000000002A", -42L)]
+    [InlineData("+16#0000000000000000000000000002a", 42L)]
+    public void PaddedLiteralsSelectTheSameRadixFromTextAndBytes(string literal, long expected)
+    {
+        Assert.True(ArithmeticEvaluation.TryParseIntegerLiteral(literal.AsSpan(), out var textValue));
+        Assert.True(ArithmeticEvaluation.TryParseIntegerLiteral(ShellValue.FromText(literal).Bytes.Span, out var byteValue));
+        Assert.Equal(expected, textValue);
+        Assert.Equal(expected, byteValue);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("+")]
     [InlineData("-")]

@@ -165,7 +165,6 @@ public static partial class ArithmeticEvaluation
             return ArithmeticErrorKind.InvalidNumber;
 
         var radix = 10;
-        var separator = text.IndexOf(T.CreateChecked('#'));
         if (text.Length > 1 && text[0] == T.CreateChecked('0'))
         {
             if (text[1] == T.CreateChecked('x') || text[1] == T.CreateChecked('X'))
@@ -176,7 +175,7 @@ public static partial class ArithmeticEvaluation
             else
                 radix = 8;
         }
-        else if (separator >= 0)
+        else if (text.IndexOf(T.CreateChecked('#')) is >= 0 and var separator)
         {
             radix = 0;
             if (separator == 0)
