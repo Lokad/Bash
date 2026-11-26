@@ -12,16 +12,18 @@ public static class EchoFormatting
     public static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments) =>
         GetOutputFormat(arguments, out _);
 
-    private static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments, out bool expandEscapes)
+    private static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments, out bool needsEscaping)
     {
-        var firstArgument = ReadOptions(arguments, arguments.Count, out var suppressNewline, out expandEscapes);
+        var firstArgument = ReadOptions(arguments, arguments.Count, out var suppressNewline, out var expandEscapes);
         if (expandEscapes)
         {
-            var length = WalkEscapedArguments(arguments, firstArgument, output: null, out var stopped);
-            suppressNewline |= stopped;
+            var length = WalkEscapedArguments(arguments, firstArgument, output: null, out var status);
+            needsEscaping = status != ShellEscapeStatus.Literal;
+            suppressNewline |= status == ShellEscapeStatus.StopOutput;
             return new OutputFormat(firstArgument, suppressNewline, length + (suppressNewline ? 0 : 1));
         }
 
+        needsEscaping = false;
         long outputLength = Math.Max(0, arguments.Count - firstArgument - 1) + (suppressNewline ? 0 : 1);
         for (var index = firstArgument; index < arguments.Count; index++)
             outputLength += arguments[index].Bytes.Length;
@@ -62,20 +64,20 @@ public static class EchoFormatting
     /// <remarks>The caller retains the expanded operands and their owners through the write.</remarks>
     internal static ReadOnlyMemory<byte> Format(IReadOnlyList<ShellValue> arguments, IMemoryScope memory)
     {
-        var format = GetOutputFormat(arguments, out var expandEscapes);
-        if (!expandEscapes && format.SuppressNewline && format.FirstArgument == arguments.Count - 1)
+        var format = GetOutputFormat(arguments, out var needsEscaping);
+        if (!needsEscaping && format.SuppressNewline && format.FirstArgument == arguments.Count - 1)
             return arguments[format.FirstArgument].Bytes;
 
-        return Format(arguments, format, expandEscapes, memory);
+        return Format(arguments, format, needsEscaping, memory);
     }
 
     private static ReadOnlyMemory<byte> Format(
         IReadOnlyList<ShellValue> arguments, OutputFormat format, bool expandEscapes, IMemoryScope memory)
     {
         using var output = new ByteMemoryBuilder(checked((int)format.Length), memory);
-        var stopped = false;
+        var status = ShellEscapeStatus.Literal;
         if (expandEscapes)
-            WalkEscapedArguments(arguments, format.FirstArgument, output, out stopped);
+            WalkEscapedArguments(arguments, format.FirstArgument, output, out status);
         else
         {
             for (var index = format.FirstArgument; index < arguments.Count; index++)
@@ -85,7 +87,7 @@ public static class EchoFormatting
                 output.Append(arguments[index].Bytes);
             }
         }
-        if (!format.SuppressNewline && !stopped)
+        if (!format.SuppressNewline && status != ShellEscapeStatus.StopOutput)
             output.Append((byte)'\n');
 
         return output.DetachSnapshot();
@@ -93,9 +95,10 @@ public static class EchoFormatting
 
     // Use the same traversal to measure exact capacity and to write admitted bytes.
     private static long WalkEscapedArguments(
-        IReadOnlyList<ShellValue> arguments, int first, ByteMemoryBuilder? output, out bool stopped)
+        IReadOnlyList<ShellValue> arguments, int first, ByteMemoryBuilder? output, out ShellEscapeStatus status)
     {
         Span<byte> decoded = stackalloc byte[ShellEscapeDecoder.MaximumEscapeBytes];
+        status = ShellEscapeStatus.Literal;
         long length = 0;
         for (var index = first; index < arguments.Count; index++)
         {
@@ -122,7 +125,7 @@ public static class EchoFormatting
                 var escape = ShellEscapeDecoder.DecodeEcho(remaining, decoded);
                 if (escape.Status == ShellEscapeStatus.StopOutput)
                 {
-                    stopped = true;
+                    status = ShellEscapeStatus.StopOutput;
                     return length;
                 }
                 if (escape.Status == ShellEscapeStatus.Literal)
@@ -132,12 +135,12 @@ public static class EchoFormatting
                     continue;
                 }
 
+                status = ShellEscapeStatus.Decoded;
                 output?.Append(decoded[..escape.Written]);
                 length += escape.Written;
                 remaining = remaining[escape.Consumed..];
             }
         }
-        stopped = false;
         return length;
     }
 

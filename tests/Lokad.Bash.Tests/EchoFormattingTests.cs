@@ -67,6 +67,36 @@ public sealed class EchoFormattingTests
     }
 
     [Theory]
+    [InlineData("410DFF")]
+    [InlineData("415C7A5C78475C315C")]
+    [InlineData("")]
+    public void EnabledEscapesCanLeaveOneOperandBorrowed(string operandHex)
+    {
+        var raw = Convert.FromHexString("00" + operandHex + "00");
+        ReadOnlyMemory<byte> operand = raw.AsMemory(1, raw.Length - 2);
+        ShellValue[] arguments = [ShellValue.FromText("-nne"), ShellValue.FromBytes(operand)];
+        var governor = new MemoryGovernor(0);
+        using var owner = governor.CreateScope();
+
+        Assert.True(operand.Equals(EchoFormatting.Format(arguments, owner)));
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(@"a\tb", "610962")]
+    [InlineData(@"a\cignored", "61")]
+    public void DecodingAndStoppingKeepTheirOwnedOutput(string operand, string expectedHex)
+    {
+        ShellValue[] arguments = [ShellValue.FromText("-ne"), ShellValue.FromText(operand)];
+        var expected = Convert.FromHexString(expectedHex);
+        var governor = new MemoryGovernor(expected.Length);
+        using var owner = governor.CreateScope();
+
+        Assert.Equal(expected, EchoFormatting.Format(arguments, owner).ToArray());
+        Assert.Equal(expected.Length, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(new[] { "-eE", @"a\tb" }, 1, false, "a\\tb\n")]
     [InlineData(new[] { "-E", "-e", @"a\tb" }, 2, false, "a\tb\n")]
     [InlineData(new[] { "-Enne", @"a\tb" }, 1, true, "a\tb")]
