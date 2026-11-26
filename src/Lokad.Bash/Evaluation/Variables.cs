@@ -810,8 +810,16 @@ public sealed partial class Variables
             if (!ReferenceEquals(updated, command))
             {
                 var stagedCursor = updated._getoptsCursor;
-                if (command.TransferBindingFrom(updated, name) && name.CachedText == "OPTIND")
-                    command._getoptsCursor = stagedCursor;
+                var isOptind = name.CachedText == "OPTIND";
+                var isOptindReference = isOptind && updated.HasNamerefAttribute(name);
+                if (command.TransferBindingFrom(updated, name) && isOptind)
+                {
+                    // A local reference reselects the index while retaining the active bundle position.
+                    if (isOptindReference)
+                        command.ResetGetoptsPosition(name);
+                    else
+                        command._getoptsCursor = stagedCursor;
+                }
             }
             if (unsetPrefixes != null)
                 foreach (var prefix in unsetPrefixes)
@@ -938,8 +946,12 @@ public sealed partial class Variables
             {
                 if (!_promotedPrefixes.Contains(name) || !_owner.HasBinding(name))
                 {
+                    var isOptind = name.CachedText == "OPTIND";
+                    var isOptindReference = isOptind && _owner.HasNamerefAttribute(name);
                     _owner.TransferBindingFrom(_saved, name);
-                    if (name.CachedText == "OPTIND")
+                    if (isOptindReference)
+                        _owner.ResetGetoptsPosition(name);
+                    else if (isOptind)
                         _owner._getoptsCursor = savedCursor;
                 }
                 else

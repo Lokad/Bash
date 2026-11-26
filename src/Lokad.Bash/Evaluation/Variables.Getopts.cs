@@ -33,7 +33,7 @@ public sealed partial class Variables
     // OPTARG removal in getopts unsets the name itself, including when it is a nameref.
     internal void ClearGetoptsArgument() => ClearBinding("OPTARG");
 
-    private void ResetGetoptsPosition(BindingName name)
+    internal void ResetGetoptsPosition(BindingName name)
     {
         if (name.CachedText == "OPTIND")
             _getoptsCursor = _getoptsCursor with { ArgumentIndex = 0 };

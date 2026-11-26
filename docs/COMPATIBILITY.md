@@ -1138,6 +1138,12 @@ between bytes of a bundle. A call reaching `--` returns status 1 and advances
 past it. A later call can scan an option at that new position. An ordinary
 non-option returns status 1 and keeps its position. `OPTIND` starts with the
 integer attribute.
+Successful `unset` of `OPTIND` or one of its elements reselects the index
+on the next scan. The rule also applies when `OPTIND` is a nameref and
+the unset removes its target, or when `unset -n OPTIND` finds an ordinary
+variable. A local nameref named `OPTIND` reselects
+the index on entry and again when it leaves scope as a nameref. An
+ordinary local index preserves the caller's cursor for restoration.
 
 `declare -i` and `local -i` evaluate subsequent assigned values as arithmetic
 and store the decimal result. For integer bindings, `+=` adds the evaluated

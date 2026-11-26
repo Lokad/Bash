@@ -315,6 +315,50 @@ public sealed class EvaluationGetoptsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("target=1; declare -n OPTIND=target", "unset OPTIND", "<0:unset:unset><0:a:1:1>")]
+    [InlineData("target=(x 1); declare -n OPTIND='target[1]'", "unset -v OPTIND", "<0:unset:x><0:a:1:x>")]
+    [InlineData("unset OPTIND; declare -a OPTIND=([0]=1 [1]=keep)", "unset -v 'OPTIND[1]'", "<0:1:unset><0:a:1:unset>")]
+    [InlineData("target=1; declare -n OPTIND=target", "unset target", "<0:unset:unset><0:b:2:2>")]
+    [InlineData("OPTIND=1", "unset -n OPTIND", "<0:1:unset><0:a:1:unset>")]
+    public async Task Getopts_ReselectsTheIndexAfterReachedUnset(string setup, string remove, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            set -- -ab -c
+            {{setup}}
+            getopts abc opt
+            {{remove}}
+            printf '<%s:%s:%s>' "$?" "${OPTIND-unset}" "${target-unset}"
+            getopts abc opt
+            printf '<%s:%s:%s:%s>' "$?" "$opt" "$OPTIND" "${target-unset}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("one", 1, "<a:1><a:1><a:1>")]
+    [InlineData("one", 2, "<a:1><b:2><a:1>")]
+    [InlineData("one two three", 1, "<a:1><b:1><c:2><a:1><b:2>")]
+    public async Task Getopts_ReselectsTheIndexAtLocalNamerefBoundaries(string outerSteps, int innerIndex, string expected)
+    {
+        const string scan = "getopts :abcdeh opt; printf '<%s:%s>' \"$opt\" \"$OPTIND\"";
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            set -- -abc -de -h
+            inner={{innerIndex}}
+            for step in {{outerSteps}}; do {{scan}}; done
+            f() { local -n OPTIND=inner; {{scan}}; }
+            f -abc -de -h
+            {{scan}}
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(@"$'\v2'", "<0:b:3>")]
     [InlineData(@"$'\f2'", "<0:b:3>")]
     [InlineData("2suffix", "<0:b:3>")]

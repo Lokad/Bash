@@ -84,8 +84,14 @@ public sealed partial class Evaluation
                     _builtinDiagnostics, ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
                 continue;
             }
-            if (name.IsEmpty || namerefs && !commandVars.HasNamerefAttribute(name))
+            if (name.IsEmpty)
                 continue;
+            if (namerefs && !commandVars.HasNamerefAttribute(name))
+            {
+                commandVars.ResetGetoptsPosition(name);
+                continue;
+            }
+            var unsetName = directSelector ? directReference.Name : name;
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;
             if (!namerefs && (directSelector || resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name))
             {
@@ -95,8 +101,13 @@ public sealed partial class Evaluation
                 if (!elementResult.Succeeded)
                     exitCode = 1;
                 if (HasPendingExpansionError) break;
-                if (!elementResult.Succeeded || elementResult.BindingToUnset.IsEmpty)
+                if (!elementResult.Succeeded)
                     continue;
+                if (elementResult.BindingToUnset.IsEmpty)
+                {
+                    commandVars.ResetGetoptsPosition(unsetName);
+                    continue;
+                }
                 // A scalar's zero selector removes the whole binding, including a kind change during evaluation.
                 name = elementResult.BindingToUnset;
                 resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out binding);
@@ -123,6 +134,9 @@ public sealed partial class Evaluation
                     await ReportReadonlyUnsetAsync(target.ReadonlyName.ToValue(), function: false, context).ConfigureAwait(false);
                 continue;
             }
+            // `unset OPTIND` invalidates the scan even when it removed a differently named referent.
+            if (unsetName != removedName)
+                commandVars.ResetGetoptsPosition(unsetName);
 
             if (bindings?.Contains(removedName) != true)
             {
