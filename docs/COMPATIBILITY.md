@@ -751,6 +751,12 @@ its operands against the previous statuses. Publication preserves scalar,
 associative, and declaration-only bindings. Initialized sparse arrays reuse their
 positions when they fit the incoming status list. Empty loops and function
 definitions preserve the previous array.
+Recovery from a token or missing capture-closing parenthesis in an expanded
+here-document can create an empty indexed binding before `PIPESTATUS` exists.
+The rejected bare-prefix recovery uses the same binding. Its entries stay empty
+through later commands and assignments. `unset PIPESTATUS` resumes normal
+status publication. A local or temporary command binding can shadow the empty
+array within its own scope.
 A standalone `!` or `time` prefix completes an empty command. It publishes
 status zero to `PIPESTATUS` and sets `$_` to an empty value. Negation still
 applies to the command's exit status.

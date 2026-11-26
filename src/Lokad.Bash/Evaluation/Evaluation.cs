@@ -783,8 +783,9 @@ public sealed partial class Evaluation : IFileTester
             return await RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion).ConfigureAwait(false);
         }
 
-        // A capture reader can set the first scalar status before any foreground command publishes an array.
-        if (kind == ExpansionErrorKind.HereDocumentReaderSyntax && !_state.LastExitCode.HasValue)
+        // A reader recovery can leave an empty binding before any foreground status is published.
+        if (kind == ExpansionErrorKind.HereDocumentReaderSyntax && _state.ForkKind == null
+            && scope.Variables.TryKeepEmptyRecoveryPipelineStatus(Memory))
             _state.LastExitCode = recoveryStatus;
         return await PreserveReachedBindingsAsync(EvaluationResult.DiscardHereDocumentUnit(recoveryStatus)).ConfigureAwait(false);
 
@@ -5306,6 +5307,9 @@ public sealed partial class Evaluation : IFileTester
         if (kind == ExpansionFailureKind.BarePipelinePrefixSyntax && !scope.InNestedCommandUnits
             && _state.LastExitCode is { } previous && previous != 0)
             exitCode = previous;
+        if (kind == ExpansionFailureKind.BarePipelinePrefixSyntax && _state.ForkKind == null
+            && scope.Variables.TryKeepEmptyRecoveryPipelineStatus(Memory))
+            _state.LastExitCode = exitCode;
         SetFatalExpansionError(new ExpansionFailure(kind, exitCode)
         {
             UseInheritedPipelineExitAction = separatorFailure && UsesInheritedPipelineExitAction(scope)

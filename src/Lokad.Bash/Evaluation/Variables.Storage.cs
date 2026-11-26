@@ -121,7 +121,11 @@ public sealed partial class Variables
     private void ReplaceValue(BindingName name, VariableSlot replacement)
     {
         if (TryGetBinding(name, detachBorrowed: false, out var previous))
+        {
+            if (previous is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
+                return;
             replacement.Attributes |= previous.Attributes & ~BindingAttributes.ArrayNameref;
+        }
         StoreBinding(name, replacement);
         ResetGetoptsPosition(name);
     }

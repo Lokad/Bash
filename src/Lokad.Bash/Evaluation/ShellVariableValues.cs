@@ -82,6 +82,8 @@ internal sealed class IndexedArray
     internal const int ElementMemoryBytes = 192;
     private const long DictionarySlotBytes = 48;
     private const long PositionNodeBytes = 64;
+    // Recovery creates an assigned empty array with immutable contents. Each binding owns its attributes.
+    internal static IndexedArray EmptyRecoveryPipelineStatus { get; } = new(isInitialized: true);
     private readonly Dictionary<long, ShellValue?> _elements;
     // SortedDictionary cannot find the last key without enumeration. Keep an ordered
     // position index for sparse traversal and logarithmic maximum removal.
@@ -117,9 +119,14 @@ internal sealed class IndexedArray
 
     /// <summary>Distinguishes a declaration-only array from an assigned array, including an empty one.</summary>
     public bool IsInitialized { get; private set; }
+    internal bool IsRecoveryPipelineStatus => ReferenceEquals(this, EmptyRecoveryPipelineStatus);
 
     /// <summary>Records an assignment even when a compound append has no elements.</summary>
-    public void MarkInitialized() => IsInitialized = true;
+    public void MarkInitialized()
+    {
+        if (!IsInitialized)
+            IsInitialized = true;
+    }
 
     /// <summary>Gets the greatest stored position for arithmetic indexing, including hidden metadata.</summary>
     public long? MaxIndex => _maximumIndex;
@@ -192,6 +199,8 @@ internal sealed class IndexedArray
 
     private void Set(long position, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
+        if (IsRecoveryPipelineStatus)
+            return;
         var present = _elements.TryGetValue(position, out var previous);
         var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
             - Variables.EstimateValueBytes(previous.GetValueOrDefault());
@@ -224,6 +233,8 @@ internal sealed class IndexedArray
     /// <summary>Removes one position, updating the maximum only when its entry was removed.</summary>
     public void Remove(IndexedArrayIndex index)
     {
+        if (IsRecoveryPipelineStatus)
+            return;
         if (!_elements.Remove(index.Value, out var previous))
             return;
         _valueBytes -= Variables.EstimateValueBytes(previous.GetValueOrDefault());
@@ -274,6 +285,8 @@ internal sealed class IndexedArray
     internal void SetSequential(
         uint origin, IReadOnlyList<ShellValue> values, EvaluationMemory? memory, CancellationToken cancellationToken)
     {
+        if (IsRecoveryPipelineStatus)
+            return;
         var count = values.Count;
         var capacity = _elements.EnsureCapacity(0);
         if (capacity == 0 && count > 1)
@@ -371,6 +384,8 @@ internal sealed class IndexedArray
     /// <summary>Creates an independent sparse array with the same present positions.</summary>
     public IndexedArray Clone()
     {
+        if (IsRecoveryPipelineStatus)
+            return this;
         return new IndexedArray(new Dictionary<long, ShellValue?>(_elements),
             new SortedSet<long>(_positions), _maximumIndex, IsInitialized)
         {

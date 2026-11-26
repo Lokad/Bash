@@ -1147,7 +1147,11 @@ public sealed partial class Variables
         }
         if (prefixOperator != AssignmentOperator.Replace)
             value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, value, memory);
-        SetResolvedScalar(resolved, slot, value);
+        // A prefix shadows the recovered array in its command scope.
+        if (prefixOperator.HasValue && slot is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
+            StoreBinding(resolved, new ScalarSlot(value), slot.Attributes & ~BindingAttributes.ArrayNameref);
+        else
+            SetResolvedScalar(resolved, slot, value);
         return value;
     }
 

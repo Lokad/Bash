@@ -8,6 +8,16 @@ public sealed partial class Variables
 {
     internal static readonly BindingName PipelineStatusName = "PIPESTATUS";
 
+    /// <summary>Retains a fresh recovery's empty indexed binding until the shell unsets that name.</summary>
+    internal bool TryKeepEmptyRecoveryPipelineStatus(EvaluationMemory memory)
+    {
+        if (TryGetBinding(PipelineStatusName, detachBorrowed: false, out _))
+            return false;
+        memory.PrepareRetainedStorage(BindingOverheadBytes + (long)ValueCapacityMultiplier * PipelineStatusName.ByteLength);
+        StoreBinding(PipelineStatusName, new IndexedSlot(IndexedArray.EmptyRecoveryPipelineStatus));
+        return true;
+    }
+
     /// <summary>Publishes completed foreground statuses from the caller's admitted storage.</summary>
     internal void SetPipelineStatuses(IReadOnlyList<int> statuses, Evaluation.EvaluationContext context, CancellationToken cancellationToken)
     {
@@ -36,7 +46,7 @@ public sealed partial class Variables
 
         // Indexed arrays accept shell metadata even when readonly. A declaration-only array
         // retains this backing privately until an explicit assignment makes it visible.
-        if (slot is not (null or IndexedSlot))
+        if (slot is not (null or IndexedSlot) || slot is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
             return;
 
         var previous = (slot as IndexedSlot)?.Value;

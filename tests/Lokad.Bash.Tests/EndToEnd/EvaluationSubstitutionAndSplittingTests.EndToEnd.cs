@@ -274,6 +274,89 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         }
     }
 
+    private const string ReportPipelineBinding = "printf '<%s|%s|%s>' \"$?\" \"${PIPESTATUS[*]-unset}\" \"${PIPESTATUS@a}\"\n";
+    private const string RejectedDocument = "read -r value <<EOF\nX$(!)Y\nEOF\n";
+
+    [Theory]
+    [InlineData(RejectedDocument)]
+    [InlineData("read -r value <<EOF\nX$(printf incomplete\nEOF\n")]
+    [InlineData("f() { :; }\n" + RejectedDocument)]
+    [InlineData("for item in; do :; done\n" + RejectedDocument)]
+    [InlineData("value=$(!;)\n")]
+    public async Task FreshCaptureRecoveryKeepsTheEmptyPipelineBinding(string rejection)
+    {
+        var script = rejection + ReportPipelineBinding + "(exit 7) | (exit 3)\n" + ReportPipelineBinding + "declare -p PIPESTATUS\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|unset|a><3|unset|a>declare -a PIPESTATUS=()\n", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RecoveredPipelineBindingKeepsItsEmptyArrayDuringElementAndWholeAssignments()
+    {
+        const string script = RejectedDocument + "PIPESTATUS=(8 9)\n"
+            + "assigned=$((PIPESTATUS[0]=8)) observed=${PIPESTATUS[0]-missing}\n"
+            + "printf '<%s|%s>' \"$assigned\" \"$observed\"\nreadonly -a PIPESTATUS=(1 2)\ndeclare -p PIPESTATUS\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<8|missing>declare -ar PIPESTATUS=()\n", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("( unset PIPESTATUS; ", ")\n")]
+    [InlineData("f() { local -a PIPESTATUS=(8); ", "}\nf\n")]
+    public async Task RecoveredPipelineBindingSurvivesChildResetAndLocalShadowing(string enter, string leave)
+    {
+        var script = RejectedDocument + enter + ReportPipelineBinding + leave + ReportPipelineBinding;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<0|0|a><0|unset|a>", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task UnsettingTheRecoveredPipelineBindingResumesPublication()
+    {
+        const string script = RejectedDocument + "unset PIPESTATUS\n(exit 7) | (exit 3)\n" + ReportPipelineBinding;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<3|7 3|a>", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FirstLoadedReaderKeepsItsRecoveredPipelineBindingInTheCaller(bool source)
+    {
+        const string reader = RejectedDocument + ReportPipelineBinding;
+        var invocation = source ? "source ./reader" : "eval " + ShellArgumentEscaping.EscapeArgument(reader);
+        var script = invocation + "\n" + ReportPipelineBinding;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (source)
+                host.AddFile("/reader", reader);
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|unset|a><0|unset|a>", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     private static async Task<int> RunSubstitutionFixtureAsync(string script, TestHost host, bool prepared) => prepared
         ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
         : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
