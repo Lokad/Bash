@@ -206,6 +206,68 @@ public sealed class CollectionOwnershipTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void FunctionForkAdmitsLiveBindingsAcrossVacatedSlots(bool inlineSubshell, bool keepBindings)
+    {
+        var script = Parser.Parse(":");
+        var parent = new EvaluationState(script, ShellPath.Root, inheritedDescriptorTable: null);
+        var setup = new EvaluationMemory(new MemoryGovernor(128 * 1024));
+        var budget = new MemoryGovernor(2048);
+        var memory = new EvaluationMemory(budget);
+        var live = new List<FunctionBinding>();
+        EvaluationState? child = null;
+        try
+        {
+            var bindings = Enumerable.Range(0, 257).Select(index =>
+            {
+                var definition = Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse($"f{index}(){{ :; }}").Commands));
+                var attributes = index == 64 ? FunctionAttributes.None : FunctionAttributes.Exported;
+                var binding = new FunctionBinding(definition, attributes, sourceMemory: null, setup);
+                parent.SetFunctionBinding(binding);
+                return binding;
+            }).ToArray();
+            for (var index = 0; index < bindings.Length; index++)
+            {
+                var binding = bindings[index];
+                if (keepBindings && index is 63 or 64 or 256)
+                    live.Add(binding);
+                else
+                    Assert.True(parent.TryUnsetFunction(binding.Definition.Name.Value));
+            }
+            Assert.True(parent.EstimatedFunctionMemoryBytes > budget.LimitBytes);
+
+            child = inlineSubshell ? parent.CloneForSubshell(memory, inheritedExitBindings: null)
+                : parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.PipelineSimpleCommand,
+                    memory, inheritedExitBindings: null);
+
+            Assert.Equal(live.Count, child.FunctionCount);
+            Assert.Equal(child.EstimatedFunctionMemoryBytes + child.RetainedDirectoryStackBytes, memory.Workspace.Bytes);
+            var exported = live.Where(binding => binding.Attributes == FunctionAttributes.Exported);
+            Assert.Equal(exported, child.GetExportedFunctions(memory).ToArray());
+            foreach (var binding in live)
+            {
+                Assert.True(child.TryGetFunction(binding.Definition.Name.Value, out var current));
+                Assert.Same(binding, current);
+                Assert.True(child.TryUnsetFunction(binding.Definition.Name.Value));
+            }
+            Assert.Equal(0, child.FunctionCount);
+            Assert.Equal(exported, parent.GetExportedFunctions(setup).ToArray());
+            Assert.Equal(live.Count, parent.FunctionCount);
+        }
+        finally
+        {
+            child?.ReleaseFunctions();
+            parent.ReleaseFunctions();
+            memory.Finish(retainVariables: false);
+            setup.Finish(retainVariables: false);
+        }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void ChildDirectoryStackRequiresIndependentBackingAdmission(bool inlineSubshell)

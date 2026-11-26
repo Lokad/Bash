@@ -263,7 +263,9 @@ internal sealed class EvaluationState
     private readonly Dictionary<ShellValue, int> _functions = [];
     private readonly List<FunctionSlot> _functionSlots = [];
     private const int FunctionSlotsPerBlock = 64;
-    private readonly List<ulong> _functionExportMasks = [];
+    private readonly List<FunctionSlotMasks> _functionSlotMasks = [];
+    // A single block is cheap to scan. Index larger namespaces so forks skip empty blocks.
+    private SortedSet<int>? _occupiedFunctionBlocks;
     private readonly SortedSet<int> _exportedFunctionBlocks = [];
     private int _freeFunctionSlot = -1;
     private int _functionCapacity;
@@ -273,10 +275,13 @@ internal sealed class EvaluationState
 
     // Occupied slots keep their cached export index. Empty slots link to the next free slot.
     private readonly record struct FunctionSlot(FunctionBinding? Binding, int Index);
+    private readonly record struct FunctionSlotMasks(ulong Occupied, ulong Exported);
 
-    // Capacity covers the name map, slots, and one mask and optional index node per block.
+    // Capacity covers the name map, slots, and membership indexes.
     // Live entries cover binding and cache-cell metadata.
-    internal long EstimatedFunctionMemoryBytes => 128L * _functionCapacity + 128L * _functions.Count;
+    internal long EstimatedFunctionMemoryBytes => EstimateFunctionMemoryBytes(_functionCapacity, _functions.Count);
+
+    private static long EstimateFunctionMemoryBytes(int capacity, int count) => 128L * capacity + 128L * count;
 
     public EvaluationState(
         ParsedScript script,
@@ -377,12 +382,16 @@ internal sealed class EvaluationState
         }
     }
 
-    private IEnumerable<int> EnumerateExportedFunctionSlots()
+    private IEnumerable<int> EnumerateExportedFunctionSlots() =>
+        EnumerateFunctionSlots(_exportedFunctionBlocks, exported: true);
+
+    private IEnumerable<int> EnumerateFunctionSlots(SortedSet<int> blocks, bool exported)
     {
-        foreach (var block in _exportedFunctionBlocks)
+        foreach (var block in blocks)
         {
             var first = block * FunctionSlotsPerBlock;
-            for (var mask = _functionExportMasks[block]; mask != 0; mask &= mask - 1)
+            var membership = _functionSlotMasks[block];
+            for (var mask = exported ? membership.Exported : membership.Occupied; mask != 0; mask &= mask - 1)
                 yield return first + BitOperations.TrailingZeroCount(mask);
         }
     }
@@ -547,7 +556,7 @@ internal sealed class EvaluationState
         return CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings, inheritedExitBindings), kind);
     }
 
-    private long EstimateForkBytes() => checked(EstimatedFunctionMemoryBytes
+    private long EstimateForkBytes() => checked(EstimateFunctionMemoryBytes(_functions.Count, _functions.Count)
         + EstimateDirectoryStackBytes(_directoryStack.Count) + (Traps?.EstimateForkBackingBytes() ?? 0));
 
     private EvaluationState CloneShellState(ParsedScript script, RedirectionState redirections, ShellForkKind kind)
@@ -567,9 +576,24 @@ internal sealed class EvaluationState
             Traps = Traps?.Fork(kind)
         };
 
-        foreach (var slot in _functionSlots)
-            if (slot.Binding is { } binding)
-                clone.SetFunctionBinding(binding);
+        var functionCount = _functions.Count;
+        if (functionCount == 0)
+            return clone;
+
+        clone._functions.EnsureCapacity(functionCount);
+        clone._functionSlots.EnsureCapacity(functionCount);
+        clone._functionSlotMasks.EnsureCapacity((functionCount - 1) / FunctionSlotsPerBlock + 1);
+        if (_occupiedFunctionBlocks is { } occupiedBlocks)
+        {
+            foreach (var slot in EnumerateFunctionSlots(occupiedBlocks, exported: false))
+                clone.SetFunctionBinding(GetFunctionBinding(slot));
+        }
+        else
+        {
+            foreach (var slot in _functionSlots)
+                if (slot.Binding is { } binding)
+                    clone.SetFunctionBinding(binding);
+        }
 
         return clone;
     }
@@ -666,7 +690,10 @@ internal sealed class EvaluationState
         var wasExported = previous?.Attributes.HasFlag(FunctionAttributes.Exported) == true;
         var isExported = function.Attributes.HasFlag(FunctionAttributes.Exported);
         if (previous == null)
+        {
             position = AllocateSlot();
+            SetOccupiedMembership(position, occupied: true);
+        }
         // Replacing a dictionary value preserves its original key. Keep source-backed
         // name storage with the new definition's owner, rather than the retired source.
         else if (!previous.Definition.Name.Value.Bytes.Equals(name.Bytes))
@@ -693,11 +720,24 @@ internal sealed class EvaluationState
                 return free;
             }
             var next = _functionSlots.Count;
+            if (next == FunctionSlotsPerBlock && _occupiedFunctionBlocks is null)
+                _occupiedFunctionBlocks = [0];
             if (next % FunctionSlotsPerBlock == 0)
-                _functionExportMasks.Add(0);
+                _functionSlotMasks.Add(default);
             _functionSlots.Add(default);
             return next;
         }
+    }
+
+    private void SetOccupiedMembership(int position, bool occupied)
+    {
+        var block = position / FunctionSlotsPerBlock;
+        var bit = 1UL << (position % FunctionSlotsPerBlock);
+        var membership = _functionSlotMasks[block];
+        var next = occupied ? membership.Occupied | bit : membership.Occupied & ~bit;
+        if (_occupiedFunctionBlocks is { } blocks)
+            UpdateFunctionBlock(blocks, block, membership.Occupied, next);
+        _functionSlotMasks[block] = membership with { Occupied = next };
     }
 
     /// <summary>Updates the export index for a slot whose membership changed.</summary>
@@ -705,15 +745,20 @@ internal sealed class EvaluationState
     {
         var block = position / FunctionSlotsPerBlock;
         var bit = 1UL << (position % FunctionSlotsPerBlock);
-        var previous = _functionExportMasks[block];
-        var next = exported ? previous | bit : previous & ~bit;
-        if (previous == 0)
-            _exportedFunctionBlocks.Add(block);
-        else if (next == 0)
-            _exportedFunctionBlocks.Remove(block);
-        _functionExportMasks[block] = next;
+        var membership = _functionSlotMasks[block];
+        var next = exported ? membership.Exported | bit : membership.Exported & ~bit;
+        UpdateFunctionBlock(_exportedFunctionBlocks, block, membership.Exported, next);
+        _functionSlotMasks[block] = membership with { Exported = next };
         _exportedFunctionCount += exported ? 1 : -1;
         ReleaseExportedFunctionSelection();
+    }
+
+    private static void UpdateFunctionBlock(SortedSet<int> blocks, int block, ulong previous, ulong next)
+    {
+        if (previous == 0)
+            blocks.Add(block);
+        else if (next == 0)
+            blocks.Remove(block);
     }
 
     /// <summary>Removes the current binding, not a definition already being invoked.</summary>
@@ -728,6 +773,7 @@ internal sealed class EvaluationState
         _functions.Remove(name);
         _functionSlots[position] = new FunctionSlot(null, _freeFunctionSlot);
         _freeFunctionSlot = position;
+        SetOccupiedMembership(position, occupied: false);
         if (function.Attributes.HasFlag(FunctionAttributes.Exported))
             SetExportMembership(position, exported: false);
         function.Release();
@@ -738,12 +784,22 @@ internal sealed class EvaluationState
     public void ReleaseFunctions()
     {
         ReleaseExportedFunctionSelection();
+        if (_occupiedFunctionBlocks is { } occupiedBlocks)
+        {
+            if (occupiedBlocks.Count != 0)
+                foreach (var slot in EnumerateFunctionSlots(occupiedBlocks, exported: false))
+                    GetFunctionBinding(slot).Release();
+            occupiedBlocks.Clear();
+        }
+        else
+        {
+            foreach (var slot in _functionSlots)
+                slot.Binding?.Release();
+        }
         _exportedFunctionBlocks.Clear();
-        _functionExportMasks.Clear();
+        _functionSlotMasks.Clear();
         _exportedFunctionCount = 0;
         _freeFunctionSlot = -1;
-        foreach (var slot in _functionSlots)
-            slot.Binding?.Release();
         _functionSlots.Clear();
         _functions.Clear();
     }
