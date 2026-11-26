@@ -849,10 +849,8 @@ public static class Parser
                             command = ParseIf(tokenizer);
                             break;
                         case KeywordKind.While:
-                            command = ParseWhile(tokenizer);
-                            break;
                         case KeywordKind.Until:
-                            command = ParseUntil(tokenizer);
+                            command = ParseConditionLoop(tokenizer, until: keyword == KeywordKind.Until);
                             break;
                         case KeywordKind.For:
                             command = ParseFor(tokenizer, out var bindingLine);
@@ -1022,9 +1020,9 @@ public static class Parser
     }
 
     /// <summary>
-    /// Parses a while loop command.
+    /// Parses a while or until loop command.
     /// </summary>
-    private static ICommand? ParseWhile(Tokenizer tokenizer)
+    private static ICommand? ParseConditionLoop(Tokenizer tokenizer, bool until)
     {
         tokenizer.NextTokenCore();
         var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
@@ -1037,26 +1035,7 @@ public static class Parser
             return null;
         if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
             return null;
-        return new WhileCommand(condition, body);
-    }
-
-    /// <summary>
-    /// Parses an until loop command.
-    /// </summary>
-    private static ICommand? ParseUntil(Tokenizer tokenizer)
-    {
-        tokenizer.NextTokenCore();
-        var condition = ParseListUntilKeyword(tokenizer, KeywordDo);
-        if (condition == null)
-            return null;
-        if (!TryConsumeKeyword(tokenizer, KeywordDo, "do"))
-            return null;
-        var body = ParseListUntilKeyword(tokenizer, KeywordDone);
-        if (body == null)
-            return null;
-        if (!TryConsumeKeyword(tokenizer, KeywordDone, "done"))
-            return null;
-        return new UntilCommand(condition, body);
+        return until ? new UntilCommand(condition, body) : new WhileCommand(condition, body);
     }
 
     /// <summary>
