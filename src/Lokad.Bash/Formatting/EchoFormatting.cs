@@ -58,9 +58,14 @@ public static class EchoFormatting
         return Format(arguments, format, expandEscapes, memory);
     }
 
+    /// <summary>Formats output, borrowing an unchanged operand when no bytes need to be added.</summary>
+    /// <remarks>The caller retains the expanded operands and their owners through the write.</remarks>
     internal static ReadOnlyMemory<byte> Format(IReadOnlyList<ShellValue> arguments, IMemoryScope memory)
     {
         var format = GetOutputFormat(arguments, out var expandEscapes);
+        if (!expandEscapes && format.SuppressNewline && format.FirstArgument == arguments.Count - 1)
+            return arguments[format.FirstArgument].Bytes;
+
         return Format(arguments, format, expandEscapes, memory);
     }
 

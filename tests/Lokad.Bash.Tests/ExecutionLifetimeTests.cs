@@ -369,6 +369,7 @@ public sealed class ExecutionLifetimeTests
 
     [Theory]
     [InlineData("echo borrowed >/out", "borrowed\n")]
+    [InlineData("a=$'borrowed\\r\\377'; echo -e -nnE \"$a\" >\"/out$((a=8))\"", "borrowed\rÿ")]
     [InlineData("echo borrowed >/out\n)\n", "borrowed\n")]
     [InlineData("trap 'echo borrowed >/out' EXIT; exit 7", "borrowed\n")]
     [InlineData("trap $'trap - EXIT\\necho borrowed >/out\\n' EXIT; exit 7", "borrowed\n")]

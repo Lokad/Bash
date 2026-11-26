@@ -54,6 +54,18 @@ public sealed class EchoFormattingTests
         Assert.Equal(expected, EchoFormatting.Format(operands, format, output).ToArray());
     }
 
+    [Fact]
+    public void EvaluatorFormattingReusesAnUnchangedOperandWithoutOutputAllowance()
+    {
+        ReadOnlyMemory<byte> payload = new byte[] { 0, (byte)'\\', (byte)'c', (byte)'\r', 0xff, 0 }.AsMemory(1, 4);
+        ShellValue[] operands = [ShellValue.FromText("-e"), ShellValue.FromText("-nnE"), ShellValue.FromBytes(payload)];
+        var governor = new MemoryGovernor(0);
+        using var output = governor.CreateScope();
+
+        Assert.True(payload.Equals(EchoFormatting.Format(operands, output)));
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(new[] { "-eE", @"a\tb" }, 1, false, "a\\tb\n")]
     [InlineData(new[] { "-E", "-e", @"a\tb" }, 2, false, "a\tb\n")]
