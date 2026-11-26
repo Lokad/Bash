@@ -483,6 +483,8 @@ including its sign. The pinned Bash 5.2 profile formats padded results as signed
 32-bit values after computing the sequence in 64 bits. Empty or overflowing
 increments remain literal.
 Command substitution removes NUL bytes and trailing LF bytes while retaining status.
+Removing NUL bytes emits a warning at the reached command's source location.
+Case subject and pattern expansion use the line where the subject ends.
 An adjacent subshell opener can begin a command substitution, as in
 `$((printf value);)`. A complete authored `$((…))` shape selects arithmetic
 even when its expression is invalid. When rereading a reached arithmetic

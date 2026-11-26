@@ -6439,7 +6439,11 @@ public sealed partial class Evaluation : IFileTester
         _state.LastExitCode = result.ExitCode;
         _state.LastCommandSubstitutionExitCode = result.ExitCode;
         if (result.IgnoredNuls)
-            await ExecuteWriteAsync(GetStdErrDescriptor(), CommandSubstitutionNulWarning).ConfigureAwait(false);
+        {
+            var descriptor = GetStdErrDescriptor();
+            var prefix = descriptor.IsClosed ? default : GetCommandDiagnosticPrefix(scope);
+            await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, CommandSubstitutionNulWarning).ConfigureAwait(false);
+        }
         return result.Output;
     }
 

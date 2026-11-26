@@ -82,7 +82,7 @@ public sealed class CommandSubstitutionCaptureTests
         Assert.Empty(state.GetDescriptorsForCleanup());
         var warning = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdErr, warning.Descriptor);
-        Assert.Equal("warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
+        Assert.Equal("line 1: warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
         budget.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
     }
@@ -197,7 +197,7 @@ public sealed class CommandSubstitutionCaptureTests
         Assert.Empty(state.GetDescriptorsForCleanup());
         var warning = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdErr, warning.Descriptor);
-        Assert.Equal("warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
+        Assert.Equal("line 1: warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
     }
 
     [Theory]

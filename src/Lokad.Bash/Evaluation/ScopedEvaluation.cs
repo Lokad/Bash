@@ -26,7 +26,7 @@ internal readonly record struct CommandCoordinates(CommandLocations? Locations, 
     {
         Line = Offset + (command switch
         {
-            SimpleCommand or ForCommand => location.CommandLine,
+            SimpleCommand or ForCommand or CaseCommand => location.CommandLine,
             ArithmeticCommand or ConditionalCommand => location.EndLine,
             _ => location.StartLine
         }),

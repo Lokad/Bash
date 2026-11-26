@@ -650,7 +650,10 @@ internal static class FunctionDefinitionFormatter
                                 work.Push(new Step.Text(item.Patterns.Count > 0 && Parser.IsKeyword(item.Patterns[0], "esac")
                                     ? "    (" : "    "));
                             }
-                            Push(new Step.Text("case "), new Step.Word(selection.Subject), new Step.Text(" in "), new Step.Layout(indent));
+                            Push(new Step.Text(" in "), new Step.Layout(indent));
+                            if (lines != null)
+                                PushStep(new Step.Location(selection, LocationEdge.FirstElement));
+                            Push(new Step.Text("case "), new Step.Word(selection.Subject));
                             break;
                         case FunctionDefinition function:
                             PushStep(new Step.Function(function, indent, Nested: true));

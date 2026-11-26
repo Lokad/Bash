@@ -843,7 +843,7 @@ public static class Parser
                             command = ParseFunctionDefinition(tokenizer);
                             break;
                         case KeywordKind.Case:
-                            command = ParseCase(tokenizer);
+                            command = ParseCase(tokenizer, out commandLine);
                             break;
                         case KeywordKind.If:
                             command = ParseIf(tokenizer);
@@ -1195,11 +1195,12 @@ public static class Parser
     /// <summary>
     /// Parses a case/esac command with pattern clauses.
     /// </summary>
-    private static ICommand? ParseCase(Tokenizer tokenizer)
+    private static ICommand? ParseCase(Tokenizer tokenizer, out int subjectLine)
     {
         tokenizer.NextTokenCore();
 
         var subjectToken = tokenizer.NextTokenCore();
+        subjectLine = tokenizer.GetCommandWordLine(subjectToken.Source.End.Value);
         if (!tokenizer.TryGetOperandWord(subjectToken, out var subjectWord))
         {
             tokenizer.RejectArithmeticCommandInWordPosition();
