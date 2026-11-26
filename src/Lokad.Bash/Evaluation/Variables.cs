@@ -1392,6 +1392,16 @@ public sealed partial class Variables
             memory);
     }
 
+    /// <summary>Publishes an indexed position using the receiving binding's array kind.</summary>
+    internal bool TryAssignArrayElement(BindingName name, IndexedArrayIndex index, ShellValue value, EvaluationMemory? memory)
+    {
+        if (!TryResolveWritableName(name, out var resolved))
+            return false;
+        return AssociativeArrays.ContainsKey(resolved)
+            ? TrySetResolvedArrayElement(resolved, ShellValue.FromInteger(index.Value), value, ArrayKind.Associative, memory)
+            : TrySetResolvedArrayElement(resolved, index, value, memory);
+    }
+
     /// <summary>Writes a validated indexed position, retaining a promoted scalar at position zero.</summary>
     internal bool TrySetArrayElement(BindingName name, IndexedArrayIndex index, ShellValue value)
     {

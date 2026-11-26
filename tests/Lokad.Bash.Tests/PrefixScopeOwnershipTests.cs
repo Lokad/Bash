@@ -976,6 +976,90 @@ public sealed class PrefixScopeOwnershipTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ForwardedIndexedPositionsUseCanonicalDecimalKeysForAssociativeReceivers(bool retainOutput)
+    {
+        BindingName name = "marks";
+        var caller = Variables.CreateEmpty();
+        var command = Variables.CreateEmpty();
+        var saved = ShellValue.FromText("saved");
+        var written = ShellValue.FromBytes(new byte[] { 0xff, 0x61 });
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("007"), out var padded));
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("7"), out var canonical));
+        Assert.True(caller.TrySetArrayElement(name, padded, saved));
+        command.SetTemporaryScalar(name, ShellValue.FromText("temporary"));
+        var prefixes = new HashSet<BindingName> { name };
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(":"), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            using (var bindings = retainOutput
+                ? new Variables.CommandBindings(caller, command, prefixes, evaluation.Memory, CancellationToken.None)
+                : null)
+            {
+                var scope = bindings is not null
+                    ? new ScopedEvaluation(evaluation, caller, default) { SelectorBindings = bindings }
+                    : new ScopedEvaluation(evaluation, command, default)
+                    {
+                        ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(caller, prefixes)
+                    };
+                var location = new WordExpansion.ResolvedVariableReference.Indexed(name, IndexedArrayIndex.FromUnsigned(7));
+                Assert.True(location.TryPublishValue(scope, name, written));
+                Assert.True(location.TryRead(scope.Variables, out var visible));
+                Assert.Equal(written, visible);
+            }
+
+            var map = caller.AssociativeArrays[name];
+            Assert.True(map.TryGet(padded, out var untouched));
+            Assert.Equal(saved, untouched);
+            Assert.True(map.TryGet(canonical, out var forwarded));
+            Assert.Equal(written, forwarded);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("alias")]
+    [InlineData("marks")]
+    public void ForwardedIndexedPositionsHonorReadonlyAndAttributesOfAReceivingNameref(string? readonlyName)
+    {
+        var caller = Variables.CreateEmpty();
+        var command = Variables.CreateEmpty();
+        var saved = ShellValue.FromText("saved");
+        var written = ShellValue.FromText("new");
+        var position = IndexedArrayIndex.FromUnsigned(7);
+        Assert.True(caller.TrySetArrayElement("marks", position, saved));
+        caller.SetCaseAttributes("marks", default(Variables.CaseAttributeChange)
+            .Include(Variables.BindingAttributes.Uppercase, remove: false));
+        Assert.True(caller.TrySetNameref("alias", ShellValue.FromText("marks")));
+        if (readonlyName != null)
+            caller.SetReadonlyBinding(readonlyName);
+        command.SetTemporaryScalar("alias", ShellValue.FromText("temporary"));
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(":"), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            var scope = new ScopedEvaluation(evaluation, command, default)
+            {
+                ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(caller, new HashSet<BindingName> { "alias" })
+            };
+            var location = new WordExpansion.ResolvedVariableReference.Indexed("alias", position);
+            Assert.Equal(readonlyName == null, location.TryPublishValue(scope, "alias", written));
+            Assert.True(location.TryRead(command, out var visible));
+            Assert.Equal(written, visible);
+            Assert.True(caller.IndexedArrays["marks"].TryGet(position, out var forwarded));
+            Assert.Equal(readonlyName == null ? ShellValue.FromText("NEW") : saved, forwarded);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("raw selector", true)]
     [InlineData("literal referent", true)]
     [InlineData("element referent", false)]

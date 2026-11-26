@@ -158,8 +158,7 @@ internal static partial class WordExpansion
             bool TryForwardTo(Variables variables, BindingName name) => this switch
             {
                 Scalar => variables.TrySetScalar(name, value, scope.Effects.Memory),
-                Indexed indexed => variables.TryAssignArrayElement(name,
-                    ShellValue.FromInteger(indexed.Index.Value), value, ArrayAssignmentKind.Auto, scope.Effects.Memory),
+                Indexed indexed => variables.TryAssignArrayElement(name, indexed.Index, value, scope.Effects.Memory),
                 Associative associative => variables.TryAssignArrayElement(name, associative.Key.Value, value, ArrayAssignmentKind.Auto, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
