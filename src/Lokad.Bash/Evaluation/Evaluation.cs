@@ -6288,7 +6288,7 @@ public sealed partial class Evaluation : IFileTester
 
     private async Task<ReadResult> ExecuteReadAsync(
         FileDescriptor fileDescriptor, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
-        SourceLineDestination? sourceDestination, bool retainImmutable)
+        SourceReadDestination? sourceDestination, bool retainImmutable)
     {
         CheckCancellation();
         // The host may still be reading into storage owned by the caller after cancellation.
@@ -6330,7 +6330,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 var expectedLength = open.ReadSize is { } size && size <= Parser.MaximumScriptBytes ? (int)size : 0;
                 var output = new ByteMemoryBuilder(sourceMemory.Budget, expectedLength);
-                var sourceDestination = new SourceLineDestination(output, Parser.MaximumScriptBytes);
+                var sourceDestination = new SourceReadDestination(output, Parser.MaximumScriptBytes);
                 using var reader = AsyncLineReader.CreateStreaming(
                     (limit, memory, _) => new ValueTask<ReadResult>(
                         ExecuteReadAsync(descriptor.Value, limit, memory, reusableLine: null, sourceDestination, retainImmutable: false)),

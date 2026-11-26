@@ -417,17 +417,16 @@ backing during growth and refunds the allowance before publishing the completed
 unit. Source locations transfer after the traversal succeeds. The coarse syntax
 owner continues to cover the resulting tree and body data.
 
-A dispatched source read writes into the parser's admitted spare capacity.
-A complete first batch that reports EOF can allocate its exact final buffer.
-Other batches that need growth can retain immutable host bytes through borrow
-disposal and copy them once into the parser's buffer. Reusable host windows
-still copy into the read batch owner. A host can refund its temporary window
-on disposal, freeing capacity for the old and new parser buffers to overlap.
-A known source length caps geometric growth when a batch requires a
-larger buffer. A framed batch that exceeds the remaining parser limit returns
-a size rejection before retaining payload bytes or offsets. The read batch
-owns offsets for accepted input and releases them before the next batch or
-descriptor close. Externally completed line operations use bounded aggregation.
+A dispatched source read fills the parser buffer from bounded host windows.
+A final first window can allocate its exact buffer. Complete prefixes use
+admitted spare capacity. Growth can retain immutable host bytes through
+borrow disposal and copy them once into the parser's buffer. Growth from a
+reusable window stages bytes until the borrow settles, then refunds the
+staging reservation once they have been appended. A known source length caps
+geometric growth. Lookahead keeps an incomplete record with the provider.
+A complete prefix exceeding the remaining parser limit reports a size
+rejection before retaining it. Externally completed line operations provide
+their LF offsets and use bounded aggregation.
 
 A sourced input scope stays admitted while parsing/executing the file, while a
 function namespace retains its definitions, and through active function preparation,

@@ -43,7 +43,7 @@ public sealed class ByteLinesTests
         var expectedAdmission = count == 1 ? 0 : 32 + sizeof(int) * (count - 1);
         var governor = new MemoryGovernor(expectedAdmission);
 
-        var consumed = ByteLines.FindCompleteRecords(source.ToArray(), delimiter, limit, examined, reachedEof, int.MaxValue, governor,
+        var consumed = ByteLines.FindCompleteRecords(source.ToArray(), delimiter, limit, examined, reachedEof, governor,
             out var starts, out var admission);
 
         Assert.Equal(ends[count - 1], consumed);

@@ -29,6 +29,10 @@ public sealed class SourceReadCompletionTests
 
         var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
         Assert.Equal(descriptor, read.FileDescriptor);
+        Assert.Equal(128, read.Limit);
+        var oversizedBatch = ReadResult.Success(Utf8Text.Encode(new string('\n', read.Limit + 1)),
+            Enumerable.Range(1, read.Limit).ToArray(), reachedEoF: false);
+        Assert.Throws<InvalidOperationException>(() => read.SetResult(oversizedBatch));
         read.SetResult(ReadResult.Success("selected=$1"u8.ToArray(), [], reachedEoF: true));
         var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep());
         Assert.Equal(descriptor, close.Descriptor);
@@ -169,6 +173,25 @@ public sealed class SourceReadCompletionTests
             Assert.Equal(Utf8Text.EncodeLine(expected.ToDiagnosticMessage()).ToArray(), diagnostic.Content);
         }
         owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task SourceKeepsLookaheadForAnIncompleteRecordAndDrainsFollowingDenseWindows()
+    {
+        var memory = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        await using var host = new TestHost { MemoryBudget = memory };
+        var longRecord = "#" + new string('x', DescriptorReader.BufferSize + 512) + "\n";
+        var otherRecords = string.Concat(Enumerable.Repeat("#abc   \n", (DescriptorReader.BufferSize + 512) / 8));
+        host.AddFile("/input", longRecord + otherRecords + "value=$'\\377\\r'");
+
+        var result = await host.RunAsync("source /input; printf '%s' \"$value\"", CancellationToken.None);
+
+        Assert.True(result.ExitCode == 0, host.StandardError.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(new byte[] { 0xff, 13 }, host.StandardOutput.Content.ToArray());
+        Assert.Equal(4, host.ReadCallCount);
+        Assert.Equal(0, host.OpenFileCount);
         Assert.Equal(0, memory.ReservedBytes);
     }
 

@@ -15,7 +15,7 @@ public sealed class BoundedReadTests
         var memory = new MemoryGovernor(0);
         using var budget = memory.CreateScope();
         using var output = ByteMemoryBuilder.CreateUnaccounted(4).Append("#\n"u8);
-        var destination = new SourceLineDestination(output, 6);
+        var destination = new SourceReadDestination(output, 6);
         var consumed = new List<int>();
         var owner = new DescriptorReadBufferOwner(consumed.Add, budget);
         var content = "ab\ncd\nef\n"u8.ToArray();
@@ -23,13 +23,13 @@ public sealed class BoundedReadTests
         var result = readFails ? ByteReadResult.Failure(content.Length, error, reachedEoF: false)
             : ByteReadResult.Success(content.Length, reachedEoF: true);
 
-        var batch = await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, destination, retainImmutable: false, CancellationToken.None);
+        var batch = await DescriptorReader.ReadSourceAsync(owner, Read, destination, budget, CancellationToken.None);
 
         Assert.Empty(batch.Content.ToArray());
         Assert.Empty(batch.LineStartOffsets);
         Assert.Equal(!readFails, batch.IsTooLarge);
         Assert.Equal(readFails ? error : (OperationError?)null, batch.Error);
-        Assert.Equal([readFails ? 0 : 6], consumed);
+        Assert.Equal([readFails ? 0 : 5], consumed);
         Assert.Equal("#\n"u8.ToArray(), output.ToMemory().ToArray());
         Assert.Equal(0, memory.PeakBytes);
 
@@ -38,33 +38,56 @@ public sealed class BoundedReadTests
     }
 
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(false, false)]
-    public async Task SourceMayRetainAnImmutableBatchWithAnExplicitDestination(bool sourceRead, bool canRetain)
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SourceGrowthAfterTheBorrowReusesOnlyImmutableHostBytes(bool canRetain)
     {
-        const int OffsetBytes = 32 + sizeof(int);
-        ReadOnlyMemory<byte> input = new byte[] { 0xff, 13, 10, (byte)'b', 13 };
-        var reusesHostBytes = sourceRead && canRetain;
-        var expectedBytes = OffsetBytes + (reusesHostBytes ? 0 : input.Length);
-        var memory = new MemoryGovernor(expectedBytes);
+        byte[] input = [0xff, 13, 10, (byte)'b', 13];
+        byte[] expected = [(byte)'#', 10, .. input];
+        var memory = new MemoryGovernor(canRetain ? 0 : input.Length);
         using var budget = memory.CreateScope();
         using var output = ByteMemoryBuilder.CreateUnaccounted(2).Append("#\n"u8);
         var owner = new DescriptorReadBufferOwner(consumed => Assert.Equal(input.Length, consumed), budget);
 
-        var batch = sourceRead
-            ? await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, new SourceLineDestination(output, 64),
-                retainImmutable: false, CancellationToken.None)
-            : await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, CancellationToken.None);
+        var result = await DescriptorReader.ReadSourceAsync(owner, Read, new SourceReadDestination(output, 64), budget,
+            CancellationToken.None);
 
-        Assert.Equal(reusesHostBytes, owner.WasRetained);
-        Assert.Equal(reusesHostBytes, batch.Content.Equals(input));
+        Assert.Equal(ReadResult.EndOfFile, result);
+        Assert.Equal(canRetain, owner.WasRetained);
+        Assert.Equal(expected, output.ToMemory().ToArray());
+        Assert.Equal(input.Length, owner.Position);
+        Assert.Equal(canRetain ? 0 : input.Length, memory.PeakBytes);
+        Assert.Equal(0, memory.ReservedBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner source, DescriptorReadRequest _, CancellationToken __)
+        {
+            var buffer = source.Borrow(input, ByteReadResult.Success(input.Length, reachedEoF: true), canRetain);
+            if (!canRetain)
+                buffer.ReleaseWith(() => Array.Clear(input));
+            return ValueTask.FromResult(buffer);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PublicLineReadOwnsItsBatchWhenGivenAnExplicitDestination(bool canRetain)
+    {
+        const int OffsetBytes = 32 + sizeof(int);
+        ReadOnlyMemory<byte> input = new byte[] { 0xff, 13, 10, (byte)'b', 13 };
+        var expectedBytes = OffsetBytes + input.Length;
+        var memory = new MemoryGovernor(expectedBytes);
+        using var budget = memory.CreateScope();
+        var owner = new DescriptorReadBufferOwner(consumed => Assert.Equal(input.Length, consumed), budget);
+
+        var batch = await DescriptorReader.ReadLinesAsync(owner, Read, 2, budget, CancellationToken.None);
+
+        Assert.False(owner.WasRetained);
+        Assert.False(batch.Content.Equals(input));
         Assert.Equal(input.ToArray(), batch.Content.ToArray());
         Assert.Equal([3], batch.LineStartOffsets);
         Assert.True(batch.ReachedEoF);
         Assert.Equal(input.Length, owner.Position);
-        Assert.Equal("#\n"u8.ToArray(), output.ToMemory().ToArray());
         Assert.Equal(expectedBytes, memory.PeakBytes);
         budget.Dispose();
         Assert.Equal(0, memory.ReservedBytes);

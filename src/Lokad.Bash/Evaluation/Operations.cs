@@ -162,7 +162,7 @@ public sealed class ReadLineOperation(
     internal ByteMemoryBuilder? ReusableLine { get; private init; }
 
     /// <summary>Optional source buffer, owned by the evaluator through completion of the read.</summary>
-    internal SourceLineDestination? SourceDestination { get; private init; }
+    internal SourceReadDestination? SourceDestination { get; private init; }
 
     /// <summary>Allows a short-lived batch to reuse immutable host storage.</summary>
     internal bool RetainImmutable { get; private init; }
@@ -176,7 +176,7 @@ public sealed class ReadLineOperation(
         AsTask(use, fileDescriptor, limit, destinationBudget, reusableLine, sourceDestination: null, retainImmutable: false);
 
     internal static Task<ReadResult> AsTask(Action<EvaluationOperation> use, FileDescriptor fileDescriptor, int limit,
-        IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine, SourceLineDestination? sourceDestination, bool retainImmutable)
+        IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine, SourceReadDestination? sourceDestination, bool retainImmutable)
     {
         if (reusableLine != null && (limit != 1 || destinationBudget != null))
             throw new ArgumentException("Reusable line storage requires one record and no copied-batch owner.");

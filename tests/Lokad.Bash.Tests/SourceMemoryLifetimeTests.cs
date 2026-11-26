@@ -122,15 +122,16 @@ public sealed class SourceMemoryLifetimeTests
     [InlineData(4096, false, true)]
     [InlineData(16384, false, true)]
     [InlineData(4096, true, true)]
-    public async Task FragmentedSourceAdmitsOnlyOffsetsForImmutableReadBatches(int finalBytes, bool cancel, bool sizeKnown)
+    public async Task FragmentedSourceUsesItsParserBufferForImmutableWindows(int finalBytes, bool cancel, bool sizeKnown)
     {
         var governor = new MemoryGovernor(1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
         var budget = new RecordingBudget(governor, depth: 0, scopes);
         using var owner = budget.CreateScope();
-        await using var host = new TestHost { MemoryBudget = budget, PreparedReadSizeKnown = sizeKnown };
         var first = Records("value=prefix", 384);
         var middle = Records("value+=-middle", 64);
+        await using var host = new WindowedSourceHost(first.Length, middle.Length)
+            { MemoryBudget = budget, PreparedReadSizeKnown = sizeKnown };
         const string Definition = "probe(){ printf '%s' \"$value\" $'\\377\\r'; }\n#";
         host.AddFile("/a", first + middle + Definition + new string('x', finalBytes - Definition.Length - 1) + "\n");
         var sourceBytesAtRead = new List<long>();
@@ -139,14 +140,28 @@ public sealed class SourceMemoryLifetimeTests
         state.Memory.Budget = owner;
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var cancellation = new CancellationTokenSource();
+        host.BeforeReadBuffer = _ =>
+        {
+            if (cancel && host.ReadCallCount == 3)
+                cancellation.Cancel();
+        };
         var completion = state.EnsureRunning(cancellation.Token);
         var token = deadline.Token;
         var open = Assert.IsType<OpenFileOperation>(await state.GetNextStep(token));
         await ShellOperationDispatcher.DispatchAsync(open, host, token);
 
-        var firstAdmissions = await ReadBatch(cancelAfterFraming: false);
-        var middleAdmissions = await ReadBatch(cancelAfterFraming: false);
-        var finalAdmissions = await ReadBatch(cancelAfterFraming: cancel);
+        var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep(token));
+        var batch = Assert.IsType<RecordedScope>(read.DestinationBudget);
+        var admissions = new List<long>();
+        batch.ReservationAdmitted = admissions.Add;
+        var dispatch = ShellOperationDispatcher.DispatchAsync(read, host, cancellation.Token);
+        if (cancel)
+        {
+            var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatch);
+            Assert.Equal(cancellation.Token, canceled.CancellationToken);
+        }
+        else
+            await dispatch;
         var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep(token));
         var liveSourceBytes = SourceBackingBytes();
         await ShellOperationDispatcher.DispatchAsync(close, host, token);
@@ -172,11 +187,7 @@ public sealed class SourceMemoryLifetimeTests
         var inputBytes = first.Length + middle.Length + finalBytes;
         var initialCapacity = sizeKnown ? Math.Min(inputBytes, ParserCapacity) : ParserCapacity;
         var fits = inputBytes <= initialCapacity;
-        const int BatchOffsetsBytes = 32 + 127 * sizeof(int);
-        const int FinalOffsetBytes = 32 + sizeof(int);
-        Assert.Equal(new long[] { BatchOffsetsBytes }, firstAdmissions);
-        Assert.Equal(new long[] { BatchOffsetsBytes }, middleAdmissions);
-        Assert.Equal(new long[] { FinalOffsetBytes }, finalAdmissions);
+        Assert.Empty(admissions);
         Assert.Equal(new long[] { 0, initialCapacity, initialCapacity }, sourceBytesAtRead);
         var retained = fits ? initialCapacity : inputBytes;
         Assert.Equal(cancel ? 0 : retained, liveSourceBytes);
@@ -188,37 +199,25 @@ public sealed class SourceMemoryLifetimeTests
 
         long SourceBackingBytes() => scopes.Where(scope => scope.OwnBytes >= first.Length).Sum(scope => scope.OwnBytes);
 
-        async Task<List<long>> ReadBatch(bool cancelAfterFraming)
-        {
-            var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep(token));
-            var scope = Assert.IsType<RecordedScope>(read.DestinationBudget);
-            var admissions = new List<long>();
-            scope.ReservationAdmitted = bytes =>
-            {
-                admissions.Add(bytes);
-                if (cancelAfterFraming)
-                    cancellation.Cancel();
-            };
-            await ShellOperationDispatcher.DispatchAsync(read, host, token);
-            return admissions;
-        }
-
         static string Records(string assignment, int width) =>
             assignment + " #" + new string('x', width - assignment.Length - 3) + "\n"
             + string.Concat(Enumerable.Repeat("#" + new string('x', width - 2) + "\n", 127));
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task TerminalSourceBatchFillsTheParserBufferAndReleasesOffsetsBeforeClose(bool terminated)
+    [InlineData(true, 0)]
+    [InlineData(false, 0)]
+    [InlineData(true, 4096)]
+    [InlineData(false, 4096)]
+    public async Task TerminalSourceWindowFillsTheParserBufferWithOneRead(bool terminated, int extraLines)
     {
-        var governor = new MemoryGovernor(1024 * 1024);
+        var governor = new MemoryGovernor(16 * 1024 * 1024);
         var scopes = new ConcurrentBag<RecordedScope>();
         var budget = new RecordingBudget(governor, depth: 0, scopes);
         using var owner = budget.CreateScope();
         await using var host = new TestHost { MemoryBudget = budget };
-        var body = "probe(){ printf '%s' $'\\377\\r'; }\n#" + new string('x', PaddingBytes) + (terminated ? "\n" : "x");
+        var body = "probe(){ printf '%s' $'\\377\\r'; }\n" + string.Concat(Enumerable.Repeat("#\n", extraLines))
+            + "#" + new string('x', PaddingBytes) + (terminated ? "\n" : "x");
         host.AddFile("/a", body);
         var beforeRead = 0L;
         host.BeforeRead = () => beforeRead = governor.ReservedBytes;
@@ -239,10 +238,11 @@ public sealed class SourceMemoryLifetimeTests
         Assert.Equal(0, batch.OwnBytes);
         var source = Assert.Single(scopes, scope => scope.OwnBytes >= PaddingBytes);
         Assert.Equal(body.Length, source.OwnBytes);
-        Assert.Equal(body.Length + 32 + sizeof(int), governor.PeakBytes - beforeRead);
+        Assert.Equal(body.Length, governor.PeakBytes - beforeRead);
         await ShellOperationDispatcher.DispatchAsync(close, host, token);
 
         var write = Assert.IsType<WriteOperation>(await state.GetNextStep(token));
+        Assert.True(write.FileDescriptor == FileDescriptor.StdOut, Encoding.UTF8.GetString(write.Content.Span));
         Assert.Equal(new byte[] { 0xff, 13 }, write.Content.ToArray());
         // The source owns its displayed path after the descriptor closes and while the function runs.
         Assert.Equal(body.Length + 24L + 2L * "/a".Length, source.OwnBytes);
@@ -254,6 +254,22 @@ public sealed class SourceMemoryLifetimeTests
         Assert.Equal(0, source.OwnBytes);
         owner.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class WindowedSourceHost(int firstMaximum, int secondMaximum) : TestHost
+    {
+        public override ValueTask<DescriptorReadBuffer> ReadAsync(FileDescriptor descriptor, DescriptorReadRequest request,
+            CancellationToken cancellationToken)
+        {
+            var maximum = ReadCallCount switch
+            {
+                0 => firstMaximum,
+                1 => secondMaximum,
+                _ => request.MaximumBytes,
+            };
+            return base.ReadAsync(descriptor, new DescriptorReadRequest(request.MinimumBytes, Math.Min(maximum, request.MaximumBytes)),
+                cancellationToken);
+        }
     }
 
     public static IEnumerable<object[]> Lifetimes()

@@ -18,18 +18,16 @@ public static class ByteLines
         IMemoryBudget memoryBudget,
         out int[] lineStartOffsets,
         out IMemoryReservation? reservation) =>
-        FindCompleteRecords(content, (byte)'\n', limit, examined: 0, reachedEof: false, maximumBatchBytes: int.MaxValue,
+        FindCompleteRecords(content, (byte)'\n', limit, examined: 0, reachedEof: false,
             memoryBudget, out lineStartOffsets, out reservation);
 
     /// <summary>Skips an examined delimiter-free prefix and returns offsets relative to the full input.</summary>
-    /// <remarks>Returns the framed length even when the batch exceeds the byte limit and has no retained offsets.</remarks>
     internal static int FindCompleteRecords(
         ReadOnlySpan<byte> content,
         byte delimiter,
         int limit,
         int examined,
         bool reachedEof,
-        int maximumBatchBytes,
         IMemoryBudget memoryBudget,
         out int[] recordStartOffsets,
         out IMemoryReservation? reservation)
@@ -58,7 +56,7 @@ public static class ByteLines
             consumed = content.Length;
             recordCount++;
         }
-        if (recordCount <= 1 || consumed > maximumBatchBytes)
+        if (recordCount <= 1)
         {
             recordStartOffsets = Array.Empty<int>();
             return recordCount == 0 ? 0 : consumed;

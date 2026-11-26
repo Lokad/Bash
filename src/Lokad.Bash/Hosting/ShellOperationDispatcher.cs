@@ -44,12 +44,17 @@ internal static class ShellOperationDispatcher
                     ? state.Host.OpenFileAsync(request.Path, state.CancellationToken)
                     : state.Host.OpenWritableFileAsync(request.Path, request.Mode.ToWritable(), FileCreationMode.OpenOrCreate, FileWriteRetention.AllowInMemory, state.CancellationToken)),
             ReadLineOperation read => HandleReadLimitAsync(read.UseResult(state, static (request, state) =>
-                request.ReusableLine is { } reusableLine
-                    ? DescriptorReader.ReadReusableLineAsync((state.Host, request.FileDescriptor),
+                request.SourceDestination is { } sourceDestination
+                    ? DescriptorReader.ReadSourceAsync((state.Host, request.FileDescriptor),
                         static (source, read, token) => source.Host.ReadAsync(source.FileDescriptor, read, token),
-                        reusableLine, state.CancellationToken)
-                    : state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, request.DestinationBudget,
-                        request.SourceDestination, request.RetainImmutable, state.CancellationToken))),
+                        sourceDestination, request.DestinationBudget ?? throw new InvalidOperationException("Source reads require a batch budget."),
+                        state.CancellationToken)
+                    : request.ReusableLine is { } reusableLine
+                        ? DescriptorReader.ReadReusableLineAsync((state.Host, request.FileDescriptor),
+                            static (source, read, token) => source.Host.ReadAsync(source.FileDescriptor, read, token),
+                            reusableLine, state.CancellationToken)
+                        : state.Host.ReadLinesAsync(request.FileDescriptor, request.Limit, request.DestinationBudget,
+                            request.RetainImmutable, state.CancellationToken))),
             ReadRecordBatchOperation batch => HandleReadLimitAsync(batch.UseResult(state, static (request, state) =>
                 DescriptorReader.ReadRecordBatchAsync((state.Host, request.Descriptor),
                     static (source, read, token) => source.Host.ReadAsync(source.Descriptor, read, token),

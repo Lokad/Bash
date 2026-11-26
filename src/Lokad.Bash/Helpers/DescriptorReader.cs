@@ -50,54 +50,132 @@ public static class DescriptorReader
     public static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         int limit, IMemoryBudget? destinationBudget, CancellationToken cancellationToken)
-        => ReadLinesAsync(source, read, limit, destinationBudget, sourceDestination: null, retainImmutable: false, cancellationToken);
+        => ReadLinesAsync(source, read, limit, destinationBudget, retainImmutable: false, cancellationToken);
 
     internal static ValueTask<ReadResult> ReadLinesAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
-        int limit, IMemoryBudget? destinationBudget, SourceLineDestination? sourceDestination, bool retainImmutable,
-        CancellationToken cancellationToken)
-        => ReadRecordsCoreAsync(source, read, (byte)'\n', limit, destinationBudget, reusableLine: null, sourceDestination,
-            retainImmutable || sourceDestination != null, static batch => batch.AsLines(), cancellationToken);
+        int limit, IMemoryBudget? destinationBudget, bool retainImmutable, CancellationToken cancellationToken)
+        => ReadRecordsCoreAsync(source, read, (byte)'\n', limit, destinationBudget, reusableLine: null,
+            retainImmutable, static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Copies one LF record into caller-owned storage, valid until the next read.</summary>
     public static ValueTask<ReadResult> ReadReusableLineAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         ByteMemoryBuilder output, CancellationToken cancellationToken) =>
-        ReadRecordsCoreAsync(source, read, (byte)'\n', 1, destinationBudget: null, output, sourceDestination: null,
+        ReadRecordsCoreAsync(source, read, (byte)'\n', 1, destinationBudget: null, output,
             retainImmutable: false, static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Retains offsets and any necessary record copy in the supplied destination budget.</summary>
     internal static ValueTask<DescriptorRecordBatch> ReadRecordBatchAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         byte delimiter, int limit, IMemoryBudget destinationBudget, bool retainImmutable, CancellationToken cancellationToken) =>
-        ReadRecordsCoreAsync(source, read, delimiter, limit, destinationBudget, reusableLine: null, sourceDestination: null,
+        ReadRecordsCoreAsync(source, read, delimiter, limit, destinationBudget, reusableLine: null,
             retainImmutable, static batch => batch, cancellationToken);
 
-    private static async ValueTask<TBatch> ReadRecordsCoreAsync<T, TBatch>(T source,
+    /// <summary>Fills the source destination through EOF. The result contains only the terminal outcome.</summary>
+    internal static async ValueTask<ReadResult> ReadSourceAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
-        byte delimiter, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine,
-        SourceLineDestination? sourceDestination, bool retainImmutable,
-        Func<DescriptorRecordBatch, TBatch> project, CancellationToken cancellationToken)
+        SourceReadDestination destination, IMemoryBudget stagingBudget, CancellationToken cancellationToken)
     {
-        if (limit <= 0)
-            throw new ArgumentOutOfRangeException(nameof(limit));
-        var maximumBatchBytes = sourceDestination is { } sourceOutput
-            ? sourceOutput.MaximumBytes - sourceOutput.Buffer.Length : int.MaxValue;
+        var output = destination.Buffer;
         var minimum = 1;
         var examined = 0;
         (DescriptorReadBufferOwner? Owner, long Offset) position = default;
         while (true)
         {
-            // One extra byte distinguishes a final record at the limit from an oversized one.
-            // A copied batch should not materialize an entire contiguous source. Long records
-            // can still grow through lookahead; BufferSize is a transfer window, not a record cap.
-            // Keep that window when continuing a short prefix left by BOM detection or a byte read.
-            var maximum = ByteMemoryBuilder.MaxMemoryBuilderBytes + 1;
-            if ((destinationBudget != null || reusableLine != null) && minimum <= BufferSize)
-                maximum = BufferSize;
-            else if (minimum == 1)
-                maximum = int.MaxValue;
-            using var buffer = await read(source, new DescriptorReadRequest(minimum, maximum, position), cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var buffer = await read(source, WindowRequest(minimum, position, bounded: true), cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = buffer.Result;
+            if (result.Error is { } error)
+                return ReadResult.Failure(error);
+            var bytes = buffer.Content;
+            if (bytes.IsEmpty)
+                return ReadResult.EndOfFile;
+
+            if (position != buffer.Position)
+                examined = 0;
+            var length = SourcePrefixLength(bytes.Span, examined, result.ReachedEoF);
+            var remaining = destination.MaximumBytes - output.Length;
+            if (length > remaining)
+            {
+                buffer.Consume(remaining + 1);
+                return ReadResult.TooLarge;
+            }
+            if (length == 0)
+            {
+                if (bytes.Length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
+                    throw new ByteMemoryBuilder.LimitExceededException();
+                // Keep an incomplete record with the provider while looking ahead.
+                minimum = bytes.Length + 1;
+                examined = bytes.Length;
+                position = buffer.Position;
+                continue;
+            }
+
+            var reachedEof = result.ReachedEoF && length == bytes.Length;
+            var content = bytes[..length];
+            if (length <= output.Capacity - output.Length || (output.Length == 0 && reachedEof))
+            {
+                output.Append(content.Span, exactCapacity: reachedEof);
+                buffer.Consume(length);
+            }
+            else
+            {
+                // Let the provider release its window before admitting parser-buffer growth.
+                IMemoryReservation? staged = null;
+                try
+                {
+                    content = buffer.CanRetain ? buffer.Retain(length) : ScopedMemory.Copy(content, stagingBudget, out staged);
+                    buffer.Consume(length);
+                    buffer.Dispose();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    output.Append(content.Span, exactCapacity: reachedEof);
+                }
+                finally { staged?.Dispose(); }
+            }
+
+            if (reachedEof)
+                return ReadResult.EndOfFile;
+            minimum = 1;
+            examined = 0;
+            position = default;
+        }
+
+        static int SourcePrefixLength(ReadOnlySpan<byte> bytes, int examined, bool reachedEof)
+        {
+            var unread = bytes[examined..];
+            if (IsWideLookahead(examined, bytes.Length))
+            {
+                // Extended lookahead may offer much more than the requested record.
+                var first = unread.IndexOf((byte)'\n');
+                if (first >= 0)
+                    return examined + first + 1;
+            }
+            else if (!reachedEof)
+            {
+                var last = unread.LastIndexOf((byte)'\n');
+                return last < 0 ? 0 : examined + last + 1;
+            }
+            return reachedEof ? bytes.Length : 0;
+        }
+    }
+
+    private static async ValueTask<TBatch> ReadRecordsCoreAsync<T, TBatch>(T source,
+        Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
+        byte delimiter, int limit, IMemoryBudget? destinationBudget, ByteMemoryBuilder? reusableLine, bool retainImmutable,
+        Func<DescriptorRecordBatch, TBatch> project, CancellationToken cancellationToken)
+    {
+        if (limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        var minimum = 1;
+        var examined = 0;
+        (DescriptorReadBufferOwner? Owner, long Offset) position = default;
+        while (true)
+        {
+            using var buffer = await read(source, WindowRequest(minimum, position, destinationBudget != null || reusableLine != null),
+                cancellationToken).ConfigureAwait(false);
             var result = buffer.Result;
             if (result.Error is { } error)
                 return project(new DescriptorRecordBatch(default, Array.Empty<int>(),
@@ -109,15 +187,9 @@ public static class DescriptorReader
             if (position != buffer.Position)
                 examined = 0;
             // A resumed batch may include following records from one transfer window of new bytes.
-            var batchLimit = examined > 0 && (bytes.Length - examined > BufferSize || bytes.Length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
-                ? 1 : limit;
+            var batchLimit = IsWideLookahead(examined, bytes.Length) ? 1 : limit;
             var length = ByteLines.FindCompleteRecords(bytes.Span, delimiter, batchLimit, examined, result.ReachedEoF,
-                maximumBatchBytes, destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
-            if (length > maximumBatchBytes)
-            {
-                buffer.Consume(length);
-                return project(new DescriptorRecordBatch(default, Array.Empty<int>(), ByteReadResult.TooLarge));
-            }
+                destinationBudget ?? buffer.MemoryBudget, out var offsets, out var offsetsMemory);
             if (examined > 0 && (length == 0 ? bytes.Length : length) > ByteMemoryBuilder.MaxMemoryBuilderBytes)
                 throw new ByteMemoryBuilder.LimitExceededException();
             if (length != 0 || result.ReachedEoF)
@@ -133,15 +205,6 @@ public static class DescriptorReader
                         reusableLine.Truncate(0);
                         reusableLine.Append(bytes[..length]);
                         content = reusableLine.ToMemory();
-                    }
-                    else if (sourceDestination is { } destination
-                        && (length <= destination.Buffer.Capacity - destination.Buffer.Length
-                            || destination.Buffer.Length == 0 && reachedEof))
-                    {
-                        // Use admitted capacity, or allocate the final exact buffer for a complete first batch.
-                        var start = destination.Buffer.Length;
-                        destination.Buffer.Append(bytes.Span[..length], exactCapacity: reachedEof);
-                        content = destination.Buffer.ToMemory()[start..];
                     }
                     else if (destinationBudget == null || (retainImmutable && buffer.CanRetain))
                         content = buffer.Retain(length);
@@ -160,17 +223,29 @@ public static class DescriptorReader
             position = buffer.Position;
         }
     }
+
+    private static DescriptorReadRequest WindowRequest(int minimum,
+        (DescriptorReadBufferOwner? Owner, long Offset) position, bool bounded)
+    {
+        // Preserve bounded transfer windows while allowing lookahead for a long record.
+        // The extra byte distinguishes a record at the limit from an oversized one.
+        var maximum = bounded && minimum <= BufferSize ? BufferSize
+            : minimum == 1 ? int.MaxValue : ByteMemoryBuilder.MaxMemoryBuilderBytes + 1;
+        return new DescriptorReadRequest(minimum, maximum, position);
+    }
+
+    private static bool IsWideLookahead(int examined, int offered) =>
+        examined > 0 && (offered - examined > BufferSize || offered > ByteMemoryBuilder.MaxMemoryBuilderBytes);
 }
 
-/// <summary>Accepts line batches directly into the parser's bounded source buffer.</summary>
-internal readonly record struct SourceLineDestination(ByteMemoryBuilder Buffer, int MaximumBytes);
+/// <summary>Accepts descriptor windows into the parser's bounded source buffer.</summary>
+internal readonly record struct SourceReadDestination(ByteMemoryBuilder Buffer, int MaximumBytes);
 
 /// <summary>A framed byte batch with starts after the first record, or a terminal read outcome.</summary>
 internal readonly record struct DescriptorRecordBatch(ReadOnlyMemory<byte> Content, int[] RecordStartOffsets, ByteReadResult Result)
 {
     /// <summary>Projects a batch scanned with LF to the public line result.</summary>
-    internal ReadResult AsLines() => Result.IsTooLarge ? ReadResult.TooLarge
-        : Result.Error is { } error ? ReadResult.Failure(error)
+    internal ReadResult AsLines() => Result.Error is { } error ? ReadResult.Failure(error)
         : Content.IsEmpty ? ReadResult.EndOfFile
         : ReadResult.FromValidatedLines(Content, RecordStartOffsets, Result.ReachedEoF);
 }

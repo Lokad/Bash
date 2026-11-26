@@ -265,7 +265,7 @@ public sealed class AsyncLineReader : IDisposable
             if (remaining.IsEmpty)
                 return ReadResult.EndOfFile;
             var length = ByteLines.FindCompleteRecords(remaining.Span, (byte)'\n', reader._batchSize, examined: 0,
-                reachedEof: true, maximumBatchBytes: int.MaxValue, budget, out var offsets, out _);
+                reachedEof: true, budget, out var offsets, out _);
             reader._unbufferedContent = remaining[length..];
             return ReadResult.FromValidatedLines(remaining[..length], offsets, reader._unbufferedContent.IsEmpty);
         }
@@ -319,7 +319,7 @@ public sealed class AsyncLineReader : IDisposable
     /// </remarks>
     public ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes) => TryReadToEndAsync(maximumBytes, destination: null);
 
-    /// <summary>Reads remaining bytes, allowing the dispatcher to append batches to the supplied source buffer.</summary>
+    /// <summary>Reads remaining bytes, allowing the dispatcher to fill the source buffer before reporting EOF.</summary>
     /// <remarks>Takes ownership of the supplied builder. Completed bytes remain charged to its enclosing scope.</remarks>
     internal async ValueTask<BoundedReadResult> TryReadToEndAsync(int maximumBytes, ByteMemoryBuilder? destination)
     {
@@ -335,7 +335,6 @@ public sealed class AsyncLineReader : IDisposable
         while (true)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            var earlierBytes = output.Length;
             var (reachedEof, failure) = await TryReachedEofCore(_cancellationToken).ConfigureAwait(false);
             _cancellationToken.ThrowIfCancellationRequested();
             if (failure.Error is { } error)
@@ -350,11 +349,9 @@ public sealed class AsyncLineReader : IDisposable
             }
 
             // Consume the remaining batch directly; line boundaries were already scanned by its producer.
-            if (_content.Length - _lineStart > maximumBytes - earlierBytes)
+            if (_content.Length - _lineStart > maximumBytes - output.Length)
                 return new BoundedReadResult.TooLarge();
-            // The dispatcher may have copied this batch directly into the destination.
-            if (output.Length == earlierBytes)
-                output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
+            output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
             ReleaseCurrentBatch();
         }
 
