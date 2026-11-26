@@ -31,15 +31,18 @@ internal static partial class WordExpansion
         }
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
-        /// <summary>Uses the selected element to write through a prepared scalar prefix to its caller.</summary>
+        /// <summary>Selects a caller-owned element while the prefix still supplies the selector's reads.</summary>
         internal ResolvedVariableReference SelectPrefixElementWrite(VariableReference source, ScopedEvaluation scope)
         {
-            if (this is Scalar || scope.ExpansionWriteTarget is not { PreparingPrefixes: true } prefix
+            if (this is Scalar || scope.ExpansionWriteTarget is not { } prefix
+                || !(prefix.PreparingPrefixes || prefix.DeclarationSelector)
                 || !prefix.PrefixNames.Contains(Name)
                 || source.Kind != VariableReferenceKind.Name && source.Name != Name)
                 return this;
 
             var owner = prefix.Variables;
+            if (prefix.DeclarationSelector && !owner.HasBindingOrAttributes(Name))
+                return this;
             if (this is Indexed indexed && owner.AssociativeArrays.ContainsKey(Name)
                 && AssociativeArrayKey.TryCreate(ShellValue.FromInteger(indexed.Index.Value), out var key))
                 return new Associative(Name, key) { ReadOwner = owner };
@@ -131,6 +134,10 @@ internal static partial class WordExpansion
                     return false;
             }
 
+            // A declaration selector has already chosen which store owns an element of a prefix.
+            if (this is not Scalar && scope.ExpansionWriteTarget is { DeclarationSelector: true } prefix
+                && prefix.PrefixNames.Contains(Name))
+                return true;
             if (scope.GetExpansionWriteTarget(sourceName) is not { } target)
                 return true;
 

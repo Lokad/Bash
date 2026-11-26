@@ -130,6 +130,8 @@ internal readonly record struct ScopedEvaluation(
         internal bool PreparingPrefixes { get; init; }
         /// <summary>The receiving store contains saved prefix bindings.</summary>
         internal bool OnlyPrefixNames { get; init; }
+        /// <summary>Element writes in a declaration selector reach an existing caller binding or remain temporary.</summary>
+        internal bool DeclarationSelector { get; init; }
 
         internal static ExpansionBindings ForSavedPrefixes(Variables.CommandBindings bindings) =>
             new(bindings.SavedVariables, bindings.PrefixNames) { OnlyPrefixNames = true };

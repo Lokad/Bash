@@ -3936,9 +3936,12 @@ public sealed partial class Evaluation : IFileTester
 
             ScopedEvaluation GetDeclarationElementScope() => prefixNames == null ? executionScope : executionScope with
             {
-                ExpansionWriteTarget = bindings is { } commandBindings
+                ExpansionWriteTarget = (bindings is { } commandBindings
                     ? ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(commandBindings)
-                    : new ScopedEvaluation.ExpansionBindings(declarationScope.Variables, prefixNames)
+                    : new ScopedEvaluation.ExpansionBindings(declarationScope.Variables, prefixNames)) with
+                {
+                    DeclarationSelector = true
+                }
             };
 
             ScopedEvaluation GetIntegerPromotionScope(ScopedEvaluation writeScope, Variables.CommandBindings commandBindings) => writeScope with

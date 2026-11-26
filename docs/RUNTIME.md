@@ -444,6 +444,11 @@ from the active binding used by a simple element-zero write. Expanded
 compound initializers publish into their selected array while their expansion
 scope forwards direct effects to the caller. With installed command
 bindings that forwarding targets only names in the saved prefix store.
+An element write inside a declaration selector uses the visible prefix to
+select the position. A direct element or element nameref writes to an
+existing caller binding, including an unassigned declaration. When the
+caller has no binding, the write remains in the temporary command scope.
+Later selector reads still use the active command bindings.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.

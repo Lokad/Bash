@@ -362,6 +362,51 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(false, "", "absent", "")]
+    [InlineData(true, "", "absent", "")]
+    [InlineData(false, " 'marks[2]=kept'", "present", "kept")]
+    public async Task ElementSideEffectsOnAnAbsentPrefixStayVisibleUntilRestoration(
+        bool inFunction, string explicitOperand, string presence, string promoted)
+    {
+        var declaration = "marks=7 declare -g 'table[(++visits,marks[1]++,0)]=first' 'table[(10+marks[1])]=second'"
+            + explicitOperand;
+        var invocation = inFunction ? "f() { " + declaration + "; }; f" : declaration;
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            table=(old other); visits=0
+            {{invocation}}
+            printf '<%s:%s:%s:%s:%s>\n' "$?" "$visits" "${!table[*]}" "${marks[1]-}" "${marks[2]-}"
+            if declare -p marks >/dev/null 2>&1; then printf 'present\n'; else printf 'absent\n'; fi
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal($"<0:1:0 1 11::{promoted}>\n{presence}\n", result.StdOut);
+    }
+
+    [Theory]
+    [InlineData("declare marks", "marks[1]++", 1, 10, ":1")]
+    [InlineData("marks=(4 5)", "marks[0]++", 0, 17, "8:5")]
+    [InlineData("marks=(4 5)", "cell++", 1, 10, "4:1")]
+    [InlineData("marks=(4 5)", "alias[1]++", 1, 11, "4:5")]
+    [InlineData("marks=(4 5)", "${marks[1]:=6}", 1, 10, "4:6")]
+    [InlineData(":", "marks++", 0, 18, "8:")]
+    public async Task ElementSelectorWritesKeepTemporaryReadsSeparateFromTheSelectedOwner(
+        string setup, string expression, int index, int laterIndex, string restored)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}
+            declare -n cell='marks[1]' alias=marks
+            table=(old other)
+            marks=7 typeset -g 'table[({{expression}},0)]=first' 'table[(10+marks[{{index}}])]=second'
+            printf '<%s:%s:%s:%s>\n' "$?" "${!table[*]}" "${marks[0]-}" "${marks[1]-}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal($"<0:0 1 {laterIndex}:{restored}>\n", result.StdOut);
+    }
+
+    [Theory]
     [InlineData("", "", "local")]
     [InlineData("", "=new", "new")]
     [InlineData("other=temporary ", "=new", "new")]
