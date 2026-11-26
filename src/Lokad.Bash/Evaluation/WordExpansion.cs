@@ -865,7 +865,7 @@ internal static partial class WordExpansion
                 if (quoteContext == ExpansionQuoteContext.HereDocument
                     && legacyStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid)
                 {
-                    await RejectHereDocumentAsync(scope, legacyStatus, legacyError).ConfigureAwait(false);
+                    await scope.Effects.RejectHereDocumentSubstitutionAsync(legacyStatus, legacyError, content, scope).ConfigureAwait(false);
                     return null;
                 }
                 if (syntax?.IsBraceExpanded == true && legacyStatus == ShellScanStatus.Incomplete && index + 1 < length)
@@ -1022,8 +1022,9 @@ internal static partial class WordExpansion
                 && (commandStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid
                     || arithmeticStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid))
             {
-                await RejectHereDocumentAsync(scope, commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus,
-                        commandError ?? arithmeticError)
+                await scope.Effects.RejectHereDocumentSubstitutionAsync(
+                        commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus, commandError ?? arithmeticError,
+                        content, scope)
                     .ConfigureAwait(false);
                 return null;
             }
@@ -1142,8 +1143,10 @@ internal static partial class WordExpansion
                             await ReportParameterSyntaxAsync(content.ToValue(),
                                 parameterStatus == BracedParameterScanStatus.UnterminatedOperand, scope, hereDocument: true).ConfigureAwait(false);
                         else
-                            await RejectHereDocumentAsync(scope, parameterStatus == BracedParameterScanStatus.UnterminatedCommandSubstitution
-                                ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid, parameterError).ConfigureAwait(false);
+                            await scope.Effects.RejectHereDocumentSubstitutionAsync(
+                                parameterStatus == BracedParameterScanStatus.UnterminatedCommandSubstitution
+                                    ? ShellScanStatus.Incomplete : ShellScanStatus.Invalid,
+                                parameterError, content, scope).ConfigureAwait(false);
                         return null;
                     }
                     if (output.Purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)
@@ -1222,20 +1225,6 @@ internal static partial class WordExpansion
                 output.AppendUnquotedSource(literal, ref sourceSeparators, retainCompactBacking);
             else
                 output.AppendSource(literal, globQuoted, retainCompactBacking);
-        }
-
-        static async Task RejectHereDocumentAsync(ScopedEvaluation failedScope, ShellScanStatus status, ParserFailure? error)
-        {
-            if (error is { UnclosedDelimiter: { } missingCloser })
-                await failedScope.Effects.ReportHereDocumentCaptureEndOfInputAsync(missingCloser, error.CaptureWarnings, failedScope)
-                    .ConfigureAwait(false);
-            else
-            {
-                await failedScope.Effects.ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
-                    ShellValue.FromText(error?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
-                        ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
-            }
-            failedScope.Effects.SetHereDocumentSyntaxError();
         }
     }
 

@@ -612,6 +612,10 @@ the enclosing command's line. If the inner reader itself reaches EOF, the
 diagnostic uses that reader's line. A pending inner document with only trailing
 line feeds after the header can complete with an empty body. Both the read
 and the subsequent execution report their warnings.
+When the substitution reader rejects a token in expanded here-document data,
+the diagnostic includes the reached token and the source line within that
+capture. Earlier document text does not advance the capture reader's line.
+The source line retains bytes after the token, including any CR.
 A substitution syntax failure while setting up a here-document on a brace
 group, conditional or loop discards the remaining commands in the current
 unit. The root reader keeps a previous nonzero status and its pipeline

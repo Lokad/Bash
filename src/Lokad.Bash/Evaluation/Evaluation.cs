@@ -4941,8 +4941,6 @@ public sealed partial class Evaluation : IFileTester
     internal void SetExpansionError(int exitCode) =>
         _state.SetExpansionError(exitCode);
 
-    internal void SetHereDocumentSyntaxError() => _state.SetHereDocumentSyntaxError();
-
     internal Task ReportHereDocumentParameterFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
         ScopedEvaluation scope, ExpansionFailureKind? fatalKind)
     {
@@ -5289,11 +5287,7 @@ public sealed partial class Evaluation : IFileTester
                 var renderedSource = spelling.ToMemory();
                 var line = GetCaptureDiagnosticLine(token, renderedSource, scope.Context.Coordinates.Line);
                 if (prefixFailure)
-                {
-                    var start = renderedSource.Span[..token.ReadPosition].LastIndexOf((byte)'\n') + 1;
-                    if (start < token.CapturePayloadStart)
-                        token = token with { Line = token.Line.Slice(token.CapturePayloadStart - start) };
-                }
+                    token = TrimCaptureDiagnosticLine(token, renderedSource);
                 var path = scope.Context.DiagnosticPath;
                 await ReportUnexpectedSyntaxAsync(token, path, SyntaxDiagnosticOrigin.CommandSubstitution,
                     line, errexit ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
@@ -5326,6 +5320,12 @@ public sealed partial class Evaluation : IFileTester
 
     private static int GetCaptureDiagnosticLine(UnexpectedSyntax token, ReadOnlyMemory<byte> spelling, int baseLine) =>
         Math.Max(1, baseLine) + spelling.Span[token.CapturePayloadStart..token.ReadPosition].Count((byte)'\n') + 1 + token.LineAdvance;
+
+    private static UnexpectedSyntax TrimCaptureDiagnosticLine(UnexpectedSyntax token, ReadOnlyMemory<byte> spelling) =>
+        // Here-document collection can advance the read cursor beyond the rejected token's line.
+        spelling.Span.Overlaps(token.Line.AsSpan(), out var start) && start < token.CapturePayloadStart
+            && token.CapturePayloadStart <= start + token.Line.Length
+            ? token with { Line = token.Line.Slice(token.CapturePayloadStart - start) } : token;
 
     private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
     private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.
@@ -5768,17 +5768,34 @@ public sealed partial class Evaluation : IFileTester
         _ => followsUnclosedDelimiter ? UnreadConditionalToken : MissingConditionalTermAtEnd
     };
 
-    internal async Task ReportHereDocumentCaptureEndOfInputAsync(
-        UnclosedDelimiter endOfInput, CaptureHereDocumentWarnings? warnings, ScopedEvaluation scope)
+    internal async Task RejectHereDocumentSubstitutionAsync(
+        ShellScanStatus status, ParserFailure? failure, ShellSource source, ScopedEvaluation scope)
     {
-        if (warnings is { } captureWarnings)
+        if (failure?.CaptureWarnings is { } captureWarnings)
             await ReportHereDocumentCaptureWarningsAsync(captureWarnings.Warnings, scope).ConfigureAwait(false);
-        var origin = endOfInput.PayloadLine != 0
-            || (scope.Context.Coordinates.CaptureFunctionDepth.HasValue && !scope.InNestedCommandUnits)
-            ? SyntaxDiagnosticOrigin.CommandSubstitution
-            : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
-        await ReportUnclosedDelimiterAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
-            scope.Context.DiagnosticPath, origin, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
+        if (failure?.UnclosedDelimiter is { } endOfInput)
+        {
+            var origin = endOfInput.PayloadLine != 0
+                || (scope.Context.Coordinates.CaptureFunctionDepth.HasValue && !scope.InNestedCommandUnits)
+                ? SyntaxDiagnosticOrigin.CommandSubstitution
+                : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
+            await ReportUnclosedDelimiterAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
+                scope.Context.DiagnosticPath, origin, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
+        }
+        else if (failure is { Kind: ParserFailureKind.SubstitutionGrammar, UnexpectedToken: { } token })
+        {
+            var line = GetCaptureDiagnosticLine(token, source.Bytes, HereDocumentExpansionLine(scope));
+            var detail = ReaderErrexitEnabled(scope) ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete;
+            await ReportUnexpectedSyntaxAsync(TrimCaptureDiagnosticLine(token, source.Bytes), scope.Context.DiagnosticPath,
+                SyntaxDiagnosticOrigin.CommandSubstitution, line, detail).ConfigureAwait(false);
+        }
+        else
+        {
+            await ReportExpansionDiagnosticAsync(ShellValue.FromText("here-document"),
+                ShellValue.FromText(failure?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
+                    ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
+        }
+        _state.SetHereDocumentSyntaxError();
     }
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>

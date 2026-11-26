@@ -18,7 +18,7 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         foreach (var prepared in new[] { false, true })
         {
             await using var host = new TestHost();
-            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
             Assert.Equal(expected, host.StandardOutput.TextContent);
             Assert.Contains("syntax error near unexpected token `)'", host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
@@ -42,7 +42,7 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
             await using var host = new TestHost();
             if (builtin == "source")
                 host.AddFile("/reader", reader);
-            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
             Assert.Equal(testedWithErrexit ? "<1|1>then<0|0>" : "<1|1><0|0>", host.StandardOutput.TextContent);
             Assert.Contains("syntax error near unexpected token `)'", host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
@@ -58,7 +58,7 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         {
             await using var host = new TestHost();
             host.AddFile("/reader", "(exit 7) | (exit 3)\nvalue=$(!;)\nprintf skipped >later\n");
-            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
             Assert.Equal("<1|1>", host.StandardOutput.TextContent);
             Assert.Equal("<1|1>", host.ReadFile("/trap-out"));
             Assert.False(await EndToEndHarness.FileExistsAsync(host, "/later"));
@@ -75,14 +75,57 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         foreach (var prepared in new[] { false, true })
         {
             await using var host = new TestHost();
-            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
             Assert.Equal(expected, host.StandardOutput.TextContent);
             Assert.Empty(host.StandardError.Content.ToArray());
             Assert.Equal(0, host.OpenFileCount);
         }
     }
 
-    private static async Task<int> RunPrefixFixtureAsync(string script, TestHost host, bool prepared) => prepared
+    [Theory]
+    [InlineData("earlier body line\nX$(!)Y", 3, ")", "!)Y")]
+    [InlineData("X$(printf skipped >effect;\ntime)Y", 4, ")", "time)Y")]
+    [InlineData("X$(ti\\\nme)Y", 3, ")", "time)Y")]
+    [InlineData("X$(;)Y", 3, ";", ";)Y")]
+    [InlineData("X${unset_value:-$(printf >)}Y", 3, ")", "printf >)}Y")]
+    [InlineData("X$(read -r inner <<INNER >\ninput\nINNER\n)Y", 5, "newline", "read -r inner <<INNER >")]
+    public async Task HereDocumentReportsTheReachedCaptureToken(string body, int line, string token, string spelling)
+    {
+        var script = "value=seed\nread -r value <<EOF\n" + body + "\nEOF\nprintf '<%s|%s>' \"$?\" \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|seed>", host.StandardOutput.TextContent);
+            Assert.Equal($"command substitution: line {line}: syntax error near unexpected token `{token}'\n"
+                + $"command substitution: line {line}: `{spelling}'\n", host.StandardError.TextContent);
+            Assert.False(await EndToEndHarness.FileExistsAsync(host, "/effect"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("2>diagnostic", true)]
+    [InlineData("2>&-", false)]
+    public async Task HereDocumentCaptureDiagnosticUsesTheReachedStderr(string redirect, bool writesFile)
+    {
+        var script = "read -r value " + redirect + " <<EOF\nλ$(time)€\r\nEOF\n" + ReportForegroundStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|1>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            if (writesFile)
+                Assert.Equal("command substitution: line 2: syntax error near unexpected token `)'\n"
+                    + "command substitution: line 2: `time)€\r'\n", host.ReadFile("/diagnostic"));
+            else
+                Assert.False(await EndToEndHarness.FileExistsAsync(host, "/diagnostic"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    private static async Task<int> RunSubstitutionFixtureAsync(string script, TestHost host, bool prepared) => prepared
         ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
         : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
 
