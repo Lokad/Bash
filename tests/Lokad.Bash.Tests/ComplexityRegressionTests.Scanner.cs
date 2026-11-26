@@ -6,6 +6,23 @@ namespace Lokad.Bash.Tests;
 
 public sealed partial class ComplexityRegressionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OnePatternCaseArmsUseCompactStorage(bool streamed)
+    {
+        const int Arms = 128;
+        const int Repeats = 3;
+        var input = ShellSource.FromText("case x in\n" + string.Concat(Enumerable.Repeat("a)  ;;\n", Arms)) + "esac\n").Bytes;
+
+        Assert.Equal(Arms, ParseCase().Items.Count);
+        AllocationAssert.SustainedReuse(() => _ = ParseCase(), Repeats, maximumBytes: Repeats * 70_000);
+
+        CaseCommand ParseCase() => (CaseCommand)(streamed
+            ? ((CommandUnitParseResult.Parsed)Parser.TryParseCommandUnits(input).Single()).Command
+            : Parser.Parse(input).Commands[0]);
+    }
+
     [Fact]
     public void ContinuedMixedExpansionsDoNotReparseNestedCommandsExponentially()
     {

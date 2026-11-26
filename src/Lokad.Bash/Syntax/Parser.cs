@@ -1225,36 +1225,38 @@ public static class Parser
             if (hasOpeningParenthesis)
                 tokenizer.NextTokenCore();
 
-            var patterns = new List<Word>();
-            while (true)
+            var patternToken = tokenizer.NextTokenCore();
+            if (!tokenizer.TryGetOperandWord(patternToken, out var firstPattern))
             {
-                var patternToken = tokenizer.NextTokenCore();
+                if (hasOpeningParenthesis)
+                    tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case pattern.", patternToken);
+                else
+                    tokenizer.RecordUnexpectedToken("Expected case pattern.", patternToken, tokenizer.Position);
+                return null;
+            }
+
+            List<Word>? alternatives = null;
+            var separator = tokenizer.PeekTokenCore();
+            while (separator is { Kind: TokenKind.PipelineOperator, PipelineOperator: PipelineOperator.Pipe })
+            {
+                tokenizer.NextTokenCore();
+                patternToken = tokenizer.NextTokenCore();
                 if (!tokenizer.TryGetOperandWord(patternToken, out var patternWord))
                 {
-                    if (hasOpeningParenthesis || patterns.Count != 0)
-                        tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case pattern.", patternToken);
-                    else
-                        tokenizer.RecordUnexpectedToken("Expected case pattern.", patternToken, tokenizer.Position);
+                    tokenizer.RecordUnexpectedTokenBeforeNewline("Expected case pattern.", patternToken);
                     return null;
                 }
 
-                patterns.Add(patternWord.Word);
-                var separator = tokenizer.PeekTokenCore();
-                if (separator is { Kind: TokenKind.PipelineOperator, PipelineOperator: PipelineOperator.Pipe })
-                {
-                    tokenizer.NextTokenCore();
-                    continue;
-                }
+                (alternatives ??= new List<Word> { firstPattern.Word }).Add(patternWord.Word);
+                separator = tokenizer.PeekTokenCore();
+            }
 
-                if (separator.Kind == TokenKind.CloseParen)
-                {
-                    tokenizer.NextTokenCore();
-                    break;
-                }
-
+            if (separator.Kind != TokenKind.CloseParen)
+            {
                 tokenizer.RecordUnexpectedTokenBeforeNewline("Expected | or ) after case pattern.", separator);
                 return null;
             }
+            tokenizer.NextTokenCore();
 
             var (body, trailingTerminator) = ParseListWithTerminatorInfo(tokenizer, null, [KeywordEsac], TokenKind.CaseTerminator);
             var endToken = tokenizer.PeekTokenCore();
@@ -1268,6 +1270,7 @@ public static class Parser
             }
 
             // An empty matching branch succeeds without executing a command.
+            IReadOnlyList<Word> patterns = alternatives is null ? new[] { firstPattern.Word } : alternatives;
             var item = new CaseItem(patterns, body ?? EmptyCaseBody)
             {
                 Continuation = endToken.CaseContinuation
