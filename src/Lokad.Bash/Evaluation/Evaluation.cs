@@ -3894,7 +3894,7 @@ public sealed partial class Evaluation : IFileTester
                 var selectionScope = GetDeclarationElementScope();
                 var variables = bindings?.Contains(reference.Name) == true ? bindings.SavedVariables : declarationScope.Variables;
                 if (prefixNames != null && variables.TryGetNameref(reference.Name, out _)
-                    && (prefixNames.Contains(reference.Name) || selectionScope.GetExpansionWriteTarget(reference.Name) == null))
+                    && (prefixNames.Contains(reference.Name) || selectionScope.IsIndirectPrefixWrite(reference.Name, prefixNames)))
                     variables = commandVars; // Indirect writes stay inside a prefix, including one hiding the nameref itself.
                 VariableBinding? activeBinding = null;
                 var indexVariables = commandVars;
@@ -3936,15 +3936,16 @@ public sealed partial class Evaluation : IFileTester
 
             ScopedEvaluation GetDeclarationElementScope() => prefixNames == null ? executionScope : executionScope with
             {
-                ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(bindings?.SavedVariables ?? declarationScope.Variables, prefixNames)
+                ExpansionWriteTarget = bindings is { } commandBindings
+                    ? ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(commandBindings)
+                    : new ScopedEvaluation.ExpansionBindings(declarationScope.Variables, prefixNames)
             };
 
             ScopedEvaluation GetIntegerPromotionScope(ScopedEvaluation writeScope, Variables.CommandBindings commandBindings) => writeScope with
             {
-                ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(commandBindings.SavedVariables, commandBindings.PrefixNames)
+                ExpansionWriteTarget = ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(commandBindings) with
                 {
-                    PreparingPrefixes = true,
-                    OnlyPrefixNames = true
+                    PreparingPrefixes = true
                 }
             };
 

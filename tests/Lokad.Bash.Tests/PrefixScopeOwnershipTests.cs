@@ -930,6 +930,52 @@ public sealed class PrefixScopeOwnershipTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SavedPrefixExpansionTargetRetainsOnlyDirectPrefixWrites(bool element)
+    {
+        var caller = Variables.CreateEmpty();
+        var saved = ShellValue.FromText("saved");
+        var written = ShellValue.FromBytes(new byte[] { 0xff, 0x61 });
+        Assert.True(caller.TrySetScalar("prefix", saved));
+        Assert.True(caller.TrySetNameref("alias", ShellValue.FromText("prefix")));
+        var prepared = Variables.CreateEmpty();
+        Assert.True(prepared.TrySetScalar("prefix", ShellValue.FromText("temporary")));
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(""), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            using (var bindings = new Variables.CommandBindings(caller, prepared, new HashSet<BindingName> { "prefix" },
+                       evaluation.Memory, CancellationToken.None))
+            {
+                var scope = new ScopedEvaluation(evaluation, caller, default)
+                {
+                    ExpansionWriteTarget = ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(bindings)
+                };
+                scope.SetExpansionValueIgnoringReadonly("alias", ShellValue.FromText("indirect"));
+                Assert.Equal(saved, bindings.SavedVariables.Scalars["prefix"]);
+
+                var owned = bindings.SavedVariables.EstimatedMemoryBytes;
+                if (element)
+                    Assert.True(new WordExpansion.ResolvedVariableReference.Indexed("unrelated", default)
+                        .TryPublishValue(scope, "unrelated", written));
+                else
+                    scope.SetExpansionValueIgnoringReadonly("unrelated", written);
+
+                Assert.Equal(owned, bindings.SavedVariables.EstimatedMemoryBytes);
+                Assert.False(bindings.SavedVariables.HasBinding("unrelated"));
+                scope.SetExpansionValueIgnoringReadonly("prefix", written);
+            }
+            Assert.Equal(written, caller.Scalars["prefix"]);
+            Assert.True(caller.TryGetExpansionValue("unrelated", out var unrelated));
+            Assert.Equal(written, unrelated);
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("raw selector", true)]
     [InlineData("literal referent", true)]
     [InlineData("element referent", false)]

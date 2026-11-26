@@ -130,6 +130,9 @@ internal readonly record struct ScopedEvaluation(
         internal bool PreparingPrefixes { get; init; }
         /// <summary>The receiving store contains saved prefix bindings.</summary>
         internal bool OnlyPrefixNames { get; init; }
+
+        internal static ExpansionBindings ForSavedPrefixes(Variables.CommandBindings bindings) =>
+            new(bindings.SavedVariables, bindings.PrefixNames) { OnlyPrefixNames = true };
     }
 
     public ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)
@@ -174,7 +177,7 @@ internal readonly record struct ScopedEvaluation(
 
     // Except for the local scalar case above, a nameref to a prefix updates only the expansion's own scope.
     // Direct writes cross the boundary, including assignments of the same value.
-    private bool IsIndirectPrefixWrite(BindingName name, IReadOnlySet<BindingName> prefixes) =>
+    internal bool IsIndirectPrefixWrite(BindingName name, IReadOnlySet<BindingName> prefixes) =>
         Variables.TryGetNameref(name, out _)
         && Variables.TryResolveBinding(name, selectOwner: null, out var binding)
         && prefixes.Contains(binding.Name);

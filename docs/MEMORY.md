@@ -202,6 +202,10 @@ binding. It detaches before the first reached bound that may consult bindings or
 expand shell syntax. In-process installation admits the saved caller set before
 publishing any prefix. It moves original slots to the saved store and consumes
 the prepared prefix slots.
+Declaration selectors forward writes into this saved store only for names
+it will restore. Other writes already reach the active store. When a
+declaration uses a command overlay, its expansion target is the full
+caller store and can also receive writes to unrelated names.
 Retained outputs admit independent copies before staging, reusing
 the surrounding command's capacity for later replacements. Valueless declaration
 lookup admits its prefix selection buffer in command workspace as it grows.
