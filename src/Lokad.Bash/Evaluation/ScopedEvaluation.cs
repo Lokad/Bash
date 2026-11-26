@@ -180,8 +180,12 @@ internal readonly record struct ScopedEvaluation(
     // Except for the local scalar case above, a nameref to a prefix updates only the expansion's own scope.
     // Direct writes cross the boundary, including assignments of the same value.
     internal bool IsIndirectPrefixWrite(BindingName name, IReadOnlySet<BindingName> prefixes) =>
+        IsIndirectPrefixWrite(name, prefixes, allowElementNameref: false);
+
+    internal bool IsIndirectPrefixWrite(BindingName name, IReadOnlySet<BindingName> prefixes, bool allowElementNameref) =>
         Variables.TryGetNameref(name, out _)
         && Variables.TryResolveBinding(name, selectOwner: null, out var binding)
+        && (!allowElementNameref || binding.Reference.Kind != VariableReferenceKind.Element)
         && prefixes.Contains(binding.Name);
 }
 

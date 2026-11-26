@@ -346,14 +346,16 @@ public sealed partial class Variables
         public bool TryApplyOutputAssignment(
             VariableReference reference, ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken)
         {
-            var destination = SelectOutputVariables(reference.Name, memory, cancellationToken);
+            var element = reference.Kind != VariableReferenceKind.Name
+                || _owner.GetArrayMetadata(reference.Name) is { Kind: ArrayKind.Indexed };
+            var destination = SelectOutputVariables(reference.Name, memory, cancellationToken, element);
             if (!destination.TryApplyAssignment(reference, value, memory))
                 return false;
             if (ReferenceEquals(destination, _owner))
                 return true;
 
-            // Arithmetic and getopts read subsequent results from their temporary scope.
-            if (!_owner.TryApplyAssignment(reference, value, memory))
+            // Scalar arithmetic assignments also update the temporary value read by later expressions.
+            if (!element && !_owner.TryApplyAssignment(reference, value, memory))
                 return false;
 
             _retainedNames.Add(reference.Name);
@@ -363,12 +365,20 @@ public sealed partial class Variables
         internal bool CanRetainOutput(BindingName name) => _prefixes.Contains(name) && !_saved.NamerefTargets.ContainsKey(name);
 
         /// <summary>Direct outputs select the caller's saved kind; indirect outputs keep the active binding.</summary>
-        internal Variables SelectOutputVariables(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken)
+        internal Variables SelectOutputVariables(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken) =>
+            SelectOutputVariables(name, memory, cancellationToken, element: false);
+
+        internal Variables SelectOutputVariables(BindingName name, EvaluationMemory memory, CancellationToken cancellationToken,
+            bool element)
         {
             if (!CanRetainOutput(name))
                 return _owner;
             if (!_retainedNames.Contains(name))
+            {
+                if (element && !_saved.HasBindingOrAttributes(name))
+                    return _owner;
                 StageRetainedBinding(_saved, name, memory, cancellationToken);
+            }
             return _retained;
         }
 

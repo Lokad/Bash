@@ -490,6 +490,7 @@ public sealed partial class Evaluation
         ScopedEvaluation.ExpansionBindings? expansionWriteTarget)
     {
         var sourceName = reference.Name;
+        var sourceKind = reference.Kind;
         var namedCycle = reference.Kind == VariableReferenceKind.Name
             && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _);
         var circular = namedCycle && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
@@ -532,7 +533,8 @@ public sealed partial class Evaluation
             persistentOutputs = null;
         }
         else if (kind != BuiltinAssignmentKind.Directory && ReferenceEquals(destination, scope.Variables))
-            destination = persistentOutputs?.SelectOutputVariables(reference.Name, Memory, _cancellationToken) ?? destination;
+            destination = persistentOutputs?.SelectOutputVariables(reference.Name, Memory, _cancellationToken,
+                element: kind == BuiltinAssignmentKind.Value && reference.Kind != VariableReferenceKind.Name) ?? destination;
         var caller = kind != BuiltinAssignmentKind.Directory && persistentOutputs?.Contains(reference.Name) == true
             ? persistentOutputs.SavedVariables : destination;
         if (reference.Kind == VariableReferenceKind.Name
@@ -567,6 +569,19 @@ public sealed partial class Evaluation
             selectElementAfterExpansion ? command : ShellValue.Empty).ConfigureAwait(false);
         if (HasPendingExpansionError || !BuiltinDiagnosticsOpen || target == null || target.Name.IsEmpty)
             return BuiltinAssignmentResult.Failed;
+        var outputName = reference.Name;
+        if (kind == BuiltinAssignmentKind.Value && persistentOutputs is { } outputBindings
+            && ReferenceEquals(destination, scope.Variables) && target is not WordExpansion.ResolvedVariableReference.Scalar
+            && !target.IsWholeBindingRead && (sourceName == target.Name || sourceKind == VariableReferenceKind.Name))
+        {
+            // A selector can publish a scalar first, and a named element reference resolves its receiving name here.
+            destination = outputBindings.SelectOutputVariables(target.Name, Memory, _cancellationToken, element: true);
+            if (!ReferenceEquals(destination, scope.Variables))
+            {
+                outputName = target.Name;
+                target = target.WithElementWriteOwner(destination);
+            }
+        }
         if (localDirectoryOutput && ReferenceEquals(destination, scope.Variables)
             && reference.Kind != VariableReferenceKind.Name && persistentOutputs?.Contains(target.Name) == true
             && persistentOutputs.SavedVariables.HasBinding(target.Name))
@@ -620,7 +635,7 @@ public sealed partial class Evaluation
         if (assigned)
         {
             if (kind != BuiltinAssignmentKind.Directory)
-                persistentOutputs?.CompleteOutput(reference.Name, destination);
+                persistentOutputs?.CompleteOutput(outputName, destination);
             else if (persistentOutputs?.Contains(target.Name) == true && ReferenceEquals(destination, scope.Variables)
                 && reference.Kind == VariableReferenceKind.Name && reference.Name == target.Name)
             {

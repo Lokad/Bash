@@ -43,6 +43,11 @@ internal static partial class WordExpansion
             var owner = prefix.Variables;
             if (prefix.DeclarationSelector && !owner.HasBindingOrAttributes(Name))
                 return this;
+            return WithElementWriteOwner(owner);
+        }
+
+        internal ResolvedVariableReference WithElementWriteOwner(Variables owner)
+        {
             if (this is Indexed indexed && owner.AssociativeArrays.ContainsKey(Name)
                 && AssociativeArrayKey.TryCreate(ShellValue.FromInteger(indexed.Index.Value), out var key))
                 return new Associative(Name, key) { ReadOwner = owner };
@@ -99,7 +104,16 @@ internal static partial class WordExpansion
         {
             if (Name.IsEmpty)
                 return null;
-            ShellValue? previous = operation == AssignmentOperator.Append && TryRead(destination, out var stored)
+            var retained = ReferenceEquals(destination, scope.Variables)
+                ? SelectBuiltinElementOutput(scope, sourceName, declarationWrite) : null;
+            var target = this;
+            if (retained != null)
+            {
+                // Assignment attributes belong to the receiving slot, while operand evaluation uses the active scope.
+                destination = retained;
+                target = WithElementWriteOwner(retained);
+            }
+            ShellValue? previous = operation == AssignmentOperator.Append && target.TryRead(destination, out var stored)
                 ? stored : null;
             var attributes = destination.GetAssignmentAttributes(Name);
             if ((attributes & Variables.BindingAttributes.Integer) != 0
@@ -109,9 +123,12 @@ internal static partial class WordExpansion
                 .ConfigureAwait(false) is not { } prepared)
                 return null;
             value = prepared;
-            if (!TryPublishValue(scope with { Variables = destination }, sourceName, value, declarationWrite))
+            var writeScope = scope with { Variables = destination, SelectorBindings = retained == null ? scope.SelectorBindings : null };
+            if (!target.TryPublishValue(writeScope, sourceName, value, declarationWrite))
                 return null;
-            return (attributes & Variables.BindingAttributes.Case) != 0 && TryRead(destination, out var assigned)
+            if (retained != null)
+                scope.SelectorBindings?.CompleteOutput(Name, retained);
+            return (attributes & Variables.BindingAttributes.Case) != 0 && target.TryRead(destination, out var assigned)
                 ? assigned : value;
         }
 
@@ -123,16 +140,18 @@ internal static partial class WordExpansion
         {
             if (IsWholeBindingRead && this is Indexed or Associative && scope.Variables.IsArrayNameref(Name))
                 return !scope.Variables.IsReadonly(Name);
+            if (SelectBuiltinElementOutput(scope, sourceName, declarationWrite) is { } output)
+            {
+                if (!TryForwardTo(output, Name))
+                    return false;
+                scope.SelectorBindings?.CompleteOutput(Name, output);
+                return true;
+            }
             if (!TryAssignTo(scope.Variables, Name))
                 return false;
 
-            if (scope.GetSelectorWriteTarget(sourceName, Name) is { } retained)
-            {
-                if (this is Scalar)
-                    retained.SetResolvedValuePreservingArray(Name, value, scope.Effects.Memory);
-                else if (!TryForwardTo(retained, Name))
-                    return false;
-            }
+            if (this is Scalar && scope.GetSelectorWriteTarget(sourceName, Name) is { } retained)
+                retained.SetResolvedValuePreservingArray(Name, value, scope.Effects.Memory);
 
             // A declaration selector has already chosen which store owns an element of a prefix.
             if (this is not Scalar && scope.ExpansionWriteTarget is { DeclarationSelector: true } prefix
@@ -173,6 +192,17 @@ internal static partial class WordExpansion
                 Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
+        }
+
+        private Variables? SelectBuiltinElementOutput(ScopedEvaluation scope, BindingName sourceName, DeclarationWrite declarationWrite)
+        {
+            if (this is Scalar || scope.SelectorBindings is not { } bindings || !bindings.CanRetainOutput(Name)
+                || scope.IsIndirectPrefixWrite(sourceName, bindings.PrefixNames, allowElementNameref: true)
+                || declarationWrite == DeclarationWrite.Ordinary && scope.Variables.IsReadonly(Name))
+                return null;
+            var destination = bindings.SelectOutputVariables(Name, scope.Effects.Memory,
+                scope.Effects.CancellationToken, element: true);
+            return ReferenceEquals(destination, scope.Variables) ? null : destination;
         }
     }
 

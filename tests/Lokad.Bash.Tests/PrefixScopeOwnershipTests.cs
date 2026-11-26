@@ -1007,8 +1007,9 @@ public sealed class PrefixScopeOwnershipTests
                     };
                 var location = new WordExpansion.ResolvedVariableReference.Indexed(name, IndexedArrayIndex.FromUnsigned(7));
                 Assert.True(location.TryPublishValue(scope, name, written));
-                Assert.True(location.TryRead(scope.Variables, out var visible));
-                Assert.Equal(written, visible);
+                Assert.Equal(!retainOutput, location.TryRead(scope.Variables, out var visible));
+                if (!retainOutput)
+                    Assert.Equal(written, visible);
             }
 
             var map = caller.AssociativeArrays[name];

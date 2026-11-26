@@ -140,6 +140,71 @@ public sealed class ArithmeticArrayTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData(":", "'marks[1]=2' 'observed=marks[1]'", "<0:2::>\nabsent\n")]
+    [InlineData("declare marks", "'marks[1]=2' 'observed=marks[1]'", "<0:0::2>\npresent\n")]
+    [InlineData("marks=(4 5)", "'cell=2' 'observed=marks[1]'", "<0:0:4:2>\npresent\n")]
+    [InlineData("marks=(4 5)", "'alias[1]=2' 'observed=marks[1]'", "<0:2:4:5>\npresent\n")]
+    [InlineData(":", "'marks=6' 'marks[1]=2' 'observed=marks[1]'", "<0:0:6:2>\npresent\n")]
+    [InlineData(":", "'marks[1]=2' 'marks=6'", "<0:::>\nabsent\n")]
+    public async Task LetPrefixElementWritesSelectOneOwner(string setup, string operands, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}
+            declare -n cell='marks[1]' alias=marks
+            marks=7 let {{operands}} '1'
+            printf '<%s:%s:%s:%s>\n' "$?" "${observed-}" "${marks[0]-}" "${marks[1]-}"
+            if declare -p marks >/dev/null 2>&1; then printf 'present\n'; else printf 'absent\n'; fi
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(expected, result.StdOut);
+    }
+
+    [Theory]
+    [InlineData(":", "printf -v 'table[(marks[1]=2,marks[1])]' %s new", "<0:::new>\n")]
+    [InlineData("declare marks", "printf -v 'table[(${marks[1]:=2},marks[1])]' %s new", "<0:2:new:old>\n")]
+    [InlineData("declare -i marks=4", "printf -v 'table[(${marks[1]:=1+2},marks[1])]' %s new", "<0:3:new:old>\n")]
+    [InlineData("declare -i marks=4; declare -n cell='marks[1]'", "test -v 'table[(${cell:=1+2},marks[1])]'", "<1:3::old>\n")]
+    [InlineData(":", "test -v 'table[(marks[1]=2,marks[1])]'", "<0:::old>\n")]
+    [InlineData("marks=(4 5)", "test -v 'table[(marks[1]=2,marks[1])]'", "<1:2::old>\n")]
+    [InlineData("marks=(4 5)", "[ -v 'table[(marks[1]=2,marks[1])]' ]", "<1:2::old>\n")]
+    public async Task BuiltinSelectorsKeepReadingTheActivePrefixAfterCallerWrites(
+        string setup, string builtin, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}; table=([2]=old)
+            marks=7 {{builtin}}
+            printf '<%s:%s:%s:%s>\n' "$?" "${marks[1]-}" "${table[0]-}" "${table[2]-}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(expected, result.StdOut);
+    }
+
+    [Theory]
+    [InlineData(":", "'marks[1]'", "<0:::>\nabsent\n")]
+    [InlineData("marks=(4 5)", "cell", "<0:4:9:>\npresent\n")]
+    [InlineData("marks=(4 5)", "'alias[1]'", "<0:4:5:>\npresent\n")]
+    [InlineData(":", "'marks[(marks=6,2)]'", "<0:6::9>\npresent\n")]
+    public async Task PrintfElementOutputUsesTheCallerBindingReachedAfterTheSelector(
+        string setup, string argument, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}
+            declare -n cell='marks[1]' alias=marks
+            marks=7 printf -v {{argument}} %s 9
+            printf '<%s:%s:%s:%s>\n' "$?" "${marks[0]-}" "${marks[1]-}" "${marks[2]-}"
+            if declare -p marks >/dev/null 2>&1; then printf 'present\n'; else printf 'absent\n'; fi
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(expected, result.StdOut);
+    }
+
     [Fact]
     public async Task Evaluation_ArithmeticSubscripts_ExpandBeforeArithmeticSideEffects()
     {

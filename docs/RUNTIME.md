@@ -449,6 +449,11 @@ select the position. A direct element or element nameref writes to an
 existing caller binding, including an unassigned declaration. When the
 caller has no binding, the write remains in the temporary command scope.
 Later selector reads still use the active command bindings.
+Builtin element writes likewise publish to one owner. An existing or
+already published caller slot receives the element while subsequent reads
+still see the active prefix. An absent name has only the temporary element
+write. Scalar outputs can establish a caller slot during a selector, and a
+reached `printf -v` element output can then use it without replaying the selector.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.
