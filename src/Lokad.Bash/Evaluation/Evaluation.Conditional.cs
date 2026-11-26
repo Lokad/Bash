@@ -96,23 +96,25 @@ public sealed partial class Evaluation
             {
                 case ConditionalExpression.NonEmpty nonempty:
                     var expanded = await ExpandAsync(nonempty.Operand, ExpansionPurpose.Scalar).ConfigureAwait(false);
-                    return ExpandedWord.JoinValuesWithSpaces(expanded, Memory).IsEmpty ? 1 : 0;
+                    return ExpandedWord.IsJoinedValueEmpty(expanded) ? 1 : 0;
                 case ConditionalExpression.Unary unary:
                     var fields = await ExpandAsync(unary.Operand, ExpansionPurpose.Scalar).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return 1;
+                    var kind = unary.Predicate.Operator;
+                    if (kind is UnaryPredicateKind.StringLengthZero or UnaryPredicateKind.StringLengthNonZero)
+                        return ExpandedWord.IsJoinedValueEmpty(fields) == (kind == UnaryPredicateKind.StringLengthZero) ? 0 : 1;
+
                     var operand = ExpandedWord.JoinValuesWithSpaces(fields, Memory);
                     if (unary.Predicate.IsFilePredicate)
                         return await FileAsync(unary.Predicate.FileKind, operand, null).ConfigureAwait(false);
                     if (unary.Predicate.IsVariablePredicate)
-                        return await WordExpansion.TestVariableAsync(unary.Predicate.Operator, operand, scope).ConfigureAwait(false) ? 0 : 1;
-                    return (unary.Predicate.Operator switch
+                        return await WordExpansion.TestVariableAsync(kind, operand, scope).ConfigureAwait(false) ? 0 : 1;
+                    return kind switch
                     {
-                        UnaryPredicateKind.StringLengthZero => operand.IsEmpty,
-                        UnaryPredicateKind.StringLengthNonZero => !operand.IsEmpty,
-                        UnaryPredicateKind.OptionEnabled => IsOptionEnabled(operand.Bytes.Span, _state.ErrexitEnabled),
+                        UnaryPredicateKind.OptionEnabled => IsOptionEnabled(operand.Bytes.Span, _state.ErrexitEnabled) ? 0 : 1,
                         _ => throw new InvalidOperationException("Unexpected conditional unary predicate.")
-                    }) ? 0 : 1;
+                    };
                 case ConditionalExpression.VariableElement element:
                     return await WordExpansion.TestVariableElementAsync(element.Name, element.Selector, scope)
                         .ConfigureAwait(false) ? 0 : 1;

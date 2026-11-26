@@ -86,6 +86,21 @@ internal sealed class ExpandedWord(IReadOnlyList<ExpandedSegment> segments, bool
         return ShellValue.FromBytes(bytes);
     }
 
+    /// <summary>Checks whether joining the expanded fields with spaces would produce any bytes.</summary>
+    internal static bool IsJoinedValueEmpty(IReadOnlyList<ExpandedWord> words)
+    {
+        var count = words.Count;
+        // The space between two fields is present even when both fields are empty.
+        if (count != 1)
+            return count == 0;
+
+        var segments = words[0].Segments;
+        for (var index = 0; index < segments.Count; index++)
+            if (!segments[index].Content.IsEmpty)
+                return false;
+        return true;
+    }
+
     internal static long GetJoinedValueLength(IReadOnlyList<ExpandedWord> words)
     {
         long length = Math.Max(0, words.Count - 1);

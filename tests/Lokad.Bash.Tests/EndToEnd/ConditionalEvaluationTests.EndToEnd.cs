@@ -17,6 +17,27 @@ public sealed class ConditionalEvaluationTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("set --", "<1><1><0>")]
+    [InlineData("set -- ''", "<1><1><0>")]
+    [InlineData("set -- '' ''", "<0><0><1>")]
+    public async Task ConditionalLengthPredicatesCountSpacesBetweenEmptyFields(string setup, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            {setup}
+            [[ "$@" ]]
+            printf '<%s>' "$?"
+            [[ -n "$@" ]]
+            printf '<%s>' "$?"
+            [[ -z "$@" ]]
+            printf '<%s>' "$?"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task ConditionalEvaluation_ParseError_UnterminatedQuote()
     {

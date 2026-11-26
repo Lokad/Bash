@@ -29,6 +29,40 @@ public partial class EvaluationTests
         Assert.Equal(0, budget.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("\"$@\"", "&&")]
+    [InlineData("-n \"$@\"", "&&")]
+    [InlineData("-z \"$@\"", "||")]
+    public async Task ConditionalLengthPredicatesDoNotMaterializeJoinedBytes(string predicate, string connector)
+    {
+        var left = new string('a', 8192);
+        var right = new string('b', 8192);
+        var single = await MeasurePendingAsync([ShellValue.FromText(left + " " + right)]);
+        var fields = await MeasurePendingAsync([ShellValue.FromText(left), ShellValue.FromText(right)]);
+
+        Assert.InRange(fields - single, -4096, 4096);
+
+        async Task<long> MeasurePendingAsync(IReadOnlyList<ShellValue> values)
+        {
+            var budget = new MemoryGovernor(2 * 1024 * 1024);
+            using var owner = budget.CreateScope();
+            var state = new Eval(Parser.Parse($"[[ {predicate} {connector} -f file ]]"));
+            state.Memory.Budget = owner;
+            state.ReplacePositionalParameters(values);
+
+            var query = await NextPathKindsAsync(state);
+            Assert.Equal("/file", Assert.Single(query.Paths).Path);
+            var pending = budget.ReservedBytes;
+            query.SetResult([PathKindResult(FilePathKind.File)]);
+
+            Assert.Null(await NextStepAsync(state));
+            Assert.Equal(0, state.LastExitCode);
+            owner.Dispose();
+            Assert.Equal(0, budget.ReservedBytes);
+            return pending;
+        }
+    }
+
     [Fact]
     public async Task ReachedFileChecksObserveTheHostAtEachPredicate()
     {
