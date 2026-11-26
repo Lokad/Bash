@@ -423,6 +423,47 @@ public sealed class ByteStoredValueTests
     }
 
     [Theory]
+    [InlineData("é:")]
+    [InlineData("©:")]
+    public async Task ReadArrayStoresTheEscapedLeadByteBeforeAnIfsContinuation(string separators)
+    {
+        await using var host = new TestHost();
+        host.SetStandardInputBytes([.. "x:\\é:y\n"u8]);
+        var evaluation = new Evaluation.Evaluation(Parser.Parse(
+            $"IFS='{separators}'; read -a values && test -v 'values[2]'"));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var result = await new Engine().RunAsync(evaluation, host, cancellation.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        var stored = evaluation.IndexedArrays["values"];
+        Assert.Equal(4, stored.Count);
+        Assert.Equal("x"u8.ToArray(), stored[0].Bytes.ToArray());
+        Assert.Equal(new byte[] { 0xc3 }, stored[1].Bytes.ToArray());
+        Assert.True(stored[2].IsEmpty);
+        Assert.Equal("y"u8.ToArray(), stored[3].Bytes.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("é:", "", "3C783E3CC33E3C3E3C793E")]
+    [InlineData("ñ:", "", "3C783E3CC3A93E3C793E3C3E")]
+    [InlineData("©:", "-r", "3C783E3C5CC3A93E3C793E3C3E")]
+    public async Task ReadNamedFieldsPreserveByteEscapeAndScalarBoundaries(string separators, string option, string outputHex)
+    {
+        var script = $"IFS='{separators}'; read {option} first second third fourth; " +
+            "printf '<%s>' \"$first\" \"$second\" \"$third\" \"$fourth\"";
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host, "x:\\é:y\n"u8.ToArray());
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(outputHex), host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]
     [InlineData(false, true)]

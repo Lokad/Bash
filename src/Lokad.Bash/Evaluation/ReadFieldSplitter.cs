@@ -169,16 +169,21 @@ internal static class ReadFieldSplitter
                 if (index >= contentEnd)
                     return false;
 
-                var escaped = interpretEscapes && content.Span[index] == (byte)'\\';
-                if (escaped && ++index >= contentEnd)
-                    return false;
+                var remaining = content.Span[index..contentEnd];
+                if (interpretEscapes && remaining[0] == (byte)'\\')
+                {
+                    if (remaining.Length == 1)
+                        return false;
+                    // The normalizer protects one byte. Any following UTF-8 continuation is separate.
+                    character = new ReadCharacter(remaining[1], null, IsEscaped: true);
+                    next = index + 2;
+                    return true;
+                }
 
-                var status = Rune.DecodeFromUtf8(content.Span[index..contentEnd], out var scalar, out var length);
-                if (status != OperationStatus.Done)
-                    length = 1;
-                next = index + length;
-                character = new ReadCharacter(
-                    content.Slice(index, length), status == OperationStatus.Done ? scalar : null, escaped);
+                var status = Rune.DecodeFromUtf8(remaining, out var scalar, out var length);
+                var valid = status == OperationStatus.Done;
+                next = index + (valid ? length : 1);
+                character = new ReadCharacter(remaining[0], valid ? scalar : null, IsEscaped: false);
                 return true;
             }
 
@@ -259,7 +264,7 @@ internal static class ReadFieldSplitter
                     return whitespace.Contains(value);
                 var scalar = new Rune(value);
                 return FieldSeparators.HasWhitespaceSemantics(scalar)
-                    && IsSeparator(new ReadCharacter(content.Slice(index, 1), scalar, IsEscaped: false));
+                    && IsSeparator(new ReadCharacter(value, scalar, IsEscaped: false));
             }
 
             bool IsIfsNonWhitespace(ReadCharacter character) =>
@@ -272,7 +277,7 @@ internal static class ReadFieldSplitter
                     ? fieldSeparators.PrepareCharacters(variables, memory, cancellationToken)
                     : fieldSeparators.PrepareBytes(variables, memory, cancellationToken);
                 return character.Scalar is { } scalar ? fieldSeparators.Contains(scalar)
-                    : fieldSeparators.Contains(character.Bytes.Span[0]);
+                    : fieldSeparators.Contains(character.FirstByte);
             }
 
             ShellValue BuildValue(int start, int valueEnd) => start >= valueEnd ? ShellValue.Empty
@@ -326,6 +331,6 @@ internal static class ReadFieldSplitter
             suffix.Length <= 1 || suffix[0] == 0 || suffix[1] == 0;
     }
 
-    /// <summary>Retains input bytes and escape provenance; malformed bytes have no Unicode scalar.</summary>
-    private readonly record struct ReadCharacter(ReadOnlyMemory<byte> Bytes, Rune? Scalar, bool IsEscaped);
+    /// <summary>Retains the first byte and escape provenance; protected and malformed bytes have no Unicode scalar.</summary>
+    private readonly record struct ReadCharacter(byte FirstByte, Rune? Scalar, bool IsEscaped);
 }

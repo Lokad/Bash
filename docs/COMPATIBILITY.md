@@ -85,7 +85,9 @@ escape processing enabled, a quoted NUL ends the text available for assignment
 and counts as a protected empty field when it occurs on its own. The read still
 consumes the logical record, including escaped delimiters. If Bash 5.2 emits
 its internal `0x01` marker for that empty field, Lokad.Bash assigns empty text.
-Literal `0x01` input remains data. With `-r`, backslashes remain literal.
+Literal `0x01` input remains data. During field splitting, a backslash protects
+one byte. UTF-8 continuation bytes after a protected lead byte use malformed-byte
+IFS membership. With `-r`, backslashes remain literal.
 
 `read -n count` stops at the byte count or an unescaped delimiter. If the count
 is reached first, the next read starts at the following byte, including any
