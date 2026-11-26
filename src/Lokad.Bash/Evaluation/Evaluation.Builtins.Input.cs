@@ -165,7 +165,7 @@ public sealed partial class Evaluation
                 var attributes = array.Owner.GetAssignmentAttributes(array.Name);
                 if ((attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0)
                 {
-                    var assigned = await AssignIntegerIndexedInputAsync(array, fields, null, scope, command)
+                    var assigned = await AssignIntegerIndexedInputAsync(array, fields, null, null, scope, command)
                         .ConfigureAwait(false);
                     return await FinishAsync(assigned ? exitCode : 1).ConfigureAwait(false);
                 }

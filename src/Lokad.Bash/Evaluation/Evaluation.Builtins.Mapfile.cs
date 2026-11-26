@@ -93,8 +93,9 @@ public sealed partial class Evaluation
         using var integerInputMemory = integer && callback == null ? Memory.Budget.CreateScope() : null;
         var values = callback.HasValue ? null : new List<ShellValue>();
         using var inputMemory = values != null ? new MemoryCapacity(Memory.Budget, 0) : null;
+        List<(int LastOffset, IMemoryScope Owner)>? borrowedBatches = null;
         long stagedBytes = 0;
-        var batchHasBorrowedIntegerValues = false;
+        var lastBorrowedOffset = -1;
         Variables.IndexedInputAssignment? callbackAssignment = null;
         var toCallback = quantum;
         uint written = 0;
@@ -115,7 +116,7 @@ public sealed partial class Evaluation
                 // A skipped batch never reaches arithmetic or array publication.
                 var retainedInput = skipping ? null : integerInputMemory;
                 var readMemory = (retainedInput ?? Memory.Budget).CreateScope();
-                batchHasBorrowedIntegerValues = false;
+                lastBorrowedOffset = -1;
                 try
                 {
                     ReadOnlyMemory<byte> content;
@@ -141,11 +142,22 @@ public sealed partial class Evaluation
                     }
                     if (await AcceptBatchAsync(content, recordStarts).ConfigureAwait(false) is { } stop)
                         return stop;
+                    if (lastBorrowedOffset >= 0)
+                    {
+                        borrowedBatches ??= [];
+                        if (borrowedBatches.Count == borrowedBatches.Capacity)
+                        {
+                            var storage = inputMemory ?? throw new InvalidOperationException("Bulk records require a reservation.");
+                            storage.PrepareListCapacity(borrowedBatches, 1);
+                            storage.ReleaseUnusedCapacity();
+                        }
+                        borrowedBatches.Add((lastBorrowedOffset, readMemory));
+                    }
                 }
                 finally
                 {
-                    // Batches with borrowed values settle with the enclosing integer input owner.
-                    if (!batchHasBorrowedIntegerValues)
+                    // The integer input owner retains borrowed batches until conversion or unwind.
+                    if (lastBorrowedOffset < 0)
                         readMemory.Dispose();
                 }
             }
@@ -155,8 +167,15 @@ public sealed partial class Evaluation
                 return await FinishAsync(0).ConfigureAwait(false);
             }
             if (integer)
-                return await FinishAsync(await AssignIntegerIndexedInputAsync(target, values, origin, scope, arguments[0])
-                    .ConfigureAwait(false) ? 0 : 1).ConfigureAwait(false);
+            {
+                var converted = await AssignIntegerIndexedInputAsync(target, values, borrowedBatches, origin, scope, arguments[0])
+                    .ConfigureAwait(false);
+                values = null;
+                borrowedBatches = null;
+                integerInputMemory?.Dispose();
+                inputMemory?.Dispose();
+                return await FinishAsync(converted ? 0 : 1).ConfigureAwait(false);
+            }
 
             // The staged values already have admission. The list and array coexist during publication.
             var retainedBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
@@ -185,6 +204,7 @@ public sealed partial class Evaluation
                 values.Clear();
                 values.Capacity = 0;
             }
+            borrowedBatches = null;
             inputMemory?.Dispose();
             integerInputMemory?.Dispose();
             Memory.Workspace.Resize(Memory.Workspace.Bytes - stagedBytes);
@@ -236,7 +256,7 @@ public sealed partial class Evaluation
                 if (value.IsEmpty)
                     value = ShellValue.Empty;
                 else if (integer)
-                    batchHasBorrowedIntegerValues = true;
+                    lastBorrowedOffset = values.Count;
                 else
                 {
                     if (convertCase)
@@ -382,7 +402,8 @@ public sealed partial class Evaluation
     }
 
     private async Task<bool> AssignIntegerIndexedInputAsync(
-        IndexedInputTarget target, IReadOnlyList<ShellValue> values, uint? origin, ScopedEvaluation scope, ShellValue command)
+        IndexedInputTarget target, List<ShellValue> values, IReadOnlyList<(int LastOffset, IMemoryScope Owner)>? borrowedBatches,
+        uint? origin, ScopedEvaluation scope, ShellValue command)
     {
         // The longest rendered signed decimal uses 20 bytes. Include each value's backing
         // along with sparse storage while the input records and saved binding remain live.
@@ -393,11 +414,22 @@ public sealed partial class Evaluation
         using var assignment = new Variables.IndexedInputAssignment(target.Owner, target.Name, origin.HasValue,
             resetAttributes: false, target.NamerefValue, Memory);
         var first = origin.GetValueOrDefault();
+        var batchIndex = 0;
         for (var offset = 0; offset < values.Count; offset++)
         {
             CheckCancellation();
             var integer = await WordExpansion.EvaluateIntegerAssignmentAsync(values[offset], null, scope, command)
                 .ConfigureAwait(false);
+            if (borrowedBatches != null && batchIndex < borrowedBatches.Count)
+            {
+                values[offset] = ShellValue.Empty;
+                var batch = borrowedBatches[batchIndex];
+                if (offset == batch.LastOffset)
+                {
+                    batch.Owner.Dispose();
+                    batchIndex++;
+                }
+            }
             if (!integer.HasValue)
             {
                 // A shell arithmetic error leaves preceding writes visible to EXIT.

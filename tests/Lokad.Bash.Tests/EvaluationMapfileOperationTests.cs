@@ -505,6 +505,50 @@ public partial class EvaluationTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IntegerArrayReaderReleasesConsumedBatchBeforeLaterArithmetic(bool separateBatches)
+    {
+        var budget = new MemoryGovernor(2 * 1024 * 1024);
+        using var owner = budget.CreateScope();
+        var state = new Eval(Parser.Parse("n=1; declare -ai arr=(99); mapfile -tn3 arr"));
+        state.Memory.Budget = owner;
+
+        var first = await NextReadAsync(state);
+        using var initial = Assert.IsAssignableFrom<IMemoryBudget>(first.DestinationBudget).Reserve(512);
+        first.SetResult(separateBatches
+            ? ReadResult.Success(Utf8Bytes("n++\n\n"), [4], reachedEoF: false)
+            : ReadResult.Success(Utf8Bytes("n++\n\n1/0\n"), [4, 5], reachedEoF: false));
+        using var later = separateBatches ? await CompleteLaterReadAsync() : null;
+
+        var diagnostic = await NextWriteAsync(state);
+        var initialWhileWriting = initial.Bytes;
+        var failingWhileWriting = (later ?? initial).Bytes;
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+        Assert.Null(await NextStepAsync(state));
+
+        Assert.Equal(1, state.LastExitCode);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Contains("division by 0", Text(diagnostic.Content), StringComparison.Ordinal);
+        Assert.Equal(separateBatches ? 0 : 512, initialWhileWriting);
+        Assert.Equal(512, failingWhileWriting);
+        Assert.Equal("2", GetVariable(state, "n"));
+        Assert.Equal(new[] { "1", "0" }.Select(ShellValue.FromText), state.IndexedArrays["arr"]);
+        Assert.Equal(0, initial.Bytes);
+        Assert.Equal(0, (later ?? initial).Bytes);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+
+        async Task<IMemoryReservation> CompleteLaterReadAsync()
+        {
+            var read = await NextReadAsync(state);
+            var reservation = Assert.IsAssignableFrom<IMemoryBudget>(read.DestinationBudget).Reserve(512);
+            read.SetResult(ReadResult.Success(Utf8Bytes("1/0\n"), [], reachedEoF: false));
+            return reservation;
+        }
+    }
+
     [Fact]
     public async Task Evaluation_MapfileBuiltin_PreservesTheArrayWhenReadingTheSkipPrefixFails()
     {
