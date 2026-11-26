@@ -49,8 +49,8 @@ public sealed class AsyncLineReader : IDisposable
     /// <summary>Largest whole-input payload supported by a CLR byte array.</summary>
     public const int MaximumReadToEndBytes = ByteMemoryBuilder.MaxMemoryBuilderBytes - 1;
 
-    /// <summary>The host or file-descriptor operation used to refill batches.</summary>
-    private readonly Func<int, IMemoryBudget, CancellationToken, ValueTask<ReadResult>> _readLines;
+    /// <summary>The refill callback. Borrowed-memory readers use their input directly.</summary>
+    private readonly Func<int, IMemoryBudget, CancellationToken, ValueTask<ReadResult>>? _readLines;
 
     /// <summary>The cancellation token used for refill operations.</summary>
     private readonly CancellationToken _cancellationToken;
@@ -62,6 +62,9 @@ public sealed class AsyncLineReader : IDisposable
     private bool _disposed;
     private IMemoryScope? _batchMemory;
     private IMemoryScope? _previousBatchMemory;
+
+    /// <summary>Caller-owned input beyond the buffered batch, for readers without a refill callback.</summary>
+    private ReadOnlyMemory<byte> _unbufferedContent;
 
     /// <summary>
     /// The buffered content returned by the most recent refill.
@@ -142,19 +145,7 @@ public sealed class AsyncLineReader : IDisposable
         _cancellationToken = cancellationToken;
         _batchSize = batchSize;
         _lineStartOffsets = Array.Empty<int>();
-        _readLines = Read;
-
-        ValueTask<ReadResult> Read(int limit, IMemoryBudget budget, CancellationToken token)
-        {
-            token.ThrowIfCancellationRequested();
-            if (content.IsEmpty)
-                return ValueTask.FromResult(ReadResult.EndOfFile);
-            var length = ByteLines.FindCompleteRecords(content.Span, (byte)'\n', limit, examined: 0, reachedEof: true,
-                maximumBatchBytes: int.MaxValue, budget, out var offsets, out _);
-            var batch = content[..length];
-            content = content[length..];
-            return ValueTask.FromResult(ReadResult.FromValidatedLines(batch, offsets, content.IsEmpty));
-        }
+        _unbufferedContent = content;
     }
 
     /// <summary>Reads batches supplied by a host adapter or an evaluator's operation callback.</summary>
@@ -173,6 +164,7 @@ public sealed class AsyncLineReader : IDisposable
     {
         if (batchSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(batchSize));
+        ArgumentNullException.ThrowIfNull(readLines);
 
         _readLines = readLines;
         _memoryBudget = memoryBudget;
@@ -240,8 +232,10 @@ public sealed class AsyncLineReader : IDisposable
             ReadResult result;
             try
             {
-                result = await reader._readLines(reader._batchSize,
-                    batchMemory ?? reader._memoryBudget, token).ConfigureAwait(false);
+                var budget = batchMemory ?? reader._memoryBudget;
+                result = reader._readLines is { } readLines
+                    ? await readLines(reader._batchSize, budget, token).ConfigureAwait(false)
+                    : ReadBorrowedBatch(reader, budget, token);
             }
             catch { batchMemory?.Dispose(); throw; }
             if (result.HasFailure)
@@ -262,6 +256,18 @@ public sealed class AsyncLineReader : IDisposable
             reader._reachedEof = result.ReachedEoF;
             // Success always has bytes; empty non-error results are normal EOF.
             return (result.Content.IsEmpty, ReadResult.EndOfFile);
+        }
+
+        static ReadResult ReadBorrowedBatch(AsyncLineReader reader, IMemoryBudget budget, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var remaining = reader._unbufferedContent;
+            if (remaining.IsEmpty)
+                return ReadResult.EndOfFile;
+            var length = ByteLines.FindCompleteRecords(remaining.Span, (byte)'\n', reader._batchSize, examined: 0,
+                reachedEof: true, maximumBatchBytes: int.MaxValue, budget, out var offsets, out _);
+            reader._unbufferedContent = remaining[length..];
+            return ReadResult.FromValidatedLines(remaining[..length], offsets, reader._unbufferedContent.IsEmpty);
         }
     }
 
@@ -323,6 +329,9 @@ public sealed class AsyncLineReader : IDisposable
         if (_lineIndex >= BufferedLineCount)
             ReleaseCurrentBatch();
 
+        if (destination is null && _readLines is null && TryAppendBorrowedRemainder())
+            return new BoundedReadResult.Complete(output.DetachSnapshot());
+
         while (true)
         {
             _cancellationToken.ThrowIfCancellationRequested();
@@ -347,6 +356,26 @@ public sealed class AsyncLineReader : IDisposable
             if (output.Length == earlierBytes)
                 output.Append(_content.Span[_lineStart..], exactCapacity: _reachedEof);
             ReleaseCurrentBatch();
+        }
+
+        bool TryAppendBorrowedRemainder()
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var buffered = _content[_lineStart..];
+            var length = buffered.Length + _unbufferedContent.Length;
+            // A rejected size or reservation keeps the ordinary batch-by-batch consumption boundary.
+            if (length > Math.Min(maximumBytes, MaximumReadToEndBytes)
+                || !output.TryEnsureCapacity(length, exactCapacity: true))
+                return false;
+
+            output.Append(buffered.Span);
+            output.Append(_unbufferedContent.Span);
+            _cancellationToken.ThrowIfCancellationRequested();
+            _unbufferedContent = default;
+            _reachedEof = true;
+            ReleaseCurrentBatch();
+            return true;
         }
     }
 
@@ -373,6 +402,7 @@ public sealed class AsyncLineReader : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _unbufferedContent = default;
         ReleasePreviousBatch();
         ReleaseCurrentBatch();
     }

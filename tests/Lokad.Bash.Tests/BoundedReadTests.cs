@@ -194,6 +194,94 @@ public sealed class BoundedReadTests
     }
 
     [Theory]
+    [InlineData(int.MaxValue, false)]
+    [InlineData(32, false)]
+    [InlineData(32, true)]
+    public async Task BorrowedWholeInputAdmitsOnlyTheExactResultAndAlreadyBufferedOffsets(int batchSize, bool readFirstLine)
+    {
+        const int LineLength = 32;
+        var input = new byte[257 * LineLength + 3];
+        for (var end = LineLength; end < input.Length; end += LineLength)
+        {
+            input[end - 2] = 13;
+            input[end - 1] = 10;
+        }
+        input[^3] = 0xff;
+        input[^2] = 13;
+        var start = readFirstLine ? LineLength : 0;
+        var expectedLength = input.Length - start;
+        var offsets = readFirstLine ? MemoryCapacity.ArrayBackingBytes<int>(batchSize - 1) : 0;
+        var governor = new MemoryGovernor(expectedLength + offsets);
+        using var owner = governor.CreateScope();
+        using var reader = AsyncLineReader.CreateStreaming(input, CancellationToken.None, batchSize, owner);
+
+        if (readFirstLine)
+        {
+            Assert.False(await reader.ReachedEof());
+            Assert.Equal(input[..LineLength], reader.ReadLine().Raw.ToArray());
+            Assert.Equal(offsets, governor.ReservedBytes);
+        }
+
+        var result = await reader.TryReadToEndAsync(expectedLength);
+
+        var content = Assert.IsType<BoundedReadResult.Complete>(result).Content;
+        Assert.Equal(input[start..], content.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(content, out var segment));
+        var backing = Assert.IsType<byte[]>(segment.Array);
+        Assert.Equal(expectedLength, backing.Length);
+        Assert.NotSame(input, backing);
+        Assert.True(await reader.ReachedEof());
+        Assert.Equal(expectedLength, governor.ReservedBytes);
+        Assert.Equal(expectedLength + offsets, governor.PeakBytes);
+        reader.Dispose();
+        Assert.Equal(expectedLength, governor.ReservedBytes);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RejectedBorrowedWholeInputRetainsTheFirstRejectedBatch(bool refuseMemory)
+    {
+        byte[] input = "first\nsecond-continued\nlast\n"u8.ToArray();
+        var governor = new MemoryGovernor(refuseMemory ? 20 : 1024);
+        using var owner = governor.CreateScope();
+        using var reader = AsyncLineReader.CreateStreaming(input, CancellationToken.None, 1, owner);
+
+        if (refuseMemory)
+            await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => reader.TryReadToEndAsync(input.Length).AsTask());
+        else
+            Assert.IsType<BoundedReadResult.TooLarge>(await reader.TryReadToEndAsync(7));
+
+        Assert.Equal(0, governor.ReservedBytes);
+        Assert.False(await reader.ReachedEof());
+        Assert.Equal("second-continued\n"u8.ToArray(), reader.ReadLine().Raw.ToArray());
+        Assert.Equal("last\n"u8.ToArray(), (await reader.ReadToEndAsync()).ToArray());
+        Assert.True(await reader.ReachedEof());
+    }
+
+    [Fact]
+    public async Task CanceledBorrowedWholeInputLeavesBufferedLinesAvailable()
+    {
+        var governor = new MemoryGovernor(1024);
+        using var owner = governor.CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        using var reader = AsyncLineReader.CreateStreaming("first\nnext\nlast"u8.ToArray(), cancellation.Token, 2, owner);
+        Assert.False(await reader.ReachedEof());
+        var offsets = governor.ReservedBytes;
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.TryReadToEndAsync().AsTask());
+
+        Assert.Equal(offsets, governor.ReservedBytes);
+        Assert.Equal("first\n"u8.ToArray(), reader.ReadLine().Raw.ToArray());
+        Assert.Equal("next\n"u8.ToArray(), reader.ReadLine().Raw.ToArray());
+        reader.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]

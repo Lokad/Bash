@@ -207,7 +207,7 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// <summary>Admits replacement overlap before growing, leaving content unchanged on refusal.</summary>
     public bool TryEnsureCapacity(int capacity) => TryEnsureCapacity(capacity, exactCapacity: false);
 
-    private bool TryEnsureCapacity(int capacity, bool exactCapacity)
+    internal bool TryEnsureCapacity(int capacity, bool exactCapacity)
     {
         if (capacity <= _buffer.Length) return true;
         if (capacity >= MaxMemoryBuilderBytes)
