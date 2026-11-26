@@ -511,6 +511,14 @@ public sealed class FunctionDefinitionOutputTests
     [InlineData("f(){ cat <<'END'\n$x\nEND\n\n}", "f () \n{ \n    cat <<'END'\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<END\n$x\nEND\n\n}", "f () \n{ \n    cat <<END\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<ONE | cat <<'TWO'\nfirst\nONE\nsecond\nTWO\n\n}", "f () \n{ \n    cat <<ONE |\nfirst\nONE\n  cat <<'TWO'\nsecond\nTWO\n\n}\n")]
+    [InlineData("f(){\nIFS= read -r a <<'A' && printf \"<right>\"; printf \"[tail]\"\nfirst\nA\n}",
+        "f () \n{ \n    IFS= read -r a <<'A' && \nfirst\nA\n printf \"<right>\"\n    printf \"[tail]\"\n}\n")]
+    [InlineData("f(){\nIFS= read -r a <<'A' || IFS= read -r b <<'B'; printf \"[tail]\"\nfirst\nA\nsecond\nB\n}",
+        "f () \n{ \n    IFS= read -r a <<'A' || \nfirst\nA\n IFS= read -r b <<'B'\nsecond\nB\n\n    printf \"[tail]\"\n}\n")]
+    [InlineData("f(){\nIFS= read -r a <<'A' && IFS= read -r b <<'B' && printf \"<%s-%s>\" \"$a\" \"$b\"\n"
+        + "first\nA\nsecond\nB\nprintf \"[tail]\"\n}",
+        "f () \n{ \n    IFS= read -r a <<'A' && \nfirst\nA\n IFS= read -r b <<'B' && \nsecond\nB\n"
+        + " printf \"<%s-%s>\" \"$a\" \"$b\"\n    printf \"[tail]\"\n}\n")]
     [InlineData("f(){ cat <<END\nx\nEND\necho after;\n}", "f () \n{ \n    cat <<END\nx\nEND\n\n    echo after\n}\n")]
     [InlineData("f(){ cat <<E'ND'\n$x\nEND\n}", "f () \n{ \n    cat <<'END'\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<E\\'N\\'D\n$x\nE'N'D\n}", "f () \n{ \n    cat <<'E'\\''N'\\''D'\n$x\nE'N'D\n\n}\n")]
@@ -573,6 +581,19 @@ public sealed class FunctionDefinitionOutputTests
                         await EndToEndHarness.ReadFileAsync(after.Host, path));
             }
         }
+    }
+
+    [Fact]
+    public async Task ReloadedLogicalRightCommandUsesItsLineAfterTheHereDocument()
+    {
+        const string script = "f(){\nIFS= read -r a <<'A' && printf \"<%s>\" \"$LINENO\"\nfirst\nA\nprintf \"[tail]\"\n}\n"
+            + "saved=$(declare -f f); unset -f f; eval \"$saved\"; f\n";
+
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<12>[tail]", result.StdOut);
+        Assert.Empty(result.StdErr);
     }
 
     [Fact]

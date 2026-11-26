@@ -197,7 +197,7 @@ internal static class FunctionDefinitionFormatter
                     if (resetHereDocuments) flushedHereDocuments = false;
                     break;
                 case Step.FlushDocuments:
-                    if (!FlushCaptureDocuments()) return false;
+                    if (!FlushDocumentLine()) return false;
                     break;
                 case Step.CompactEnd(var closer, var terminate):
                     if (hereDocuments.Count != 0)
@@ -237,7 +237,7 @@ internal static class FunctionDefinitionFormatter
                         flushedHereDocuments = false;
                     if (lines != null)
                     {
-                        if (!FlushCaptureDocuments()) return false;
+                        if (!FlushDocumentLine()) return false;
                         // A separator inside a compound still belongs to its enclosing reader unit.
                         if (readerDepth == 0 && (newline || pendingDocuments))
                         {
@@ -266,7 +266,7 @@ internal static class FunctionDefinitionFormatter
                     {
                         if (pendingDocuments && !newline)
                         {
-                            if (!FlushCaptureDocuments() || !Append(" ")) return false;
+                            if (!FlushDocumentLine() || !Append(" ")) return false;
                         }
                         else if (pendingDocuments)
                         {
@@ -287,19 +287,19 @@ internal static class FunctionDefinitionFormatter
                 case Step.LogicalSeparator(var operation):
                     if (capture)
                     {
-                        if (!FlushCaptureDocuments()) return false;
+                        if (!FlushDocumentLine()) return false;
                     }
                     else
                     {
                         if (!Append(operation == ListOperator.And ? " && " : " || ")) return false;
-                        if (substitutionSource && hereDocuments.Count != 0
-                            && (!Append("\n") || !FlushHereDocuments() || !Append(" "))) return false;
+                        if (displayRedirections && hereDocuments.Count != 0
+                            && (!FlushDocumentLine() || !Append(" "))) return false;
                     }
                     break;
                 case Step.Pipe(var operation):
                     if (capture)
                     {
-                        if (!FlushCaptureDocuments()) return false;
+                        if (!FlushDocumentLine()) return false;
                         break;
                     }
                     if (!Append(operation == PipelineOperator.PipeAndError
@@ -646,7 +646,7 @@ internal static class FunctionDefinitionFormatter
         if (lines != null)
         {
             var pendingDocuments = hereDocuments.Count != 0;
-            if (!FlushCaptureDocuments()) return false;
+            if (!FlushDocumentLine()) return false;
             CompleteCompoundDocumentLocations(lines.Line - (pendingDocuments ? 1 : 0));
             CompleteCapturedUnit();
             return true;
@@ -803,7 +803,7 @@ internal static class FunctionDefinitionFormatter
             }
         }
 
-        bool FlushCaptureDocuments()
+        bool FlushDocumentLine()
         {
             if (hereDocuments.Count == 0) return true;
             return Append("\n") && FlushHereDocuments();
