@@ -62,7 +62,9 @@ public readonly struct ShellValue : IEquatable<ShellValue>
         return new ShellValue(bytes);
     }
 
-    internal static ShellValue FromInteger(long value) => new(NumberFormatting.FormatNumber(value));
+    internal static ShellValue FromInteger(long value) => value is >= 1 and <= 9
+        ? FromByte((byte)('0' + value))
+        : new(NumberFormatting.FormatNumber(value));
 
     /// <summary>Decodes a value at a text boundary, throwing when its bytes are not valid UTF-8.</summary>
     public string ToUtf8String() => Utf8Text.Decode(_bytes);

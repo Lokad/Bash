@@ -90,7 +90,7 @@ public sealed partial class Variables
         public override ShellValue Value
         {
             get => _cachedValue.IsEmpty
-                ? _cachedValue = ShellValue.FromBytes(NumberFormatting.FormatNumber(Line))
+                ? _cachedValue = ShellValue.FromInteger(Line)
                 : _cachedValue;
             set => Line = Integers.TryParseNumber(Integers.TrimWhitespace(value.Bytes.Span), out var number)
                 ? unchecked((int)number) : 0;

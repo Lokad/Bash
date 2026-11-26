@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
-using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -137,7 +136,7 @@ internal sealed class IndexedArray
 
     /// <summary>Enumerates sparse positions and values together, including unassigned positions.</summary>
     internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => IsInitialized
-        ? _positions.Select(position => KeyValuePair.Create(FormatPosition(position), _elements[position]))
+        ? _positions.Select(position => KeyValuePair.Create(ShellValue.FromInteger(position), _elements[position]))
         : [];
 
     /// <summary>Enumerates stored entries by numeric position, including unassigned entries.</summary>
@@ -169,10 +168,7 @@ internal sealed class IndexedArray
         }
     }
     /// <summary>Enumerates index bytes in numeric order without a dense view.</summary>
-    public IEnumerable<ShellValue> PresentKeys => IsInitialized ? _positions.Select(FormatPosition) : [];
-
-    private static ShellValue FormatPosition(long position) =>
-        ShellValue.FromBytes(NumberFormatting.FormatNumber(position));
+    public IEnumerable<ShellValue> PresentKeys => IsInitialized ? _positions.Select(ShellValue.FromInteger) : [];
 
     /// <summary>Gets one present position without allocating.</summary>
     public bool TryGet(
@@ -277,7 +273,7 @@ internal sealed class IndexedArray
         ShellValue FormatStatusAt(int offset)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return ShellValue.FromBytes(NumberFormatting.FormatNumber(statuses[offset]));
+            return ShellValue.FromInteger(statuses[offset]);
         }
     }
 

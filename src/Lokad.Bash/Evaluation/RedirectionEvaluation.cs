@@ -383,7 +383,7 @@ internal sealed class RedirectionEvaluation
         bool previouslyTouched,
         bool persistAllocations)
     {
-        var value = ShellValue.FromBytes(NumberFormatting.FormatNumber(number.Number));
+        var value = ShellValue.FromInteger(number.Number);
         var name = ShellValue.FromText(variableName);
         var assignment = await scope.Effects.AssignBuiltinAsync(VariableReference.ForName(variableName), value,
             scope, scope.SelectorBindings,

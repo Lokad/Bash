@@ -54,7 +54,7 @@ public sealed partial class Evaluation
         int status;
         try
         {
-            _ = await AssignAsync("OPTIND", ShellValue.FromBytes(NumberFormatting.FormatNumber(cursor.ArgumentIndex))).ConfigureAwait(false);
+            _ = await AssignAsync("OPTIND", ShellValue.FromInteger(cursor.ArgumentIndex)).ConfigureAwait(false);
             switch (option.Outcome)
             {
                 case GetoptsOutcome.End:

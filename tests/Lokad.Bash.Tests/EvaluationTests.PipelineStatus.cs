@@ -238,17 +238,20 @@ public partial class EvaluationTests
             state.IndexedArrays["PIPESTATUS"]);
     }
 
-    [Fact]
-    public void PipelineStatusSharesZeroBytesAcrossPublications()
+    [Theory]
+    [InlineData(0, "0")]
+    [InlineData(1, "1")]
+    [InlineData(9, "9")]
+    public void PipelineStatusSharesSingleDigitBytesAcrossPublications(int status, string digit)
     {
         var variables = Variables.CreateEmpty();
-        variables.SetPipelineStatuses([0, 127, 0, 255], default, CancellationToken.None);
+        variables.SetPipelineStatuses([status, 127, status, 255], default, CancellationToken.None);
         var first = variables.IndexedArrays["PIPESTATUS"].PresentValues.ToArray();
 
-        Assert.Equal(["0", "127", "0", "255"], first.Select(status => status.ToUtf8String()));
+        Assert.Equal([digit, "127", digit, "255"], first.Select(value => value.ToUtf8String()));
         Assert.True(first[0].Bytes.Equals(first[2].Bytes));
 
-        variables.SetPipelineStatuses([0], default, CancellationToken.None);
+        variables.SetPipelineStatuses([status], default, CancellationToken.None);
         var next = Assert.Single(variables.IndexedArrays["PIPESTATUS"].PresentValues);
         Assert.True(first[0].Bytes.Equals(next.Bytes));
     }
