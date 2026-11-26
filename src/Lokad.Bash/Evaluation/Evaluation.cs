@@ -623,7 +623,7 @@ public sealed partial class Evaluation : IFileTester
                 result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
             else if (result.Flow == FlowControlKind.Exit)
             {
-                var recoveryStatus = CanRecoverCommandSubstitutionSyntax ? 1 : RecoverableRootExpansionStatus;
+                var recoveryStatus = RecoverableCommandSubstitutionStatus ?? RecoverableRootExpansionStatus;
                 if (recoveryStatus is not { } status)
                     return result;
                 result = await RecoverExpansionFailureAsync(status, scope, loadedReader: false).ConfigureAwait(false);
@@ -5231,16 +5231,23 @@ public sealed partial class Evaluation : IFileTester
 
         var terminatesReader = failure == SubstitutionSyntaxFailure.NestedHereDocumentSeparator;
         var separatorFailure = terminatesReader || failure == SubstitutionSyntaxFailure.HereDocumentSeparator;
-        var prefixFailure = failure is SubstitutionSyntaxFailure.MissingPipelinePrefixCommand or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand;
-        var errexit = separatorFailure ? ReaderErrexitEnabled(scope) : _state.ErrexitEnabled;
+        var barePrefix = failure == SubstitutionSyntaxFailure.MissingPipelinePrefixCommand;
+        var prefixFailure = barePrefix || failure == SubstitutionSyntaxFailure.NestedPipelinePrefixCommand;
+        var errexit = separatorFailure || barePrefix && scope.InNestedCommandUnits
+            ? ReaderErrexitEnabled(scope) : _state.ErrexitEnabled;
         var exitCode = terminatesReader ? ReaderSyntaxExitCode(scope)
             : errexit || failure is SubstitutionSyntaxFailure.NestedSyntax or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand ? 2 : 1;
-        var kind = terminatesReader ? ExpansionFailureKind.ReaderSyntax : ExpansionFailureKind.CommandSubstitutionSyntax;
+        var kind = terminatesReader ? ExpansionFailureKind.ReaderSyntax
+            : barePrefix && !errexit ? ExpansionFailureKind.BarePipelinePrefixSyntax : ExpansionFailureKind.CommandSubstitutionSyntax;
+        if (kind == ExpansionFailureKind.BarePipelinePrefixSyntax && !scope.InNestedCommandUnits
+            && _state.LastExitCode is { } previous && previous != 0)
+            exitCode = previous;
         SetFatalExpansionError(new ExpansionFailure(kind, exitCode)
         {
             UseInheritedPipelineExitAction = separatorFailure && UsesInheritedPipelineExitAction(scope)
         });
-        _state.LastExitCode = exitCode;
+        if (kind != ExpansionFailureKind.BarePipelinePrefixSyntax)
+            _state.LastExitCode = exitCode;
         if ((separatorFailure || prefixFailure) && (capture != null || scope.ExpansionWord != null || !rejectedSelector.Operand.IsEmpty)
             && !GetStdErrDescriptor().IsClosed)
         {

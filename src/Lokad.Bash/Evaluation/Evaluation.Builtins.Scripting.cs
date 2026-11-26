@@ -581,15 +581,28 @@ public sealed partial class Evaluation
 
     /// <summary>Recovers unit-scoped expansion failures while preserving root versus nested status rules.</summary>
     private ValueTask<EvaluationResult> RecoverScriptExpansionFailureAsync(
-        EvaluationResult result, ScriptExecutionKind kind, ScopedEvaluation scope) =>
-        GetRecoverableScriptExpansionStatus(kind, scope) is { } status
+        EvaluationResult result, ScriptExecutionKind kind, ScopedEvaluation scope)
+    {
+        // Loaded readers in a fork abort the child after publishing to its active bindings.
+        if (_state.ForkKind != null && IsNestedLoadedReader(kind)
+            && _state.FatalExpansion is { Kind: ExpansionFailureKind.BarePipelinePrefixSyntax })
+            return PublishAndExitAsync();
+
+        return GetRecoverableScriptExpansionStatus(kind, scope) is { } status
             ? RecoverExpansionFailureAsync(status, scope, IsLoadedReader(kind))
             : ValueTask.FromResult(result);
 
+        async ValueTask<EvaluationResult> PublishAndExitAsync()
+        {
+            await RecoverExpansionFailureAsync(result.ExitCode, scope, loadedReader: true).ConfigureAwait(false);
+            return result;
+        }
+    }
+
     private int? GetRecoverableScriptExpansionStatus(ScriptExecutionKind kind, ScopedEvaluation scope)
     {
-        if (CanRecoverCommandSubstitutionSyntax)
-            return 1;
+        if (RecoverableCommandSubstitutionStatus is { } substitutionStatus)
+            return substitutionStatus;
         if (kind == ScriptExecutionKind.Root)
         {
             // A list inside a loaded unit must unwind to that reader before it resumes.
@@ -632,9 +645,12 @@ public sealed partial class Evaluation
     private static bool IsNestedLoadedReader(ScriptExecutionKind kind) =>
         kind is ScriptExecutionKind.Eval or ScriptExecutionKind.Source or ScriptExecutionKind.ArrayReaderCallback;
 
-    private bool CanRecoverCommandSubstitutionSyntax =>
-        _state.FatalExpansion is { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1,
-            UseInheritedPipelineExitAction: false };
+    private int? RecoverableCommandSubstitutionStatus => _state.FatalExpansion switch
+    {
+        { Kind: ExpansionFailureKind.CommandSubstitutionSyntax, ExitCode: 1, UseInheritedPipelineExitAction: false } => 1,
+        { Kind: ExpansionFailureKind.BarePipelinePrefixSyntax, ExitCode: var status } when _state.ForkKind == null => status,
+        _ => null
+    };
 
     private int? RecoverableRootExpansionStatus => _state.ForkKind != null ? null : _state.FatalExpansion switch
     {
@@ -671,6 +687,13 @@ public sealed partial class Evaluation
         _state.FatalExpansion = null;
         _state.TryConsumeExpansionError(out _);
 
+        if (kind == ExpansionFailureKind.BarePipelinePrefixSyntax)
+        {
+            // A fresh root has no previous foreground status to replace.
+            if (loadedReader || _state.LastExitCode.HasValue)
+                return await RecoverDiscardedCommandUnitAsync(scope, resetStatus: loadedReader).ConfigureAwait(false);
+            _state.LastExitCode = exitCode;
+        }
         if (kind == ExpansionFailureKind.IntegerAssignment || publishLoadedAssignment)
         {
             // The caller's bindings and descriptors are visible again. Integer assignments

@@ -21,6 +21,8 @@ internal enum ExpansionFailureKind
     WordSyntax,
     /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
     CommandSubstitutionSyntax,
+    /// <summary>A reached substitution ends in a bare pipeline prefix with errexit disabled.</summary>
+    BarePipelinePrefixSyntax,
     /// <summary>Rereading rendered capture or array syntax terminates the current reader.</summary>
     ReaderSyntax,
     Parameter,

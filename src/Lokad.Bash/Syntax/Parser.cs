@@ -334,10 +334,12 @@ public static class Parser
             var nestedFailure = context.SubstitutionFailure;
             var barePrefix = tokenizer.HasSubshellEndingInBarePipelinePrefix || EndsInBarePipelinePrefix(command);
             preserveAdjacentOpening = adjacentParenthesis && (barePrefix || nestedFailure != SubstitutionSyntaxFailure.None);
+            // A here-document executes the authored command units, including a terminated
+            // bare prefix. Nested failures remain with their own reached substitutions.
             if (nestedFailure != SubstitutionSyntaxFailure.None
-                && !(rawHereDocument && IsHereDocumentSeparatorFailure(nestedFailure)))
+                && !(rawHereDocument && (IsHereDocumentSeparatorFailure(nestedFailure) || IsPipelinePrefixFailure(nestedFailure))))
                 failure = ClassifyNestedFailure(nestedFailure, adjacentParenthesis);
-            else if (!adjacentParenthesis && barePrefix)
+            else if (!rawHereDocument && !adjacentParenthesis && barePrefix)
                 failure = SubstitutionSyntaxFailure.MissingPipelinePrefixCommand;
 
             var collectedAhead = false;

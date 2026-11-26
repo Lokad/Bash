@@ -738,6 +738,14 @@ definitions preserve the previous array.
 A standalone `!` or `time` prefix completes an empty command. It publishes
 status zero to `PIPESTATUS` and sets `$_` to an empty value. Negation still
 applies to the command's exit status.
+A rejected command substitution ending with a terminated bare prefix follows
+command-unit recovery when errexit is disabled. The root retains a previous
+nonzero status and its `PIPESTATUS` values. After a previous success it
+publishes status one. A fresh root reports status one before any foreground
+pipeline status exists. `eval` and `source` publish status one in their
+reader, including before terminating a forked child. An unquoted
+here-document expands its capture from the authored command units, so a
+terminated bare prefix inside that capture can execute.
 A direct commandless stage reports an isolated redirection failure to stderr
 and publishes its assignment status. Ordinary output redirection failures and
 failures in a compound stage contribute their own nonzero status.

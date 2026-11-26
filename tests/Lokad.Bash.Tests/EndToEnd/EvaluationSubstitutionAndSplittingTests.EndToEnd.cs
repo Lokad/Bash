@@ -6,6 +6,86 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
 {
+    private const string ReportForegroundStatus = "printf '<%s|%s>' \"$?\" \"${PIPESTATUS[*]-unset}\"";
+
+    [Theory]
+    [InlineData("", "<1|unset>")]
+    [InlineData("! (exit 7) | :\n", "<1|1>")]
+    [InlineData("(exit 7) | (exit 3)\n", "<3|7 3>")]
+    public async Task RejectedBarePrefixRecoversTheReachedRootStatus(string before, string expected)
+    {
+        var script = before + "value=$(!;); printf skipped\n" + ReportForegroundStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Contains("syntax error near unexpected token `)'", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("eval", false)]
+    [InlineData("source", false)]
+    [InlineData("eval", true)]
+    [InlineData("source", true)]
+    public async Task RejectedBarePrefixPublishesInTheLoadedReader(string builtin, bool testedWithErrexit)
+    {
+        var reader = "(exit 7) | (exit 3)\nvalue=$(!;)\n" + ReportForegroundStatus + "\n";
+        var invocation = builtin == "eval" ? "eval " + ShellArgumentEscaping.EscapeArgument(reader) : "source ./reader";
+        var script = (testedWithErrexit ? "set -e; if " + invocation + "; then printf then; else printf else; fi" : invocation)
+            + "\n" + ReportForegroundStatus;
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (builtin == "source")
+                host.AddFile("/reader", reader);
+            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(testedWithErrexit ? "<1|1>then<0|0>" : "<1|1><0|0>", host.StandardOutput.TextContent);
+            Assert.Contains("syntax error near unexpected token `)'", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedBarePrefixPublishesBeforeAForkedReaderExits()
+    {
+        var action = ShellArgumentEscaping.EscapeArgument(ReportForegroundStatus + " >trap-out");
+        var script = "( trap " + action + " EXIT; source ./reader; printf skipped )\n" + ReportForegroundStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/reader", "(exit 7) | (exit 3)\nvalue=$(!;)\nprintf skipped >later\n");
+            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|1>", host.StandardOutput.TextContent);
+            Assert.Equal("<1|1>", host.ReadFile("/trap-out"));
+            Assert.False(await EndToEndHarness.FileExistsAsync(host, "/later"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("$(!;)", "XY")]
+    [InlineData("$(printf yielded; time;)", "XyieldedY")]
+    public async Task HereDocumentExpandsTheAuthoredTerminatedBarePrefix(string substitution, string expected)
+    {
+        var script = "TIMEFORMAT=\nread -r value <<EOF\nX" + substitution + "Y\nEOF\nprintf '%s' \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunPrefixFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    private static async Task<int> RunPrefixFixtureAsync(string script, TestHost host, bool prepared) => prepared
+        ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+        : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
