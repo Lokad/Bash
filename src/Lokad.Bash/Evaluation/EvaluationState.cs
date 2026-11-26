@@ -69,7 +69,14 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
     internal bool UnwindsLoadedReader { get; init; }
 }
 
-internal enum ExpansionErrorKind { General, HereDocumentSyntax, HereDocumentParameter }
+internal enum ExpansionErrorKind
+{
+    General,
+    HereDocumentSyntax,
+    HereDocumentReaderSyntax,
+    HereDocumentNestedSyntax,
+    HereDocumentParameter
+}
 
 [Flags]
 internal enum FunctionAttributes
@@ -657,8 +664,6 @@ internal sealed class EvaluationState
 
     public void SetExpansionError(int exitCode, ExpansionErrorKind kind = ExpansionErrorKind.General) =>
         _pendingExpansionError = (exitCode, kind);
-
-    internal void SetHereDocumentSyntaxError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentSyntax);
 
     internal void SetHereDocumentParameterError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentParameter);
 

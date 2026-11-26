@@ -616,13 +616,21 @@ When the substitution reader rejects a token in expanded here-document data,
 the diagnostic includes the reached token and the source line within that
 capture. Earlier document text does not advance the capture reader's line.
 The source line retains bytes after the token, including any CR.
-A substitution syntax failure while setting up a here-document on a brace
-group, conditional or loop discards the remaining commands in the current
-unit. The root reader keeps a previous nonzero status and its pipeline
-statuses. A source or eval reader resumes with status 1. When errexit is
-active for this failure, EXIT runs with status 2 and the redirections
-already applied to the compound command. A simple command or a subshell
-with the same failure reports a redirection failure to its enclosing list.
+A directly reached substitution syntax failure during here-document setup
+discards the remaining commands in the current shell's command unit. The
+root reader keeps a previous nonzero status and its pipeline statuses.
+A fresh root can report status 1 before any foreground pipeline status
+exists when the capture reader rejects the token or reaches the end of
+its text while still looking for `)`. A missing quote or a failed attempt
+to collect an inner document after the closer publishes status 1 to
+`PIPESTATUS`. A source or eval reader resumes with status 1 in
+the invoking shell. In a forked shell it publishes status 1 and exits.
+A command substitution ends its capture with status 1 and keeps earlier
+output. A subshell, pipeline stage or host command reports its failed
+status to the enclosing list. With errexit active in the current reader,
+EXIT runs with status 2 and the redirections already applied there. An
+unexpected token inside a nested substitution can terminate the reader
+and publish its grammar status even with errexit disabled.
 The diagnostic uses the reached command-unit boundary, including when
 the capture's rendered layout supplies that boundary. A previously
 defined function uses the opening line of its body. Arithmetic and

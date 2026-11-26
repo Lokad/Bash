@@ -114,13 +114,107 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         {
             await using var host = new TestHost();
             Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
-            Assert.Equal("<1|1>", host.StandardOutput.TextContent);
+            Assert.Equal("<1|unset>", host.StandardOutput.TextContent);
             Assert.Empty(host.StandardError.Content.ToArray());
             if (writesFile)
                 Assert.Equal("command substitution: line 2: syntax error near unexpected token `)'\n"
                     + "command substitution: line 2: `time)€\r'\n", host.ReadFile("/diagnostic"));
             else
                 Assert.False(await EndToEndHarness.FileExistsAsync(host, "/diagnostic"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("", "X$(!)Y", "<1|unset>")]
+    [InlineData("true\n", "X$(!)Y", "<1|1>")]
+    [InlineData("(exit 7) | (exit 3)\n", "X$(!)Y", "<3|7 3>")]
+    [InlineData("", "X$(printf incomplete", "<1|unset>")]
+    [InlineData("", "X$(printf 'unclosed quote", "<1|1>")]
+    [InlineData("", "$(read -r inner <<INNER)\nbody", "<1|1>")]
+    public async Task RejectedHereDocumentDiscardsTheRootUnit(string previous, string body, string expected)
+    {
+        var script = previous + "read -r value <<EOF; printf same\n" + body + "\nEOF\n" + ReportForegroundStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("( : )", "<3|3>")]
+    [InlineData(": | read -r value", "<3|0 3>")]
+    [InlineData("./absent", "<3|3>")]
+    public async Task RejectedHereDocumentPublishesTheFailedChildStatus(string command, string expected)
+    {
+        var script = "(exit 7) | (exit 3)\n" + command + " <<EOF\nX$(!)Y\nEOF\n" + ReportForegroundStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("set -e\n", "read -r value 2>errors <<EOF || printf skipped", "X$(!)Y", "<2|0>", 4)]
+    [InlineData("", "read -r value 2>errors <<EOF; printf skipped", "X$(printf '%s' \"$(!)\")Y", "<2|2>", 3)]
+    public async Task RejectedHereDocumentRunsExitWithItsReachedStatusAndStderr(
+        string options, string command, string body, string exitState, int line)
+    {
+        var action = ShellArgumentEscaping.EscapeArgument(ReportForegroundStatus + " >&2");
+        var script = options + "trap " + action + " EXIT\n" + command + "\n" + body + "\nEOF\nprintf skipped\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(2, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+            Assert.Empty(host.StandardError.Content.ToArray());
+            var diagnostics = host.ReadFile("/errors");
+            Assert.StartsWith($"command substitution: line {line}: syntax error near unexpected token `)'\n", diagnostics);
+            Assert.EndsWith(exitState, diagnostics);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("source", false)]
+    [InlineData("eval", false)]
+    [InlineData("source", true)]
+    public async Task RejectedHereDocumentPublishesStatusInTheLoadedReader(string builtin, bool forked)
+    {
+        var content = "(exit 7) | (exit 3)\nread -r value <<EOF; printf skipped\nX$(!)Y\nEOF\n" + ReportForegroundStatus + "\n";
+        var invocation = builtin == "source" ? "source ./reader" : "eval " + ShellArgumentEscaping.EscapeArgument(content);
+        var action = ShellArgumentEscaping.EscapeArgument(ReportForegroundStatus + " >trap-out");
+        var script = (forked ? "( trap " + action + " EXIT; " + invocation + "; printf skipped )" : invocation)
+            + "\n" + ReportForegroundStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (builtin == "source")
+                host.AddFile("/reader", content);
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(forked ? "<1|1>" : "<1|1><0|0>", host.StandardOutput.TextContent);
+            if (forked)
+                Assert.Equal("<1|1>", host.ReadFile("/trap-out"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedHereDocumentStopsTheEnclosingCapture()
+    {
+        const string script = "captured=$(\nprintf earlier\n(exit 7) | (exit 3)\nread -r value <<EOF\nX$(!)Y\nEOF\n"
+            + "printf skipped\n)\nprintf '<%s|%s>' \"$?\" \"$captured\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|earlier>", host.StandardOutput.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
     }

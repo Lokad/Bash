@@ -620,7 +620,7 @@ public sealed partial class Evaluation : IFileTester
                 .ConfigureAwait(false);
 
             if (result.DiscardsCommandUnit && rootFlowHandling == RootFlowHandling.Normalize)
-                result = await RecoverDiscardedCommandUnitAsync(scope).ConfigureAwait(false);
+                result = await RecoverDiscardedCommandUnitAsync(scope, result, scope.InNestedCommandUnits).ConfigureAwait(false);
             else if (result.Flow == FlowControlKind.Exit)
             {
                 var recoveryStatus = RecoverableCommandSubstitutionStatus ?? RecoverableRootExpansionStatus;
@@ -681,14 +681,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (errorKind == ExpansionErrorKind.HereDocumentParameter)
                     result = await CompleteHereDocumentParameterFailureAsync(redirectionExitCode, scope).ConfigureAwait(false);
-                else if (errorKind == ExpansionErrorKind.HereDocumentSyntax && _state.FatalExpansion == null)
-                {
-                    result = ReaderErrexitEnabled(scope)
-                        ? await RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion).ConfigureAwait(false)
-                        : EvaluationResult.DiscardCompoundRedirectionUnit();
-                }
                 else
-                    result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope).ConfigureAwait(false);
+                    result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope, isolated: false).ConfigureAwait(false);
             }
             else
             {
@@ -735,17 +729,63 @@ public sealed partial class Evaluation : IFileTester
         if (ReaderErrexitEnabled(scope))
             return RunExitTrapAsync(scope, EvaluationResult.Exit(status), ExitTrapKind.Expansion);
         var result = _state.FatalExpansion is { } fatal
-            ? EvaluationResult.Exit(fatal.ExitCode) : EvaluationResult.DiscardCompoundRedirectionUnit();
+            ? EvaluationResult.Exit(fatal.ExitCode) : EvaluationResult.DiscardHereDocumentUnit(1);
         return ValueTask.FromResult(result);
     }
 
-    private ValueTask<EvaluationResult> CompleteRedirectionFailureAsync(int status, ExpansionErrorKind kind, ScopedEvaluation scope)
+    private ValueTask<EvaluationResult> CompleteRedirectionFailureAsync(
+        int status, ExpansionErrorKind kind, ScopedEvaluation scope, bool isolated)
     {
         if (kind == ExpansionErrorKind.HereDocumentParameter && _state.FatalExpansion.HasValue)
             return CompleteHereDocumentParameterFailureAsync(status, scope);
+        if (IsHereDocumentSyntaxFailure(kind) && _state.FatalExpansion == null)
+            return CompleteHereDocumentSyntaxFailureAsync(kind, scope, isolated);
         if (_state.FatalExpansion is { Kind: ExpansionFailureKind.ArrayRead } failure)
             return RunExitTrapAsync(scope, EvaluationResult.Exit(failure.ExitCode), ExitTrapKind.Expansion);
         return new ValueTask<EvaluationResult>(FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false));
+    }
+
+    private static bool IsHereDocumentSyntaxFailure(ExpansionErrorKind kind) => kind is
+        ExpansionErrorKind.HereDocumentSyntax or ExpansionErrorKind.HereDocumentReaderSyntax or ExpansionErrorKind.HereDocumentNestedSyntax;
+
+    private ValueTask<EvaluationResult> CompleteHereDocumentSyntaxFailureAsync(
+        ExpansionErrorKind kind, ScopedEvaluation scope, bool isolated)
+    {
+        var previous = _state.LastExitCode.GetValueOrDefault();
+        var recoveryStatus = previous == 0 ? 1 : previous;
+        var errexit = ReaderErrexitEnabled(scope);
+        var nested = kind == ExpansionErrorKind.HereDocumentNestedSyntax;
+        // An isolated redirection returns to the enclosing list, which owns status publication.
+        if (isolated)
+            return ValueTask.FromResult(ApplyNegation(EvaluationResult.FromExitCode(errexit || nested ? 2 : recoveryStatus), negated: false));
+        if (errexit)
+            return RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion);
+
+        // The loaded reader aborts the fork after publishing its status in the child bindings.
+        if (scope.InNestedCommandUnits && _state.ForkKind != null)
+        {
+            PublishExpansionPipelineStatus(1, scope);
+            _state.LastExitCode = 1;
+            return ValueTask.FromResult(EvaluationResult.Exit(1));
+        }
+        if (_state.ForkKind == ShellForkKind.CommandSubstitution)
+            return ValueTask.FromResult(EvaluationResult.Exit(1));
+        if (nested)
+        {
+            if (scope.InNestedCommandUnits)
+            {
+                PublishExpansionPipelineStatus(BuiltinSyntaxErrorStatus, scope);
+                SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.ReaderSyntax, 1));
+                return ValueTask.FromResult(EvaluationResult.Exit(1));
+            }
+            PublishExpansionPipelineStatus(2, scope);
+            return RunExitTrapAsync(scope, EvaluationResult.Exit(2), ExitTrapKind.Expansion);
+        }
+
+        // A capture reader can set the first scalar status before any foreground command publishes an array.
+        if (kind == ExpansionErrorKind.HereDocumentReaderSyntax && !_state.LastExitCode.HasValue)
+            _state.LastExitCode = recoveryStatus;
+        return ValueTask.FromResult(EvaluationResult.DiscardHereDocumentUnit(recoveryStatus));
     }
 
     /// <summary>
@@ -815,8 +855,10 @@ public sealed partial class Evaluation : IFileTester
                     RedirectionPersistence.Allocations, RedirectionLifetime.Command, RedirectionOrigin.Command,
                     reportMoveRestorationFailure: false)
                     .ConfigureAwait(false);
-                if (_state.TryConsumeExpansionError(out var redirectionExitCode))
-                    result = EvaluationResult.FromExitCode(redirectionExitCode);
+                if (_state.TryConsumeExpansionError(out var redirectionExitCode, out var errorKind))
+                    result = IsHereDocumentSyntaxFailure(errorKind)
+                        ? await CompleteHereDocumentSyntaxFailureAsync(errorKind, childScope, isolated: false).ConfigureAwait(false)
+                        : EvaluationResult.FromExitCode(redirectionExitCode);
             }
 
             if (result.ExitCode == 0)
@@ -1176,7 +1218,8 @@ public sealed partial class Evaluation : IFileTester
                     _state.FatalExpansion = null;
                 redirectionFailed = _state.TryConsumeExpansionError(out var assignmentRedirectionExitCode, out var errorKind);
                 if (redirectionFailed)
-                    assignmentResult = await CompleteRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope)
+                    assignmentResult = await CompleteRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope,
+                            isolated: isolateRedirections)
                         .ConfigureAwait(false);
                 else
                 {
@@ -1451,7 +1494,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 // A failed redirection never enters exec, so it neither replaces the shell
                 // nor suppresses timing. Fatal expansion errors still terminate the evaluator.
-                return await CompleteRedirectionFailureAsync(redirectionError, errorKind, scope).ConfigureAwait(false);
+                return await CompleteRedirectionFailureAsync(redirectionError, errorKind, scope, isolated: externalRedirections)
+                    .ConfigureAwait(false);
             }
 
             if (preparation.RedirectionLifetime == RedirectionLifetime.Evaluation
@@ -5795,7 +5839,14 @@ public sealed partial class Evaluation : IFileTester
                 ShellValue.FromText(failure?.Error.ToDiagnosticMessage() ?? (status == ShellScanStatus.Incomplete
                     ? "unexpected end of substitution" : "invalid substitution"))).ConfigureAwait(false);
         }
-        _state.SetHereDocumentSyntaxError();
+        var kind = failure switch
+        {
+            { Kind: ParserFailureKind.SubstitutionGrammar, IsNestedSubstitution: true } => ExpansionErrorKind.HereDocumentNestedSyntax,
+            { ExitsSubstitution: true } or { UnclosedDelimiter: { Delimiter: ')', PayloadLine: > 0 } } =>
+                ExpansionErrorKind.HereDocumentReaderSyntax,
+            _ => ExpansionErrorKind.HereDocumentSyntax
+        };
+        _state.SetExpansionError(1, kind);
     }
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>

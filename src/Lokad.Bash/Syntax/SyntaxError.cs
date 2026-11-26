@@ -33,7 +33,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
         ParserFailureKind.Grammar or ParserFailureKind.RedirectionOperand => this with { Kind = ParserFailureKind.SubstitutionGrammar },
         ParserFailureKind.IncompleteArithmeticCommand => this with { Kind = ParserFailureKind.Delimiter },
         ParserFailureKind.ArithmeticForHeader => this with { Kind = ParserFailureKind.SubstitutionForHeader },
-        ParserFailureKind.SubstitutionForHeader or ParserFailureKind.QuotedSubstitutionForHeader
+        ParserFailureKind.SubstitutionGrammar or ParserFailureKind.SubstitutionForHeader or ParserFailureKind.QuotedSubstitutionForHeader
             when !IsNestedSubstitution => this with { IsNestedSubstitution = true },
         _ => this
     };

@@ -517,8 +517,7 @@ public sealed partial class Evaluation
                 if (_state.ForkKind == null
                     && (kind == ScriptExecutionKind.Root && result.DiscardsCommandUnit
                         || IsLoadedReader(kind) && result.DiscardsLoadedCommandUnit))
-                    result = await RecoverDiscardedCommandUnitAsync(scope,
-                        resetStatus: IsLoadedReader(kind) && result.DiscardsCompoundRedirection).ConfigureAwait(false);
+                    result = await RecoverDiscardedCommandUnitAsync(scope, result, IsLoadedReader(kind)).ConfigureAwait(false);
                 else if (result.Flow == FlowControlKind.Exit)
                 {
                     if (nestedLoadedReader && _state.FatalExpansion is { UnwindsLoadedReader: true })
@@ -660,12 +659,13 @@ public sealed partial class Evaluation
         _ => null
     };
 
-    private ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope) =>
-        RecoverDiscardedCommandUnitAsync(scope, resetStatus: false);
+    private ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(
+        ScopedEvaluation scope, EvaluationResult result, bool loadedReader) =>
+        RecoverDiscardedCommandUnitAsync(scope, resetStatus: loadedReader && result.DiscardsHereDocumentUnit);
 
     private async ValueTask<EvaluationResult> RecoverDiscardedCommandUnitAsync(ScopedEvaluation scope, bool resetStatus)
     {
-        // A loaded reader handling compound redirection syntax resets the previous status.
+        // A loaded reader handling rejected syntax resets the previous status.
         var status = _state.LastExitCode.GetValueOrDefault();
         if (status != 0 && !resetStatus)
             return EvaluationResult.FromExitCode(status);

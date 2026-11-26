@@ -261,7 +261,7 @@ public sealed partial class Evaluation
                         if (index + 1 == traversal.Count)
                             return ApplyNegation(result, listNegated);
                         result = resumeDiscard
-                            ? await RecoverDiscardedCommandUnitAsync(listScope).ConfigureAwait(false)
+                            ? await RecoverDiscardedCommandUnitAsync(listScope, result, listScope.InNestedCommandUnits).ConfigureAwait(false)
                             : ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus.GetValueOrDefault(), listScope,
                                 loadedReader: false).ConfigureAwait(false), negated: false);
                     }

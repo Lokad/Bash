@@ -19,7 +19,7 @@ public partial class Evaluation
         InvalidLoopCount,
         ArrayReaderLoopFailure,
         CompoundInitializerSyntax,
-        CompoundRedirectionSyntax,
+        HereDocumentSyntax,
         NestedPipelineReader
     }
 
@@ -72,9 +72,9 @@ public partial class Evaluation
         public bool DiscardsCommandUnit => Cause == ExitCause.ExtraArguments || DiscardsLoadedCommandUnit;
 
         /// <summary>Lets an active source or eval reader resume after its rejected unit.</summary>
-        public bool DiscardsLoadedCommandUnit => Cause is ExitCause.CompoundInitializerSyntax or ExitCause.CompoundRedirectionSyntax;
+        public bool DiscardsLoadedCommandUnit => Cause is ExitCause.CompoundInitializerSyntax or ExitCause.HereDocumentSyntax;
 
-        public bool DiscardsCompoundRedirection => Cause == ExitCause.CompoundRedirectionSyntax;
+        public bool DiscardsHereDocumentUnit => Cause == ExitCause.HereDocumentSyntax;
 
         /// <summary>Runs EXIT after restoring the inner reader of a direct pipeline builtin.</summary>
         public bool ExitsNestedPipelineReader => Cause == ExitCause.NestedPipelineReader;
@@ -136,8 +136,8 @@ public partial class Evaluation
         public static EvaluationResult DiscardCompoundInitializerUnit() =>
             Exit(1) with { Cause = ExitCause.CompoundInitializerSyntax };
 
-        public static EvaluationResult DiscardCompoundRedirectionUnit() =>
-            Exit(1) with { Cause = ExitCause.CompoundRedirectionSyntax };
+        public static EvaluationResult DiscardHereDocumentUnit(int exitCode) =>
+            Exit(exitCode) with { Cause = ExitCause.HereDocumentSyntax };
 
         public static EvaluationResult InvalidLoopCount(int exitCode) =>
             Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };
