@@ -366,6 +366,37 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
     private const string DiscardedDocumentCommand = ": <<DOC\n" + BadDocumentBody;
 
     [Theory]
+    [InlineData("")]
+    [InlineData(DiscardedDocumentCommand)]
+    public async Task UnsettingTemporaryIfsReexposesTheInitialBinding(string prior)
+    {
+        const string inspect = "printf '<%s|%s>' \"${IFS+set}\" \"${IFS-unset}\"\n";
+        var script = prior + "IFS=: eval " + ShellArgumentEscaping.EscapeArgument("unset IFS; " + inspect) + "\n" + inspect;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<set| \t\n><set| \t\n>", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task ASubshellCanUnsetItsOwnInitialIfs()
+    {
+        const string inspect = "printf '<%s>' \"${IFS-unset}\"\n";
+        const string script = "( unset IFS; " + inspect + ")\n" + inspect;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<unset>< \t\n>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData(DiscardedDocumentCommand, "<2|1><3|0>")]
     [InlineData(": <<DOC\nhead\n$( ! )\ntail\nDOC\n", "<2|1><3|0>")]
     [InlineData(": <<DOC; printf skipped\n" + BadDocumentBody, "<2|1><3|0>")]

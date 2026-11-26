@@ -10,6 +10,58 @@ public sealed class EvaluationStartupTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task IfsStartsAssignedAndUnexported(bool prepared)
+    {
+        const string script = "declare -p IFS\ninspect \"$IFS\"\n"
+            + "unset IFS\nwords='left right'; inspect \"${IFS-unset}\" $words\n";
+        await using var host = new MockFileSystem();
+        var result = prepared
+            ? await new Engine().RunAsync(ShellEvaluationStartup.CreateForNewHost(Parser.Parse(script),
+                EvaluationOptions.Default), host, CancellationToken.None)
+            : await BashScript.RunAsync(host, script, EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -- IFS=$' \\t\\n'\n", host.GetOutput(FileDescriptor.StdOut));
+        Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+        Assert.Collection(host.CommandInvocations,
+            command => Assert.Equal(ShellValue.FromText(" \t\n"), Assert.Single(command.Arguments)),
+            command => Assert.Equal(new[] { "unset", "left", "right" }.Select(ShellValue.FromText), command.Arguments));
+        Assert.All(host.CommandInvocations, command => Assert.DoesNotContain(command.Environment, entry => entry.Name == "IFS"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty")]
+    [InlineData("opaque")]
+    public async Task InheritedStartupSelectsCapturedIfsWhenProvided(string input)
+    {
+        ShellValue? value = input switch
+        {
+            "missing" => null,
+            "empty" => ShellValue.Empty,
+            "opaque" => ShellValue.FromByte(0xff),
+            _ => throw new ArgumentOutOfRangeException(nameof(input))
+        };
+        IReadOnlyList<EnvironmentVariable> environment = value is { } assigned ? [new("IFS", assigned)] : [];
+        var invocation = new CommandInvocation("bash", [], ShellPath.Root, environment, null, null, null);
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, Parser.Parse("inspect \"$IFS\""),
+            ShellValue.FromText("bash"), []);
+        await using var host = new MockFileSystem();
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        var command = Assert.Single(host.CommandInvocations);
+        Assert.Equal(value ?? ShellValue.FromText(" \t\n"), Assert.Single(command.Arguments));
+        Assert.Equal(environment, command.Environment.Where(entry => entry.Name == "IFS").ToArray());
+        Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task OldPwdStartsExportedAndUnassigned(bool prepared)
     {
         const string script = """

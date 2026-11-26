@@ -159,6 +159,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.SetExported("PWD", true);
         _vars.TryDeclareName("OLDPWD");
         _vars.SetExported("OLDPWD", true);
+        _vars.TrySetScalar(FieldSeparators.Name, FieldSeparators.DefaultValue);
         var one = ShellValue.FromText("1");
         _vars.TrySetScalar("OPTIND", one);
         _vars.SetIntegerBinding("OPTIND", true);

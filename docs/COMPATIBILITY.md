@@ -704,6 +704,9 @@ retain their inert data semantics.
 File paths use the contained POSIX-style namespace defined by `ShellPath` and
 `FilePathLookup`, including their size, control-character and traversal constraints.
 
+Fresh evaluations bind `IFS` to an unexported scalar containing space, tab and LF.
+Unsetting `IFS` removes the binding and field splitting still uses those default
+separators. Explicit inherited startup values can supply their own binding.
 IFS lookup follows the current scalar value through namerefs, including mutations
 of their targets. Cached membership follows that value's byte-slice identity.
 This deliberately retains consistent target lookup where the two pinned GNU 5.2

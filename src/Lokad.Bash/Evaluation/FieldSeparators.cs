@@ -12,11 +12,11 @@ internal sealed class FieldSeparators
 {
     internal static readonly BindingName Name = "IFS";
 
-    /// <summary>The separators used when <c>IFS</c> is unset.</summary>
-    private const string DefaultValue = " \t\n";
+    /// <summary>The initial <c>IFS</c> value and the fallback when it is unset.</summary>
+    internal static readonly ShellValue DefaultValue = ShellValue.FromText(" \t\n");
 
     /// <summary>The shared separators used when <c>IFS</c> is unset.</summary>
-    internal static readonly FieldSeparators Default = new(ShellValue.FromText(DefaultValue), null, null);
+    internal static readonly FieldSeparators Default = new(DefaultValue, null, null);
     internal static readonly FieldSeparators Empty = new(ShellValue.Empty, null, null);
 
     /// <summary>The separator bytes, including any malformed UTF-8.</summary>

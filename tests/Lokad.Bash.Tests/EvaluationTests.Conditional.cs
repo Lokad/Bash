@@ -10,8 +10,9 @@ namespace Lokad.Bash.Tests;
 public partial class EvaluationTests
 {
     [Theory]
-    [InlineData("! % == \"$1\"$2", 255, "a", 8 * 1024)]
-    [InlineData("% != \"$1\"$2", 1022, "\\*", 32 * 1024)]
+    // The governor includes startup bindings and the evaluator's prepaid workspace capacity.
+    [InlineData("! % == \"$1\"$2", 255, "a", 10 * 1024)]
+    [InlineData("% != \"$1\"$2", 1022, "\\*", 38 * 1024)]
     public async Task ConditionalPatternJoinsMultipartOperandWithinAllowance(
         string predicate, int prefixLength, string suffix, int allowance)
     {
@@ -23,8 +24,8 @@ public partial class EvaluationTests
 
         var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
 
-        Assert.Equal(0, result.ExitCode);
         Assert.True(host.StandardError.Content.IsEmpty);
+        Assert.Equal(0, result.ExitCode);
         owner.Dispose();
         Assert.Equal(0, budget.ReservedBytes);
     }
