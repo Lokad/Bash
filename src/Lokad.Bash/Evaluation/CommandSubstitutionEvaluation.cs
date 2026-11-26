@@ -84,54 +84,49 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             outer.TrackOwnedDescriptor(pipe.Read);
             outer.TrackOwnedDescriptor(pipe.Write);
             outer.CancellationToken.ThrowIfCancellationRequested();
-            using var outputMemory = outer.Memory.Budget.CreateScope();
-            var warningLine = script is CommandSubstitutionSyntax.Deferred { ReadWarnings: not null }
-                ? scope.Context.Coordinates.HereDocumentWarningLine : 0;
-            var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine, finalInput);
-            CapturedEvaluationResult result;
-            Exception? captureFailure = null;
-            try
+            CommandSubstitutionResult output;
+            using (var outputMemory = outer.Memory.Budget.CreateScope())
             {
-                // Hosting drives the nested evaluator and drains its output concurrently. Await both
-                // through cancellation so unfinished cleanup transfers only after they have settled.
-                var capture = RunCapturedEvaluation.AsTask(outer.PublishOperation,
-                    new PipelineEvaluationStage(nested, [pipe.Write]), pipe.Read, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1,
-                    outputMemory);
-                // The stage owns the writer once published; setup refusal leaves it with the caller.
-                outer.MarkDescriptorCleanupCompleted(pipe.Write);
-                result = await capture.ConfigureAwait(false);
-            }
-            catch (Exception error)
-            {
-                captureFailure = error;
-                throw;
-            }
-            finally
-            {
-                var refusal = await nested.TransferDescriptorCleanupToAsync(outer).ConfigureAwait(false);
-                nested.ReleaseFunctions();
-                if (captureFailure == null && refusal != null)
-                    ExceptionDispatchInfo.Capture(refusal).Throw();
+                var warningLine = script is CommandSubstitutionSyntax.Deferred { ReadWarnings: not null }
+                    ? scope.Context.Coordinates.HereDocumentWarningLine : 0;
+                var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine, finalInput);
+                CapturedEvaluationResult result;
+                Exception? captureFailure = null;
+                try
+                {
+                    // Hosting drives the nested evaluator and drains its output concurrently. Await both
+                    // through cancellation so unfinished cleanup transfers only after they have settled.
+                    var capture = RunCapturedEvaluation.AsTask(outer.PublishOperation,
+                        new PipelineEvaluationStage(nested, [pipe.Write]), pipe.Read, ByteMemoryBuilder.MaxMemoryBuilderBytes - 1,
+                        outputMemory);
+                    // The stage owns the writer once published; setup refusal leaves it with the caller.
+                    outer.MarkDescriptorCleanupCompleted(pipe.Write);
+                    result = await capture.ConfigureAwait(false);
+                }
+                catch (Exception error)
+                {
+                    captureFailure = error;
+                    throw;
+                }
+                finally
+                {
+                    var refusal = await nested.TransferDescriptorCleanupToAsync(outer).ConfigureAwait(false);
+                    nested.ReleaseFunctions();
+                    if (captureFailure == null && refusal != null)
+                        ExceptionDispatchInfo.Capture(refusal).Throw();
+                }
+
+                // Normalization admits the surviving bytes to the caller before the read owner ends.
+                output = CommandSubstitutionResult.FromCapture(result.Output.GetContentOrThrow(), result.ExitCode, outer.Memory);
             }
 
-            switch (result.Output)
+            var closeError = await outer.CloseDescriptorsAsync([pipe.Read], operationFailed: output.ExitCode != 0).ConfigureAwait(false);
+            if (closeError is { } closeFailure)
             {
-                case BoundedReadResult.Complete complete:
-                    var output = CommandSubstitutionResult.FromCapture(complete.Content, result.ExitCode, outer.Memory);
-                    var error = await outer.CloseDescriptorsAsync([pipe.Read], operationFailed: result.ExitCode != 0).ConfigureAwait(false);
-                    if (error is { } failure)
-                    {
-                        await outer.ReportOperationErrorAsync(failure).ConfigureAwait(false);
-                        return output with { ExitCode = 1 };
-                    }
-                    return output;
-                case BoundedReadResult.TooLarge:
-                    throw new ByteMemoryBuilder.LimitExceededException();
-                case BoundedReadResult.Failed failed:
-                    failed.Failure.ThrowIfError();
-                    break;
+                await outer.ReportOperationErrorAsync(closeFailure).ConfigureAwait(false);
+                return output with { ExitCode = 1 };
             }
-            throw new InvalidOperationException("Unexpected command substitution capture outcome.");
+            return output;
         }
         finally { parsedMemory?.Release(); }
 

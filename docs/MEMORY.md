@@ -88,6 +88,10 @@ reusable capacity stay charged. Do not accumulate every processed record's charg
 or refund storage still held by variables/closures. Prefer existing lifetimes,
 conservative retention and a focused TODO over a new ownership framework.
 
+Command substitution normalizes output while its read buffer owner is live.
+The enclosing command admits the surviving bytes before the read owner ends.
+The final read descriptor can then close while the command owns the result.
+
 ## Refusal
 
 Refusal fails the current command with a resource-limit failure. The command/host

@@ -19,7 +19,7 @@ public sealed class CommandSubstitutionCaptureTests
         content.AsSpan().Fill((byte)'\n');
         content[0] = 0xff;
         var state = new Eval(Parser.Parse(pipe ? "value=$(cmd)" : "value=$(<input)"));
-        var host = QueueCapture(content, pipe);
+        var host = QueueCapture(content, pipe, Task.CompletedTask);
         host.EnqueueAppendResult(DescriptorWriteResult.Open);
         var governor = new MemoryGovernor(192 * 1024);
         using var budget = governor.CreateScope();
@@ -47,7 +47,7 @@ public sealed class CommandSubstitutionCaptureTests
         content[128] = 0;
         "\r\0\n\n"u8.CopyTo(content.AsSpan(content.Length - 4));
         var state = new Eval(Parser.Parse(pipe ? "value=$(cmd)" : "value=$(<input)"));
-        var host = QueueCapture(content, pipe);
+        var host = QueueCapture(content, pipe, Task.CompletedTask);
         var governor = new MemoryGovernor(2 * 1024 * 1024);
         using var budget = governor.CreateScope();
         var started = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -87,13 +87,65 @@ public sealed class CommandSubstitutionCaptureTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    private static TestOperationVisitor QueueCapture(byte[] content, bool pipe)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CaptureRefundsUnneededBackingBeforeTheFinalClose(bool pipe)
+    {
+        var wide = new byte[16 * 1024];
+        wide.AsSpan().Fill((byte)'\n');
+        wide[0] = 0xff;
+
+        var compact = await ObservePendingCloseAsync([0xff]);
+        var trimmed = await ObservePendingCloseAsync(wide);
+
+        Assert.Equal(compact, trimmed);
+
+        async Task<long> ObservePendingCloseAsync(byte[] content)
+        {
+            var state = new Eval(Parser.Parse(pipe ? "value=$(cmd)" : "value=$(<input)"));
+            var governor = new MemoryGovernor(128 * 1024);
+            using var budget = governor.CreateScope();
+            var closing = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var settle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var host = QueueCapture(content, pipe, settle.Task);
+            host.BeforeDescriptorClose = descriptor =>
+            {
+                if (descriptor == new FileDescriptor(10))
+                    closing.SetResult(governor.ReservedBytes);
+            };
+
+            var execution = new Engine().RunAsync(state, host, budget, CancellationToken.None);
+            long reserved;
+            try
+            {
+                reserved = await closing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.False(execution.IsCompleted);
+                Assert.False(state.Variables.ContainsKey("value"));
+            }
+            finally
+            {
+                settle.SetResult();
+                await execution;
+            }
+
+            Assert.Equal(pipe ? 7 : 0, state.LastExitCode);
+            Assert.Equal(new byte[] { 0xff }, state.Variables["value"].Bytes.ToArray());
+            Assert.Equal(pipe ? [new FileDescriptor(11), new FileDescriptor(10)] : new[] { new FileDescriptor(10) },
+                host.ClosedDescriptors);
+            Assert.Empty(state.GetDescriptorsForCleanup());
+            budget.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return reserved;
+        }
+    }
+
+    private static TestOperationVisitor QueueCapture(byte[] content, bool pipe, Task finalClose)
     {
         var host = new TestOperationVisitor(pipe ? [7] : []) { RecordAppends = true };
         if (pipe)
         {
             host.EnqueuePipeDescriptors(new PipeDescriptors(10, 11));
-            host.EnqueueCloseDescriptor();
             host.EnqueueCloseDescriptor();
             var starts = Enumerable.Range(1, content.Length - 1)
                 .Where(start => content[start - 1] == (byte)'\n').ToArray();
@@ -102,9 +154,9 @@ public sealed class CommandSubstitutionCaptureTests
         else
         {
             host.EnqueueOpenFileDescriptor(10);
-            host.EnqueueCloseDescriptor();
             host.EnqueueByteReadResult(content, ByteReadResult.Success(content.Length, reachedEoF: true));
         }
+        host.EnqueueCloseDescriptorTask(finalClose);
         return host;
     }
 
