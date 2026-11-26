@@ -15,10 +15,10 @@ public sealed partial class Evaluation
         bool negated)
     {
         if (!forCommand.InvalidName.IsEmpty)
-            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(forCommand.InvalidName)).ConfigureAwait(false);
+            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(forCommand.InvalidName, scope)).ConfigureAwait(false);
         BindingName name = forCommand.Name;
         if (!name.IsIdentifier)
-            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(GetDiagnosticName(name))).ConfigureAwait(false);
+            return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(GetDiagnosticName(name), scope)).ConfigureAwait(false);
 
         if (!await WordExpansion.CheckBraceDelimitersAsync(forCommand.Items, scope).ConfigureAwait(false))
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);

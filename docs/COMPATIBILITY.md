@@ -1388,6 +1388,9 @@ Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an
 ordinary variable.
 
+An invalid loop variable or function definition name reports the parsed
+command's source location through the active stderr descriptor.
+
 An unhandled errexit status runs EXIT with the reached positional parameters and
 loop or return target. An ordinary failure restores function locals and temporary
 prefixes before the action. Subshell and pipeline child execution can keep those

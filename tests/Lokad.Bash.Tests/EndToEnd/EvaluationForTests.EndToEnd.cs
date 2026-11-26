@@ -168,7 +168,7 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, status);
         Assert.Equal("loop:1", host.StandardOutput.TextContent);
-        Assert.Equal("`bad-name': not a valid identifier\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: `bad-name': not a valid identifier\n", host.StandardError.TextContent);
         Assert.Equal("prior", host.ReadFile("/prior"));
         Assert.False(host.FileExists("/expanded"));
         Assert.False(host.FileExists("/body"));
@@ -176,19 +176,34 @@ public sealed class EvaluationForTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("1name", "1name")]
-    [InlineData("na\\me", "na\\me")]
-    [InlineData("bad-\\\nname", "bad-name")]
-    [InlineData("$'n\\141me'", "'name'")]
-    [InlineData("$\"name\"", "\"name\"")]
-    [InlineData("{", "{")]
-    public async Task InvalidLoopNamesReportUnexpandedSpelling(string token, string spelling)
+    [InlineData("1name", "1name", 1)]
+    [InlineData("na\\me", "na\\me", 1)]
+    [InlineData("bad-\\\nname", "bad-name", 2)]
+    [InlineData("$'n\\141me'", "'name'", 1)]
+    [InlineData("$\"name\"", "\"name\"", 1)]
+    [InlineData("{", "{", 1)]
+    public async Task InvalidLoopNamesReportUnexpandedSpelling(string token, string spelling, int line)
     {
         var result = await EvaluationTestHelper.RunAsync("for " + token + " in; do printf body; done");
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("`" + spelling + "': not a valid identifier\n", result.StdErr);
+        Assert.Equal($"line {line}: `{spelling}': not a valid identifier\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task InvalidLoopNameReportsTheSourcedLineThroughItsRedirection()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/loaded", ":\nfor 'item' in one; do printf body; done 2>log\nprintf '<%s>' \"$?\"\n");
+
+        var result = await host.RunAsync(":\n:\nsource ./loaded", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./loaded: line 2: `'item'': not a valid identifier\n", host.ReadFile("/log"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Fact]
@@ -202,7 +217,7 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("ready:1", host.StandardOutput.TextContent);
-        Assert.Equal("`\"name\"': not a valid identifier\n", host.StandardError.TextContent);
+        Assert.Equal("line 3: `\"name\"': not a valid identifier\n", host.StandardError.TextContent);
         Assert.Contains("for \"name\" in one;", host.ReadFile("/display"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -214,7 +229,7 @@ public sealed class EvaluationForTestsEndToEnd
         var result = await host.RunAsync("eval $'for bad\\377name in one; do :; done'", CancellationToken.None);
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal("`bad\u00ffname': not a valid identifier\n",
+        Assert.Equal("line 1: `bad\u00ffname': not a valid identifier\n",
             System.Text.Encoding.Latin1.GetString(host.StandardError.Content.Span));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -228,7 +243,7 @@ public sealed class EvaluationForTestsEndToEnd
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("status:1 value:<>", result.StdOut);
-        Assert.Equal("`bad-name': not a valid identifier\n", result.StdErr);
+        Assert.Equal("line 1: `bad-name': not a valid identifier\n", result.StdErr);
     }
 
     [Fact]

@@ -5017,15 +5017,11 @@ public sealed partial class Evaluation : IFileTester
                 using var output = new ByteMemoryBuilder(0, Memory.Budget);
                 if (!FunctionDefinitionFormatter.TryAppendWordDisplay(word, output, Memory.Budget, _cancellationToken))
                     throw new ByteMemoryBuilder.LimitExceededException();
-                await ReportAsync(ShellValue.FromBytes(output.ToMemory())).ConfigureAwait(false);
+                await ReportInvalidIdentifierAsync(ShellValue.FromBytes(output.ToMemory()), scope).ConfigureAwait(false);
                 return;
             }
         }
-        await ReportAsync(spelling).ConfigureAwait(false);
-
-        Task ReportAsync(ShellValue subject) => ReportCommandDiagnosticAsync(
-            [ShellValue.FromText("`"), subject, ShellValue.FromText("'")],
-            [ShellValue.FromText("not a valid identifier")], scope);
+        await ReportInvalidIdentifierAsync(spelling, scope).ConfigureAwait(false);
     }
 
     internal Task ReportIntegerAssignmentFailureAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
@@ -5332,9 +5328,9 @@ public sealed partial class Evaluation : IFileTester
         return name.ToValue();
     }
 
-    private Task ReportInvalidIdentifierAsync(ShellValue identifier) =>
-        ReportExpansionDiagnosticAsync([ShellValue.FromText("`"), identifier, ShellValue.FromText("'")],
-            [ShellValue.FromText("not a valid identifier")]);
+    private Task ReportInvalidIdentifierAsync(ShellValue identifier, ScopedEvaluation scope) =>
+        ReportCommandDiagnosticAsync([ShellValue.FromText("`"), identifier, ShellValue.FromText("'")],
+            [ShellValue.FromText("not a valid identifier")], scope);
 
     /// <summary>Emits an expansion diagnostic without changing the caller's expansion status.</summary>
     internal Task ReportExpansionDiagnosticAsync(ShellValue name, ShellValue message) =>
