@@ -1000,6 +1000,12 @@ conditional structure, including an empty `[[ ]]`, is a syntax error.
 Unquoted `<` and `>` are order operators in `[[`. Quoting or escaping them
 keeps them as operand bytes. A plain decimal within the descriptor range
 directly before either operator has descriptor syntax and is rejected there.
+In a conditional pattern operand, a non-space first IFS byte makes
+unquoted direct `$@` and `${array[@]}` fields literal. Sliced and projected
+`@` fields omit empty elements in that form. With empty IFS, unquoted
+`${array[*]}` and its supported value transforms join their fields without
+a separator and treat the field bytes as literal. Authored pattern
+operators alongside the expansion stay active.
 Token-start comments apply inside `[[` and end only at LF. Delimiter-looking bytes
 inside balanced regex groups remain operand data, including unquoted spaces,
 LF and `#`. Shell quoting and escapes govern parenthesis balancing even within

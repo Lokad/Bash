@@ -72,6 +72,29 @@ public sealed class ConditionalEvaluationTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("set -- 'a*' z; IFS=:", "'a* z' == $@", "'aab z' == $@")]
+    [InlineData("a=('a*' z); IFS=$'\\t '", "'a* z-more' == ${a[@]}*", "'aab z-more' == ${a[@]}*")]
+    [InlineData("a=('a.' z); IFS=:", "'a. z' =~ ^${a[@]}$", "'ab z' =~ ^${a[@]}$")]
+    [InlineData("a=('a*' z); IFS=", "'a*z' == ${a[*]}", "'aabz' == ${a[*]}")]
+    [InlineData("set -- 'a*' z; IFS=", "'aabz' == $*", "'bz' == $*")]
+    [InlineData("set -- 'a*' z; IFS=:; unset missing", "'a* z' == ${missing:-$@}", "'aab z' == ${missing:-$@}")]
+    [InlineData("a=('a*' ''); IFS=:", "'aab' == ${a[@]:0}", "'aab' == ${a[@]}")]
+    [InlineData("a=('a*' ''); IFS=:", "'AAB' == ${a[@]^}", "'bab' == ${a[@]^}")]
+    [InlineData("a=('a*' z); IFS=", "'A*Z' == ${a[*]@U}", "'AABZ' == ${a[*]@U}")]
+    [InlineData("declare -A a=([x]='a*b'); IFS=", "\"'a*b'\" == ${a[*]@Q}", "\"'a1b'\" == ${a[*]@Q}")]
+    [InlineData("set -- 'a*' z; IFS=' :'", "'aab z' == $@", "'aab z' != $@")]
+    public async Task ConditionalPatternOperandsRetainAggregateQuoteAndFieldBoundaries(
+        string setup, string matches, string misses)
+    {
+        var script = $"{setup}\n[[ {matches} ]]\nprintf '<%s>' \"$?\"\n[[ {misses} ]]\nprintf '<%s>' \"$?\"\n";
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal("<0><1>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [MemberData(nameof(RegexMatchData))]
     public async Task ConditionalEvaluation_EvaluatesRegexMatches(
         string left,

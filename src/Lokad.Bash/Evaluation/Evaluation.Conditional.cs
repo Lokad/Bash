@@ -86,19 +86,19 @@ public sealed partial class Evaluation
             work.Add((expression, complete));
         }
 
-        Task<IReadOnlyList<ExpandedWord>> ExpandAsync(Word word) => WordExpansion.ExpandWithoutBraceAsync(
-            word, scope with { SelectorParameterDiagnostics = true }, allowWordSplitting: false,
-            ExpansionPurpose.Scalar, TildeExpansion.Leading);
+        Task<IReadOnlyList<ExpandedWord>> ExpandAsync(Word word, ExpansionPurpose purpose) =>
+            WordExpansion.ExpandWithoutBraceAsync(word, scope with { SelectorParameterDiagnostics = true },
+                allowWordSplitting: false, purpose, TildeExpansion.Leading);
 
         async Task<int> EvaluatePredicateAsync(ConditionalExpression expression)
         {
             switch (expression)
             {
                 case ConditionalExpression.NonEmpty nonempty:
-                    var expanded = await ExpandAsync(nonempty.Operand).ConfigureAwait(false);
+                    var expanded = await ExpandAsync(nonempty.Operand, ExpansionPurpose.Scalar).ConfigureAwait(false);
                     return ExpandedWord.JoinValuesWithSpaces(expanded, Memory).IsEmpty ? 1 : 0;
                 case ConditionalExpression.Unary unary:
-                    var fields = await ExpandAsync(unary.Operand).ConfigureAwait(false);
+                    var fields = await ExpandAsync(unary.Operand, ExpansionPurpose.Scalar).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return 1;
                     var operand = ExpandedWord.JoinValuesWithSpaces(fields, Memory);
@@ -117,14 +117,17 @@ public sealed partial class Evaluation
                     return await WordExpansion.TestVariableElementAsync(element.Name, element.Selector, scope)
                         .ConfigureAwait(false) ? 0 : 1;
                 case ConditionalExpression.Binary binary:
-                    var leftFields = await ExpandAsync(binary.Left).ConfigureAwait(false);
+                    var leftFields = await ExpandAsync(binary.Left, ExpansionPurpose.Scalar).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return 1;
-                    var rightFields = await ExpandAsync(binary.Right).ConfigureAwait(false);
+                    var predicate = binary.Predicate;
+                    var patternOperand = predicate.Operator is BinaryPredicateKind.RegexMatch
+                        or BinaryPredicateKind.StringEqual or BinaryPredicateKind.StringNotEqual;
+                    var rightFields = await ExpandAsync(binary.Right,
+                        patternOperand ? ExpansionPurpose.ConditionalPattern : ExpansionPurpose.Scalar).ConfigureAwait(false);
                     if (_state.HasPendingExpansionError)
                         return 1;
                     var left = ExpandedWord.JoinValuesWithSpaces(leftFields, Memory);
-                    var predicate = binary.Predicate;
                     if (predicate.Operator == BinaryPredicateKind.RegexMatch)
                         return await MatchRegexAsync(left, ExpandedWord.JoinWithSpaces(rightFields, Memory)).ConfigureAwait(false);
                     if (predicate.Operator is BinaryPredicateKind.StringEqual or BinaryPredicateKind.StringNotEqual)

@@ -61,6 +61,7 @@ internal enum ExpansionPurpose
 {
     Normal,
     Scalar,
+    ConditionalPattern,
     CasePattern,
     ParameterReplacement,
     Assignment,
@@ -417,10 +418,13 @@ internal sealed class ExpandedWordBuilder
         {
             return AppendSeparatedFields(fields, fieldSeparators.First, allowWordSplitting, globQuoted);
         }
-        // In diagnostic parameter words, @ protects its fields when IFS does not start with a space.
+        // Direct @ in conditional patterns and diagnostic parameter words protects fields with non-space IFS.
+        var conditionalFields = Purpose == ExpansionPurpose.ConditionalPattern && !globQuoted
+            && HasNonSpaceSeparator(fieldSeparators);
         var protectFields = quoteContext == ExpansionQuoteContext.DoubleQuoted
-            || (Purpose == ExpansionPurpose.ErrorMessage && !allowWordSplitting
-                && !fieldSeparators.IsEmpty && fieldSeparators.Bytes.Span[0] != (byte)' ');
+            || (Purpose == ExpansionPurpose.ErrorMessage && !allowWordSplitting && HasNonSpaceSeparator(fieldSeparators))
+            || (conditionalFields && source is AtFieldSource.Array or AtFieldSource.Positional);
+        var dropEmptyFields = conditionalFields && !protectFields;
         var quotedAggregate = Purpose == ExpansionPurpose.Normal && quoteContext == ExpansionQuoteContext.DoubleQuoted
             && _doubleQuote != DoubleQuoteState.Outside;
         _doubleQuoteHasAggregate |= quotedAggregate;
@@ -432,6 +436,8 @@ internal sealed class ExpandedWordBuilder
         foreach (var value in fields)
         {
             _cancellationToken.ThrowIfCancellationRequested();
+            if (dropEmptyFields && value.IsEmpty)
+                continue;
             if (!first)
                 StartNewWord(separator, boundary);
             first = false;

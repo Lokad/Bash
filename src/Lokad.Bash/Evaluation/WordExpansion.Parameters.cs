@@ -412,7 +412,8 @@ internal static partial class WordExpansion
             var emptyPolicy = purpose switch
             {
                 ExpansionPurpose.Scalar when output.EmptyPolicy == ImplicitEmptyPolicy.PreserveAggregate => output.EmptyPolicy,
-                ExpansionPurpose.Scalar or ExpansionPurpose.CasePattern or ExpansionPurpose.Assignment or ExpansionPurpose.AssociativeCompound
+                ExpansionPurpose.Scalar or ExpansionPurpose.ConditionalPattern or ExpansionPurpose.CasePattern
+                    or ExpansionPurpose.Assignment or ExpansionPurpose.AssociativeCompound
                     or ExpansionPurpose.IndexedCompoundOperand or ExpansionPurpose.Arithmetic
                     or ExpansionPurpose.ArithmeticSource => ImplicitEmptyPolicy.Preserve,
                 _ => ImplicitEmptyPolicy.Remove,
@@ -910,6 +911,15 @@ internal static partial class WordExpansion
                 fieldJoin = ParameterFieldJoin.IfsOrSpace;
             if (output.TryAppendSelectedFields(fieldJoin, fields, allowWordSplitting, globQuoted, quoteContext))
                 return;
+            if (output.Purpose == ExpansionPurpose.ConditionalPattern && quoteContext == ExpansionQuoteContext.Unquoted
+                && parameter.Kind == VariableReferenceKind.Star && parameter.RangeSource is ParameterSource.Indexed or ParameterSource.Associative
+                && parsed.Kind is BracedParameterOperatorKind.None or BracedParameterOperatorKind.Transform
+                && FieldSeparators.FromVariables(scope.Variables).IsEmpty)
+            {
+                // These array joins retain literal pattern bytes when the join separator is empty.
+                output.AppendSeparatedFields(fields, ShellValue.Empty, allowWordSplitting: false, globQuoted: true);
+                return;
+            }
             if (quoteContext == ExpansionQuoteContext.HereDocument && parameter.Kind == VariableReferenceKind.Star)
             {
                 HereDocumentJoin? join = parsed.Kind switch
