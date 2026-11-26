@@ -850,14 +850,8 @@ internal sealed class ExpandedWordBuilder
     private bool UsesCaseQuoteBytes(FieldSeparators separators) =>
         _casePatternHasRawQuoteBytes || separators.CaseQuoteDelimiters != CaseQuoteBytes.None;
 
-    private static ShellValue AggregateSeparator(FieldSeparators separators)
-    {
-        if (separators.IsEmpty || separators.Bytes.Span[0] == (byte)' ')
-            return Space;
-        var first = separators.First;
-        // A later expansion can replace IFS. Retain only the separator bytes from its old value.
-        return first.Bytes.Length == separators.Bytes.Length ? first : ShellValue.FromBytes(first.Bytes.Span.ToArray());
-    }
+    private static ShellValue AggregateSeparator(FieldSeparators separators) =>
+        separators.IsEmpty || separators.Bytes.Span[0] == (byte)' ' ? Space : separators.CompactFirst;
 
     private bool ContainsAggregateSeparator(ref FieldSeparators separators, ShellValue first, ShellValue value)
     {

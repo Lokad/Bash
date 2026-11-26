@@ -94,6 +94,28 @@ public sealed class FieldSeparatorsTests : IDisposable
             builder.Build().Select(word => word.ToValue(_memory)));
     }
 
+    [Theory]
+    [InlineData("3A7879", "3A")]
+    [InlineData("FF3A", "FF")]
+    [InlineData("C2A73A", "C2A7")]
+    [InlineData("F09F99823A", "F09F9982")]
+    public void CompactFirstSeparatorCanBeRetainedAcrossIfsChanges(string ifsHex, string firstHex)
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromBytes(Convert.FromHexString(ifsHex))));
+        var original = FieldSeparators.FromVariables(variables);
+        var first = original.CompactFirst;
+        Assert.Equal(ShellValue.FromBytes(Convert.FromHexString(firstHex)), first);
+        Assert.True(first.TryGetCompactArrayCapacity(out var capacity));
+        Assert.Equal(first.Bytes.Length, capacity);
+        Assert.True(first.Bytes.Equals(original.CompactFirst.Bytes));
+        Assert.True(first.Bytes.Equals(Prepare(variables.Clone()).CompactFirst.Bytes));
+
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(",:")));
+        Assert.Equal(ShellValue.FromText(","), FieldSeparators.FromVariables(variables).CompactFirst);
+        Assert.True(first.Bytes.Equals(original.CompactFirst.Bytes));
+    }
+
     [Fact]
     public void CaseQuoteDelimitersFollowTheSelectedIfsSnapshot()
     {
@@ -151,10 +173,12 @@ public sealed class FieldSeparatorsTests : IDisposable
             {
                 var shared = FieldSeparators.FromVariables(clone);
                 Assert.Same(separators, shared);
+                var compact = shared.CompactFirst;
                 var prepared = shared.PrepareCharacters(clone, memory, CancellationToken.None)
                     .PrepareBytes(clone, memory, CancellationToken.None);
                 Assert.NotSame(shared, prepared);
                 Assert.Same(prepared, FieldSeparators.FromVariables(clone));
+                Assert.True(compact.Bytes.Equals(prepared.CompactFirst.Bytes));
                 Assert.True(prepared.Contains(new Rune('é')));
                 Assert.False(prepared.Contains(Rune.ReplacementChar));
                 Assert.True(prepared.Contains((byte)0xFF));

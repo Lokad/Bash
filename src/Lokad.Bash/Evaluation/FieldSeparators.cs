@@ -20,11 +20,12 @@ internal sealed class FieldSeparators
     /// <summary>The separator bytes, including any malformed UTF-8.</summary>
     private readonly ShellValue _value;
 
-    // A published snapshot never grows. A child can share completed indexes, but
-    // new backing belongs to a replacement snapshot in that child's variable scope.
+    // The membership indexes are immutable after publication. New index backing
+    // belongs to a replacement snapshot in the active variable scope.
     private readonly HashSet<Rune>? _characters;
     private readonly ByteMembership? _byteMembership;
     private volatile CaseQuoteBytes _caseQuoteDelimiters;
+    private byte[]? _compactFirst;
 
     /// <summary>Initializes separators from an <c>IFS</c> value.</summary>
     private FieldSeparators(ShellValue value, HashSet<Rune>? characters, ByteMembership? byteMembership)
@@ -48,6 +49,27 @@ internal sealed class FieldSeparators
         get
         {
             return ShellValue.FromBytes(Bytes[..Utf8Text.FirstCharacterLength(Bytes.Span)]);
+        }
+    }
+
+    /// <summary>Gets the first separator from nonempty IFS without retaining the rest of its value.</summary>
+    internal ShellValue CompactFirst
+    {
+        get
+        {
+            var cached = Volatile.Read(ref _compactFirst);
+            if (cached != null)
+                return ShellValue.FromBytes(cached);
+
+            var first = First;
+            if (first.Bytes.Length == Bytes.Length)
+                return first;
+            if (first.Bytes.Span is [var single])
+                return ShellValue.FromByte(single);
+
+            // The snapshot retains at most one compact UTF-8 scalar and may be shared by children.
+            var compact = first.Bytes.Span.ToArray();
+            return ShellValue.FromBytes(Interlocked.CompareExchange(ref _compactFirst, compact, null) ?? compact);
         }
     }
 
@@ -154,7 +176,11 @@ internal sealed class FieldSeparators
 
     private FieldSeparators Publish(Variables variables, HashSet<Rune>? characters, ByteMembership? byteMembership)
     {
-        var prepared = new FieldSeparators(_value, characters, byteMembership) { _caseQuoteDelimiters = _caseQuoteDelimiters };
+        var prepared = new FieldSeparators(_value, characters, byteMembership)
+        {
+            _caseQuoteDelimiters = _caseQuoteDelimiters,
+            _compactFirst = Volatile.Read(ref _compactFirst),
+        };
         if (ReferenceEquals(variables.CachedFieldSeparators, this))
             variables.CachedFieldSeparators = prepared;
         return prepared;
