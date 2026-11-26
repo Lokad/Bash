@@ -1,3 +1,5 @@
+using System;
+
 namespace Lokad.Bash.Evaluation;
 
 public partial class Evaluation
@@ -67,6 +69,7 @@ public partial class Evaluation
         public bool DefersLoadedErrexit { get; private init; }
 
         private ExitCause Cause { get; init; }
+        private int RejectedCommandLine { get; init; }
 
         /// <summary>Unwinds through the active command unit to its outer script reader.</summary>
         public bool DiscardsCommandUnit => Cause == ExitCause.ExtraArguments || DiscardsLoadedCommandUnit;
@@ -75,6 +78,10 @@ public partial class Evaluation
         public bool DiscardsLoadedCommandUnit => Cause is ExitCause.CompoundInitializerSyntax or ExitCause.HereDocumentSyntax;
 
         public bool DiscardsHereDocumentUnit => Cause == ExitCause.HereDocumentSyntax;
+
+        /// <summary>A reached simple command can leave its reader at an earlier line than the completed unit.</summary>
+        public int ReaderLineAdjustment(int unitEndLine) => RejectedCommandLine != 0 && unitEndLine != 0
+            ? Math.Min(0, RejectedCommandLine - unitEndLine) : 0;
 
         /// <summary>Runs EXIT after restoring the inner reader of a direct pipeline builtin.</summary>
         public bool ExitsNestedPipelineReader => Cause == ExitCause.NestedPipelineReader;
@@ -136,8 +143,8 @@ public partial class Evaluation
         public static EvaluationResult DiscardCompoundInitializerUnit() =>
             Exit(1) with { Cause = ExitCause.CompoundInitializerSyntax };
 
-        public static EvaluationResult DiscardHereDocumentUnit(int exitCode) =>
-            Exit(exitCode) with { Cause = ExitCause.HereDocumentSyntax };
+        public static EvaluationResult DiscardHereDocumentUnit(int exitCode, int rejectedCommandLine) =>
+            Exit(exitCode) with { Cause = ExitCause.HereDocumentSyntax, RejectedCommandLine = rejectedCommandLine };
 
         public static EvaluationResult InvalidLoopCount(int exitCode) =>
             Exit(exitCode) with { Cause = ExitCause.InvalidLoopCount };

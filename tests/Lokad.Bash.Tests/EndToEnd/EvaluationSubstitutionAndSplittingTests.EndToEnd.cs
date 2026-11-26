@@ -361,6 +361,109 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
         : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
 
+    private const string ReportLineAndStatus = "printf '<%s|%s>' \"$LINENO\" \"$?\"\n";
+    private const string BadDocumentBody = "$( ! )\nDOC\n";
+    private const string DiscardedDocumentCommand = ": <<DOC\n" + BadDocumentBody;
+
+    [Theory]
+    [InlineData(DiscardedDocumentCommand, "<2|1><3|0>")]
+    [InlineData(": <<DOC\nhead\n$( ! )\ntail\nDOC\n", "<2|1><3|0>")]
+    [InlineData(": <<DOC; printf skipped\n" + BadDocumentBody, "<2|1><3|0>")]
+    [InlineData("printf \\\n%s \\\nskipped <<DOC\n" + BadDocumentBody, "<3|1><4|0>")]
+    [InlineData("value=seed \\\n: <<DOC\n" + BadDocumentBody, "<2|1><3|0>")]
+    [InlineData(": <<FIRST <<DOC\nfirst\nsecond\nFIRST\n" + BadDocumentBody, "<2|1><3|0>")]
+    [InlineData(DiscardedDocumentCommand + ": <<GOOD\nfirst\nsecond\nGOOD\n", "<6|0><7|0>")]
+    [InlineData("false && : <<DOC\n" + BadDocumentBody, "<4|1><5|0>")]
+    [InlineData(": <<'DOC'\n" + BadDocumentBody, "<4|0><5|0>")]
+    [InlineData(": <<DOC\n`printf incomplete\nDOC\n", "<2|1><3|0>")]
+    public async Task RejectedDocumentRebasesTheRemainingReaderLines(string prior, string expected)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(prior + ReportLineAndStatus + ReportLineAndStatus, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("{\n" + DiscardedDocumentCommand + "printf skipped\n}\n", "<3|1><4|0>")]
+    [InlineData("{\n:\n} <<DOC\n" + BadDocumentBody, "<6|1><7|0>")]
+    [InlineData("f() {\n" + DiscardedDocumentCommand + "printf skipped\n}\nf\n", "<8|1><9|0>")]
+    [InlineData("(\n" + DiscardedDocumentCommand + ReportLineAndStatus + ")\n", "<7|1><8|0>")]
+    [InlineData(": <<DOC | :\n" + BadDocumentBody, "<4|1><5|0>")]
+    public async Task DocumentFailureAdjustsOnlyTheReaderThatResumesItsUnit(string prior, string expected)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(prior + ReportLineAndStatus + ReportLineAndStatus, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task SuccessiveDiscardedDocumentsRebaseLaterCommandsAndDiagnostics()
+    {
+        const string script = DiscardedDocumentCommand + ReportLineAndStatus
+            + ": <<DOC\nhead\n$( ! )\ntail\nDOC\n"
+            + "declare -p absent\n" + ReportLineAndStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<2|1><5|1>", host.StandardOutput.TextContent);
+            Assert.Contains("command substitution: line 4: syntax error", host.StandardError.TextContent);
+            Assert.Contains("line 4: declare: absent: not found", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task StreamedParserDiagnosticUsesTheRebasedReaderCoordinate()
+    {
+        const string script = DiscardedDocumentCommand + "for ((; ; ; extra)); do :; done\n";
+        await using var host = new TestHost();
+        Assert.Equal(2, (await host.RunAsync(script, CancellationToken.None)).ExitCode);
+        Assert.Contains("line 2: syntax error: `;' unexpected", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(true, "<2|1><3|0><2|0><3|0>")]
+    [InlineData(false, "<7|1><8|0><7|0><8|0>")]
+    public async Task ALoadedReaderRestoresItsCallersLineCount(bool source, string expected)
+    {
+        const string reader = DiscardedDocumentCommand + ReportLineAndStatus + ReportLineAndStatus;
+        var invocation = source ? ". ./reader" : "eval " + ShellArgumentEscaping.EscapeArgument(reader);
+        var script = invocation + "\n" + ReportLineAndStatus + ReportLineAndStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            if (source)
+                host.AddFile("/reader", reader);
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(expected, host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task FunctionExitActionRebasesItsOwnReaderLines()
+    {
+        var action = ShellArgumentEscaping.EscapeArgument(DiscardedDocumentCommand + ReportLineAndStatus + ReportLineAndStatus);
+        var script = "f() { trap " + action + " EXIT; exit 0; }\nf\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<2|1><3|0>", host.StandardOutput.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     private const string InspectTemporaryPrefix = "probe=temp declare -p probe\n";
     private const string InspectFieldSeparators = "set -- left right; printf '[%s|%s]' \"$IFS\" \"$*\"";
 

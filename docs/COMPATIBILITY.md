@@ -1433,6 +1433,11 @@ element ends. Rendered word-capture diagnostics and array-reader callbacks use
 the same command coordinate. Functions defined in a script retain their defining
 source coordinates. Sourced files and EXIT action source start at line 1, and
 `eval` bases its coordinates on the calling command's parsed line.
+When a simple command abandons its reader unit after rejected substitution syntax
+in a here-document, the reader resumes line numbering from the reached command
+line. Diagnostics and `LINENO` use this adjustment in the remaining input. A
+loaded reader or EXIT action tracks its own adjustment. Functions keep their
+definition coordinates, and a failure there leaves the caller's line count intact.
 Parenthesized captures project the command coordinate into the rendered body layout.
 Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an

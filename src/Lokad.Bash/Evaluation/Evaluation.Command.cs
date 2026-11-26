@@ -260,6 +260,15 @@ public sealed partial class Evaluation
                         }
                         if (index + 1 == traversal.Count)
                             return ApplyNegation(result, listNegated);
+                        var adjustment = result.ReaderLineAdjustment(unitScope.Context.Coordinates.UnitReadLine);
+                        if (adjustment != 0)
+                        {
+                            var location = listScope.Context.Coordinates;
+                            listScope = listScope with
+                            {
+                                Context = listScope.Context.WithCoordinates(location with { Offset = location.Offset + adjustment })
+                            };
+                        }
                         result = resumeDiscard
                             ? await RecoverDiscardedCommandUnitAsync(listScope, result, listScope.InNestedCommandUnits).ConfigureAwait(false)
                             : ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus.GetValueOrDefault(), listScope,

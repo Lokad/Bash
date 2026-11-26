@@ -683,7 +683,7 @@ public sealed partial class Evaluation : IFileTester
                     result = await CompleteHereDocumentParameterFailureAsync(redirectionExitCode, scope).ConfigureAwait(false);
                 else
                     result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope, redirectionScope,
-                        isolated: false).ConfigureAwait(false);
+                        isolated: false, fromSimpleCommand: false).ConfigureAwait(false);
             }
             else
             {
@@ -730,17 +730,18 @@ public sealed partial class Evaluation : IFileTester
         if (ReaderErrexitEnabled(scope))
             return RunExitTrapAsync(scope, EvaluationResult.Exit(status), ExitTrapKind.Expansion);
         var result = _state.FatalExpansion is { } fatal
-            ? EvaluationResult.Exit(fatal.ExitCode) : EvaluationResult.DiscardHereDocumentUnit(1);
+            ? EvaluationResult.Exit(fatal.ExitCode) : EvaluationResult.DiscardHereDocumentUnit(1, rejectedCommandLine: 0);
         return ValueTask.FromResult(result);
     }
 
     private ValueTask<EvaluationResult> CompleteRedirectionFailureAsync(
-        int status, ExpansionErrorKind kind, ScopedEvaluation scope, RedirectionScope redirections, bool isolated)
+        int status, ExpansionErrorKind kind, ScopedEvaluation scope, RedirectionScope redirections,
+        bool isolated, bool fromSimpleCommand)
     {
         if (kind == ExpansionErrorKind.HereDocumentParameter && _state.FatalExpansion.HasValue)
             return CompleteHereDocumentParameterFailureAsync(status, scope);
         if (IsHereDocumentSyntaxFailure(kind) && _state.FatalExpansion == null)
-            return CompleteHereDocumentSyntaxFailureAsync(kind, scope, redirections, isolated);
+            return CompleteHereDocumentSyntaxFailureAsync(kind, scope, redirections, isolated, fromSimpleCommand);
         if (_state.FatalExpansion is { Kind: ExpansionFailureKind.ArrayRead } failure)
             return RunExitTrapAsync(scope, EvaluationResult.Exit(failure.ExitCode), ExitTrapKind.Expansion);
         return new ValueTask<EvaluationResult>(FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated: false));
@@ -750,7 +751,8 @@ public sealed partial class Evaluation : IFileTester
         ExpansionErrorKind.HereDocumentSyntax or ExpansionErrorKind.HereDocumentReaderSyntax or ExpansionErrorKind.HereDocumentNestedSyntax;
 
     private async ValueTask<EvaluationResult> CompleteHereDocumentSyntaxFailureAsync(
-        ExpansionErrorKind kind, ScopedEvaluation scope, RedirectionScope? redirections, bool isolated)
+        ExpansionErrorKind kind, ScopedEvaluation scope, RedirectionScope? redirections,
+        bool isolated, bool fromSimpleCommand)
     {
         var previous = _state.LastExitCode.GetValueOrDefault();
         var recoveryStatus = previous == 0 ? 1 : previous;
@@ -787,7 +789,12 @@ public sealed partial class Evaluation : IFileTester
         if (kind == ExpansionErrorKind.HereDocumentReaderSyntax && _state.ForkKind == null
             && scope.Variables.TryKeepEmptyRecoveryPipelineStatus(Memory))
             _state.LastExitCode = recoveryStatus;
-        return await PreserveReachedBindingsAsync(EvaluationResult.DiscardHereDocumentUnit(recoveryStatus)).ConfigureAwait(false);
+        // A function body keeps its own definition coordinates. Only the active
+        // reader's simple commands can rebase the remaining input of that reader.
+        var coordinates = scope.Context.Coordinates;
+        var commandLine = fromSimpleCommand && coordinates.FunctionBodyLine == 0 ? coordinates.Line : 0;
+        return await PreserveReachedBindingsAsync(EvaluationResult.DiscardHereDocumentUnit(recoveryStatus, commandLine))
+            .ConfigureAwait(false);
 
         async ValueTask<EvaluationResult> PreserveReachedBindingsAsync(EvaluationResult result)
         {
@@ -867,7 +874,8 @@ public sealed partial class Evaluation : IFileTester
                     .ConfigureAwait(false);
                 if (_state.TryConsumeExpansionError(out var redirectionExitCode, out var errorKind))
                     result = IsHereDocumentSyntaxFailure(errorKind)
-                        ? await CompleteHereDocumentSyntaxFailureAsync(errorKind, childScope, redirections: null, isolated: false)
+                        ? await CompleteHereDocumentSyntaxFailureAsync(errorKind, childScope, redirections: null,
+                            isolated: false, fromSimpleCommand: false)
                             .ConfigureAwait(false)
                         : EvaluationResult.FromExitCode(redirectionExitCode);
             }
@@ -1230,7 +1238,7 @@ public sealed partial class Evaluation : IFileTester
                 redirectionFailed = _state.TryConsumeExpansionError(out var assignmentRedirectionExitCode, out var errorKind);
                 if (redirectionFailed)
                     assignmentResult = await CompleteRedirectionFailureAsync(assignmentRedirectionExitCode, errorKind, scope,
-                            redirectionScope, isolated: isolateRedirections)
+                            redirectionScope, isolated: isolateRedirections, fromSimpleCommand: true)
                         .ConfigureAwait(false);
                 else
                 {
@@ -1507,7 +1515,7 @@ public sealed partial class Evaluation : IFileTester
                 // A failed redirection never enters exec, so it neither replaces the shell
                 // nor suppresses timing. Fatal expansion errors still terminate the evaluator.
                 return await CompleteRedirectionFailureAsync(redirectionError, errorKind, scope, commandRedirections,
-                    isolated: externalRedirections).ConfigureAwait(false);
+                    isolated: externalRedirections, fromSimpleCommand: true).ConfigureAwait(false);
             }
 
             if (preparation.RedirectionLifetime == RedirectionLifetime.Evaluation

@@ -517,7 +517,17 @@ public sealed partial class Evaluation
                 if (_state.ForkKind == null
                     && (kind == ScriptExecutionKind.Root && result.DiscardsCommandUnit
                         || IsLoadedReader(kind) && result.DiscardsLoadedCommandUnit))
+                {
+                    // The parser retains physical source locations. Rebase only this
+                    // reader's projection after the remainder of the unit is discarded.
+                    if (commands.Current.UnitReadLine != 0)
+                    {
+                        var adjustment = result.ReaderLineAdjustment(lineOffset + commands.Current.UnitReadLine);
+                        lineOffset += adjustment;
+                        readerLineOffset += adjustment;
+                    }
                     result = await RecoverDiscardedCommandUnitAsync(scope, result, IsLoadedReader(kind)).ConfigureAwait(false);
+                }
                 else if (result.Flow == FlowControlKind.Exit)
                 {
                     if (nestedLoadedReader && _state.FatalExpansion is { UnwindsLoadedReader: true })
