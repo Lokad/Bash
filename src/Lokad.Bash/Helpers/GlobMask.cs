@@ -19,6 +19,7 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
     public GlobMaskSpan AsSpan() => new(mask.Span);
 
     /// <summary>Removes active backslash escapes while retaining which resulting bytes are literal.</summary>
+    /// <returns>False for a terminal active backslash, which stays in the returned pattern.</returns>
     internal bool TryUnescape(ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken,
         out ShellValue unescaped, out GlobMask unescapedMask)
     {
@@ -29,6 +30,8 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
         var firstEscape = activityMask.IndexOfActiveByte(bytes, "\\"u8, cancellationToken);
         if (firstEscape < 0)
             return true;
+        if (firstEscape == bytes.Length - 1)
+            return false;
 
         memory.Charge(checked(4L * (2L * bytes.Length)));
         var content = new byte[bytes.Length];
@@ -40,6 +43,7 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
             mask.Span[..firstEscape].CopyTo(activity);
         var count = firstEscape;
         var escapedQuote = false;
+        var terminalEscape = false;
         for (var index = firstEscape; index < bytes.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -48,23 +52,26 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
             if (active == Active && bytes[index] == (byte)'\\')
             {
                 if (index + 1 == bytes.Length)
-                    return false;
-                if (activityMask[index + 1] != Active || bytes[index + 1] is 1 or 127)
+                    terminalEscape = true;
+                else if (activityMask[index + 1] != Active || bytes[index + 1] is 1 or 127)
                 {
                     // Bash exposes its quoted-byte marker when an unquoted backslash consumes it.
                     content[count++] = 1;
                     escapedQuote = true;
                     continue;
                 }
-                index++;
-                active = 0;
+                else
+                {
+                    index++;
+                    active = 0;
+                }
             }
             content[count] = bytes[index];
             activity[count++] = active;
         }
         unescaped = ShellValue.FromBytes(content.AsMemory(0, count));
         unescapedMask = new GlobMask(activity.AsMemory(0, count));
-        return true;
+        return !terminalEscape;
     }
 }
 

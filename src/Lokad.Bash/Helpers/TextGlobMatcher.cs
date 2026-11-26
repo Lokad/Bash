@@ -152,6 +152,27 @@ public static class TextGlobMatcher
         }
     }
 
+    /// <summary>Checks bracket structure when a shell-word pattern has an active terminal escape.</summary>
+    internal static bool HasIncompleteBracket(ReadOnlySpan<byte> pattern, in GlobMaskSpan mask,
+        CancellationToken cancellationToken)
+    {
+        var input = new GlobInput(pattern, byteCharacters: false, reverse: false);
+        var scan = default(BracketScan);
+        for (var position = 0; position < pattern.Length;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (pattern[position] == (byte)'[' && mask[position] == GlobMask.Active)
+            {
+                var members = new BracketMembership(-1, default);
+                if (!TryReadBracket(input, in mask, ref position, ref members, ref scan, cancellationToken))
+                    return true;
+            }
+            else
+                position++;
+        }
+        return false;
+    }
+
     /// <summary>Matches a complete text value with cooperative cancellation.</summary>
     public static GlobMatchResult MatchText(
         ReadOnlySpan<char> pattern, in GlobMaskSpan mask, ReadOnlySpan<char> text,

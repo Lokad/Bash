@@ -459,6 +459,22 @@ public sealed class ParameterTransformTests
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData(@"t*?\", "<trail*\\><trail*\\><trail*\\><trail*\\>")]
+    [InlineData(@"t*\*\", "<><><><>")]
+    public async Task ParameterRemovalPreservesEscapingBeforeATerminalBackslash(string pattern, string expected)
+    {
+        var script = $$"""
+            p='{{pattern}}'; v='trail*\'
+            printf '<%s>' "${v#$p}" "${v##$p}" "${v%$p}" "${v%%$p}"
+            """;
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task EmptyCasePatternCaptureRunsOnceBeforeConversion()
     {

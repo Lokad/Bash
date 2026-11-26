@@ -26,12 +26,11 @@ internal sealed class ShellPattern
     public bool RequiresByteCharacters { get; }
     private GlobMaskSpan Mask => _mask == null ? default : _mask.AsSpan();
 
-    public static ShellPattern FromWords(
+    /// <summary>Prepares a shell-word pattern, returning null if it cannot match any subject.</summary>
+    public static ShellPattern? FromWords(
         IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
-    {
-        var (value, mask) = PrepareWords(words, memory, cancellationToken);
-        return FromUnescaped(value, mask, memory, cancellationToken);
-    }
+        => TryPrepareWords(words, memory, cancellationToken, out var value, out var mask)
+            ? FromUnescaped(value, mask, memory, cancellationToken) : null;
 
     /// <summary>Retains an already unescaped value and its quoting metadata for this command's matching.</summary>
     public static ShellPattern FromUnescaped(ShellValue value, GlobMask? mask, EvaluationMemory memory, CancellationToken cancellationToken)
@@ -54,9 +53,9 @@ internal sealed class ShellPattern
     public static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
         EvaluationMemory memory, CancellationToken cancellationToken, ref bool? subjectHasMalformedUtf8)
     {
-        var (value, activity) = PrepareWords(words, memory, cancellationToken);
+        if (!TryPrepareWords(words, memory, cancellationToken, out var value, out var activity))
+            return false;
         var bytes = value.Bytes.Span;
-        cancellationToken.ThrowIfCancellationRequested();
         if (activity == null)
             return text.SequenceEqual(bytes);
 
@@ -74,16 +73,34 @@ internal sealed class ShellPattern
             requireEnd: true, byteCharacters, memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
     }
 
-    private static (ShellValue Value, GlobMask? Mask) PrepareWords(
-        IReadOnlyList<ExpandedWord> words, EvaluationMemory memory, CancellationToken cancellationToken)
+    private static bool TryPrepareWords(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory,
+        CancellationToken cancellationToken, out ShellValue value, out GlobMask? mask)
     {
-        var (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
-        if (mask != null)
+        (value, mask) = ExpandedWord.JoinPatternWithSpaces(words, memory);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (mask == null)
+            return true;
+
+        var complete = mask.TryUnescape(value, memory, cancellationToken, out value, out var unescapedMask);
+        mask = unescapedMask;
+        if (complete)
+            return true;
+
+        // Bash reads a final backslash literally unless a star's wildcard run reaches it.
+        var bytes = value.Bytes.Span;
+        var activity = unescapedMask.AsSpan();
+        for (var index = bytes.Length - 2; index >= 0; index--)
         {
-            _ = mask.TryUnescape(value, memory, cancellationToken, out value, out var unescapedMask);
-            mask = unescapedMask;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (activity[index] != GlobMask.Active)
+                break;
+            if (bytes[index] == (byte)'*')
+                return false;
+            if (bytes[index] != (byte)'?')
+                break;
         }
-        return (value, mask);
+        // A terminal escape inside an incomplete bracket makes the pattern fail.
+        return !TextGlobMatcher.HasIncompleteBracket(bytes, in activity, cancellationToken);
     }
 
     private static bool IsLiteral(ReadOnlySpan<byte> bytes, GlobMaskSpan mask, CancellationToken cancellationToken) =>

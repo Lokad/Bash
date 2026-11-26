@@ -413,6 +413,48 @@ public sealed class EvaluationConditionalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CaseAndConditionalPatternsDistinguishTheWildcardRunBeforeATerminalBackslash(bool prepared)
+    {
+        const string script = """
+            subject='trail?\'
+            for pattern in 't*?\' 't*\?\'; do
+                case $subject in $pattern) printf hit;; *) printf miss;; esac
+                if [[ $subject != $pattern ]]; then printf miss; else printf hit; fi
+            done
+            """;
+        await using var host = new TestHost();
+        var status = prepared
+            ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+            : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+        Assert.Equal(0, status);
+        Assert.Equal("missmisshithit"u8.ToArray(), host.StandardOutput.Content.ToArray());
+        Assert.True(host.StandardError.Content.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData(@"[?\", "[a\\", "missmiss<[a\\><[a\\>")]
+    [InlineData(@"[\a\", "[a\\", "missmiss<[a\\><[a\\>")]
+    [InlineData(@"[a]\", "a\\", "hithit<><>")]
+    [InlineData(@"\[a\", "[a\\", "hithit<><>")]
+    public async Task TerminalBackslashRespectsBracketBoundaries(string pattern, string subject, string expected)
+    {
+        var script = $$"""
+            p='{{pattern}}'; v='{{subject}}'
+            case $v in $p) printf hit;; *) printf miss;; esac
+            if [[ $v == $p ]]; then printf hit; else printf miss; fi
+            printf '<%s>' "${v##$p}" "${v%%$p}"
+            """;
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(false, "'7'", "373A6D697373")]
     [InlineData(false, "$'\\377'", "FF7C373A6D697373")]
     [InlineData(true, "'7'", "373A6D697373")]

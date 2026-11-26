@@ -8,6 +8,23 @@ namespace Lokad.Bash.Tests;
 
 public sealed class PatternTraversalTests
 {
+    [Fact]
+    public void TerminalEscapeKeepsPreviouslyDecodedBytesAndActivity()
+    {
+        var raw = ShellValue.FromBytes(new byte[] { (byte)'\\', (byte)'*', 0xff, (byte)'\\' });
+        var mask = new GlobMask(ReadOnlyMemory<byte>.Empty);
+        var governor = new MemoryGovernor(1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.False(mask.TryUnescape(raw, memory, CancellationToken.None, out var decoded, out var activity));
+            Assert.Equal(new byte[] { (byte)'*', 0xff, (byte)'\\' }, decoded.Bytes.ToArray());
+            Assert.Equal(new byte[] { 0, GlobMask.Active, GlobMask.Active }, activity.Memory.ToArray());
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(4095)]
     [InlineData(4096)]
@@ -433,6 +450,7 @@ public sealed class PatternTraversalTests
             if (prepareMatcher)
             {
                 var pattern = ShellPattern.FromWords(words, memory, CancellationToken.None);
+                Assert.NotNull(pattern);
                 Assert.True(pattern.TryMatchPrefix(bytes, shortest: true, CancellationToken.None, out var length));
                 Assert.Equal(bytes.Length, length);
                 Assert.False(pattern.TryMatchSuffix(different, shortest: false, CancellationToken.None, out _));

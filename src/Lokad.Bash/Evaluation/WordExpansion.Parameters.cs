@@ -342,6 +342,8 @@ internal static partial class WordExpansion
 
                 ShellValue RemoveField(ShellValue value, MemoryCapacity scratch)
                 {
+                    if (pattern == null)
+                        return value;
                     var slice = ApplyPatternRemoval(value, pattern, parsed.Kind, scope.Effects.CancellationToken);
                     if (slice.Length == value.Bytes.Length)
                         return value;
