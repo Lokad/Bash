@@ -462,10 +462,19 @@ internal sealed class ShellSourceCursor
                 continue;
 
             var precedingQuote = cursor._quote;
-            if (!cursor.TryConsumeQuoteOrEscape()
-                && cursor.SkipNestedExpansion(BracedParameterRecognition.All) is not ShellNestedExpansionScan.Complete)
+            if (!cursor.TryConsumeQuoteOrEscape())
             {
-                cursor.Advance();
+                if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is not ShellNestedExpansionScan.Complete)
+                    cursor.Advance();
+                else if (findSeparators && separatorScan == SeparatorScan.Validate
+                    && ArithmeticExpansionScanner.HasMissingCaptureCloser(source, start, cursor.Position,
+                        cursor.IsDoubleQuoted, context.SyntaxMemory))
+                {
+                    // An incomplete capture consumes the remaining clause spelling.
+                    if (result == null)
+                        break;
+                    findSeparators = false;
+                }
             }
             if (findSeparators && !separators.HasExtra && !cursor.IsQuoted && source[start] == (byte)';')
             {

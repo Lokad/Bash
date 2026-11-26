@@ -147,11 +147,11 @@ internal static class ArithmeticExpansionScanner
             captureExpression: false, form: ArithmeticForm.AdjacentSubshell, trackRenderedLines: false,
             trackIncompleteDelimiter: false) == ShellScanStatus.Complete;
 
-    // The reached word reader extracts the outer pair before choosing arithmetic.
+    // Reached readers can match parentheses without executing the command grammar.
     internal static ShellScanStatus ScanReachedParentheses(ShellScanContext context, ShellSource text, int startIndex,
         out int endIndex, out bool containsCommandSubstitution, out int renderedLineAdjustment, out ParserFailure? error) =>
         ScanCore(context, text, startIndex, out endIndex, out _, out containsCommandSubstitution, out _, out _,
-            out renderedLineAdjustment, out error, captureExpression: false, form: ArithmeticForm.AdjacentSubshell,
+            out renderedLineAdjustment, out error, captureExpression: false, form: ArithmeticForm.ReachedParentheses,
             trackRenderedLines: false, trackIncompleteDelimiter: true);
 
     internal static bool HasPossibleExpansionComment(ReadOnlySpan<byte> source)
@@ -163,6 +163,46 @@ internal static class ArithmeticExpansionScanner
             source = source[(hash + 1)..];
         }
         return false;
+    }
+
+    /// <summary>Checks expansions in quotes while reading the raw arithmetic operand.</summary>
+    internal static bool HasMissingCloserInOperandQuotes(ShellSource source, bool bracketed, MemoryCapacity? memory)
+    {
+        var spelling = source.AsSpan();
+        if (!spelling.Contains((byte)'"') || !HasPossibleExpansionComment(spelling))
+            return false;
+
+        var context = new ShellScanContext { SyntaxMemory = memory, ReadArithmeticExpansionComments = true };
+        var cursor = new ShellSourceCursor(source, 0, context);
+        while (!cursor.IsAtEnd)
+        {
+            if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC: false))
+                continue;
+            // The bracket delimiter reader skips legacy captures before checking quotes.
+            if (cursor.IsDoubleQuoted || bracketed && !cursor.IsQuoted && cursor.Current == (byte)'`')
+            {
+                var nested = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
+                if (context.MissingReachedArithmeticParenthesis)
+                    return true;
+                if (nested is ShellNestedExpansionScan.Complete)
+                    continue;
+            }
+            cursor.Advance();
+        }
+        return false;
+    }
+
+    /// <summary>Checks the capture spelling during a read for arithmetic operand separators.</summary>
+    internal static bool HasMissingCaptureCloser(ShellSource source, int start, int end, bool quoted, MemoryCapacity? memory)
+    {
+        var spelling = source.AsSpan(start, end - start);
+        if (!ShellSourceCursor.TryMatchLogicalText(spelling, 0, quoted ? "$((" : "$(", out _)
+            || !HasPossibleExpansionComment(spelling))
+            return false;
+
+        var context = new ShellScanContext { SyntaxMemory = memory, ReadArithmeticExpansionComments = true };
+        _ = ScanReachedParentheses(context, source[..end], start, out _, out _, out _, out _);
+        return context.MissingReachedArithmeticParenthesis;
     }
 
     internal readonly record struct ReachedParentheses(int End, CommandSubstitutionSyntax.AdjacentSubshell? Subshell, bool Missing);
@@ -308,10 +348,12 @@ internal static class ArithmeticExpansionScanner
 
         var span = text.AsSpan();
         var isCommand = form is ArithmeticForm.Command or ArithmeticForm.ForHeader;
+        var reachedParentheses = form == ArithmeticForm.ReachedParentheses;
         var adjacentSubshell = form == ArithmeticForm.AdjacentSubshell;
         int expressionStart;
         var hasPrefix = isCommand ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "((", out expressionStart)
             : adjacentSubshell ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "$((", out expressionStart)
+            : reachedParentheses ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "$(", out expressionStart)
             : TryReadExpansionPrefix(span, startIndex, out expressionStart, out bracketed);
         if (!hasPrefix)
             return ShellScanStatus.NotFound;
@@ -324,7 +366,7 @@ internal static class ArithmeticExpansionScanner
             var opening = bracketed ? (byte)'[' : (byte)'(';
             var closing = bracketed ? (byte)']' : (byte)')';
             var depth = adjacentSubshell ? 1 : 0;
-            var readComments = adjacentSubshell && context.ReadArithmeticExpansionComments;
+            var readComments = reachedParentheses && context.ReadArithmeticExpansionComments;
             var sawComment = false;
             while (!cursor.IsAtEnd)
             {
@@ -391,7 +433,7 @@ internal static class ArithmeticExpansionScanner
                     continue;
                 }
 
-                if (adjacentSubshell)
+                if (adjacentSubshell || reachedParentheses)
                 {
                     endIndex = cursor.Position;
                     return ShellScanStatus.Complete;
@@ -525,5 +567,6 @@ internal static class ArithmeticExpansionScanner
         Command,
         ForHeader,
         AdjacentSubshell,
+        ReachedParentheses,
     }
 }

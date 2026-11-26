@@ -887,6 +887,15 @@ internal static partial class WordExpansion
                     return null;
                 }
                 var arithmetic = prepared?.Operand;
+                if (arithmetic is not { DirectOperand: not null }
+                    && ArithmeticExpansionScanner.HasMissingCloserInOperandQuotes(arithmetic?.Source ?? expression,
+                        bracketed, scope.Effects.Memory.Workspace))
+                {
+                    var spelling = bracketed ? content : arithmetic?.Source ?? expression;
+                    await ReportWordSyntaxAsync(spelling.ToValue(), WordSyntaxFailure.MissingArithmeticParenthesis, scope,
+                            hereDocument: quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                    return null;
+                }
                 // Arithmetic and braced parameter operands start their own expansion.
                 var operandScope = scope with
                 {

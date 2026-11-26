@@ -138,7 +138,21 @@ public sealed class ArithmeticErrorTestsEndToEnd
         0, "<1>", "line 3: bad substitution: no closing `)' in $((1 # note))\n\n")]
     [InlineData("set -e\ntrap 'printf \"exit:%s\" \"$?\"' EXIT\nprintf \"%s\" \"$((1 # note))\"\nprintf later",
         1, "exit:1", "line 3: bad substitution: no closing `)' in \"$((1 # note))\"\n")]
-    public async Task ModernArithmeticCommentDelimitersAreCheckedBeforeOperandExpansion(
+    [InlineData("v=0\nprintf '<%s>' \"$(( $((v=5)) + " + QuotedChild + " ))\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "[after:1:0]", "line 2: bad substitution: no closing `)' in  $((v=5)) + " + QuotedChild + " \n")]
+    [InlineData("v=0\nprintf '<%s>' \"$(( $((v=5)) + $(printf 3; printf %s $((1 # note))) ))\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "<8>[after:0:5]", "line 2: bad substitution: no closing `)' in $((1 # note))\n")]
+    [InlineData("v=0\nprintf '<%s>' \"pre$((v=5))$[1+" + QuotedChild + "]tail\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "[after:1:5]", "line 2: bad substitution: no closing `)' in pre$((v=5))$[1+" + QuotedChild + "]tail\n")]
+    [InlineData("v=0; text=abcdef\nprintf '<%s>' \"${text:" + QuotedChild + ":2}\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "[after:1:0]", "line 2: bad substitution: no closing `)' in " + QuotedChild + ":2\n")]
+    [InlineData("v=0; text=abcdef\nprintf '<%s>' \"${text:$((v=1)):" + QuotedChild + "}\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "<bcd>[after:0:1]", "line 2: bad substitution: no closing `)' in \"$((1 # note))\"\n")]
+    [InlineData("present=kept\nprintf '<%s>' \"${present:-$((1+" + QuotedChild + "))}\"\nprintf '[after:%s]' \"$?\"",
+        0, "<kept>[after:0]", "")]
+    [InlineData("v=0\nfor ((v=0; v<1; v=1+" + QuotedChild + ")); do printf body; done\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "body[after:0:4]", "line 2: bad substitution: no closing `)' in \"$((1 # note))\"\n")]
+    public async Task ArithmeticCommentDelimitersPreserveExpansionBoundaries(
         string script, int expectedStatus, string expectedOutput, string expectedError)
     {
         foreach (var prepared in new[] { false, true })
@@ -153,6 +167,23 @@ public sealed class ArithmeticErrorTestsEndToEnd
             Assert.Equal(expectedError, host.StandardError.TextContent);
             Assert.Equal(0, host.OpenFileCount);
         }
+    }
+
+    private const string QuotedChild = "$(printf 3; printf \"%s\" \"$((1 # note))\")";
+
+    [Fact]
+    public async Task IncompleteCaptureConsumesTheRemainingArithmeticForSeparators()
+    {
+        const string header = "((v=1+" + QuotedChild + "; 0; v++))";
+        const string script = "v=0\nif false; then for " + header + "; do :; done; fi\nprintf after";
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal("line 2: syntax error: arithmetic expression required\n"
+            + "line 2: syntax error: `" + header + "'\n", host.StandardError.TextContent);
+        Assert.Throws<SyntaxException>(() => Parser.Parse(script));
     }
 
     [Fact]

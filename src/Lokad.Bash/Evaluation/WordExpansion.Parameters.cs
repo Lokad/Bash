@@ -1507,9 +1507,16 @@ internal static partial class WordExpansion
                 var conditional = 0;
                 while (!cursor.IsAtEnd)
                 {
-                    if (cursor.TryConsumeQuoteOrEscape()
-                        || cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
+                    if (cursor.TryConsumeQuoteOrEscape())
                         continue;
+                    var start = cursor.Position;
+                    if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
+                    {
+                        if (parentheses == 0 && ArithmeticExpansionScanner.HasMissingCaptureCloser(expression, start,
+                                cursor.Position, cursor.IsDoubleQuoted, boundsScan.SyntaxMemory))
+                            return false;
+                        continue;
+                    }
                     if (!cursor.IsQuoted)
                     {
                         var current = cursor.Current;

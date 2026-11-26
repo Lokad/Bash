@@ -487,6 +487,9 @@ expansion, an unquoted `#` after a space, tab or LF covers the rest of that
 physical line for delimiter matching. A missing closer fails before operand
 expansion. Comment bytes remain in the arithmetic operand when the same
 closer is visible. A shifted closer can select the adjacent subshell form.
+The modern and bracketed arithmetic readers also validate nested expansion
+delimiters inside operand quotes. Failure there leaves earlier word effects
+visible and skips the arithmetic operand.
 The command grammar handles the subshell
 form and consumes case arm closers, comments and completed here-documents.
 Both pinned Bash builds reject some adjacent forms containing a case arm
@@ -1096,7 +1099,9 @@ An arithmetic `for` header requires exactly two unquoted semicolons outside
 shell expansions. A malformed separator count is a syntax error before any
 clause or loop body runs. The command-unit reader distinguishes a missing
 separator from an extra separator and quotes the normalized header on the
-next diagnostic line. An empty condition or one containing only spaces
+next diagnostic line. A capture that runs out of closing parentheses during
+separator scanning consumes the remaining header spelling for that scan.
+An empty condition or one containing only spaces
 and tabs is true. If the condition contains only spaces, tabs and one or
 more physical LFs, it evaluates to zero. Backslash-LF continuations are removed first.
 
@@ -1453,7 +1458,8 @@ The substring offset scan finds the length delimiter outside balanced
 parentheses. A stray closing parenthesis leaves the scan at the current level.
 An unmatched opening parenthesis reports a bad substitution before either
 bound runs. Its diagnostic keeps the operand bytes and renders parsed
-command substitutions.
+command substitutions. This scan also checks comment-obscured capture closers
+before the length delimiter. The length operand expands when reached.
 A reached negative length rejected by a substring range reports the spelling
 of the length, including whitespace and quotes. It removes line continuations
 and renders parsed command substitutions without running them again.

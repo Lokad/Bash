@@ -174,6 +174,10 @@ with comment handling before expanding the arithmetic operand. A missing
 closer uses the word-syntax failure path. Effects from earlier word parts
 remain visible. When the reached delimiter selects an adjacent subshell, the
 existing command substitution path reads and executes its body.
+Modern and bracketed expansions also check nested delimiters inside quotes
+in the arithmetic spelling before evaluating any part of the operand. The
+substring offset and arithmetic `for` header readers use comment-aware
+capture delimiters while locating their separators.
 
 Printf retains byte numeric operands through prefix validation, range classification
 and diagnostics. Integer accumulation stays bounded after overflow while validity
