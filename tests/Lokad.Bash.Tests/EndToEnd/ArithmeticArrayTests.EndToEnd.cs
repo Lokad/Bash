@@ -492,6 +492,25 @@ public sealed class ArithmeticArrayTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("declare -nr hop=dst; declare -n ref=hop", "<0:7:13>", false)]
+    [InlineData("declare -n hop=dst ref=hop; readonly dst", "<1:6:13>", true)]
+    public async Task ArithmeticWriteChecksReadonlyOnTheReachedBinding(string setup, string expected, bool readonlyTarget)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            dst=(6 13); {{setup}}
+            let 'ref=7'
+            printf '<%s:%s:%s>' "$?" "${dst[0]}" "${dst[1]}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        if (readonlyTarget)
+            Assert.EndsWith(": readonly variable\n", result.StdErr, StringComparison.Ordinal);
+        else
+            Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ArithmeticArrays_BoundNestedSelectorEvaluation(bool exceedsLimit)

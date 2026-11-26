@@ -287,10 +287,13 @@ internal static partial class WordExpansion
                     return null;
                 if (assignOutput == null)
                     target = target.SelectPrefixElementWrite(reference, scope);
-                var readOnly = scope.Variables.IsReadonly(reference.Name) || (target.ReadOwner ?? scope.Variables).IsReadonly(target.Name)
+                var activeVariables = scope.Variables;
+                var targetVariables = target.ReadOwner ?? activeVariables;
+                var readOnly = activeVariables.IsReadonly(reference.Name, out var sourceBinding)
+                    || (target.Name != reference.Name || !ReferenceEquals(targetVariables, activeVariables)) && targetVariables.IsReadonly(target.Name)
                     || scope.ExpansionWriteTarget is { PreparingPrefixes: true }
                         && scope.GetExpansionWriteTarget(reference.Name)?.IsReadonly(reference.Name) == true;
-                if (assignOutput == null && !readOnly && AssignExpansion(reference, target, formatted))
+                if (assignOutput == null && !readOnly && AssignExpansion(reference, target, sourceBinding, formatted))
                     return null;
                 var namerefFailure = scope.Variables.GetNamerefAssignmentFailure(
                     reference.Name, target.Name, formatted, scope.Effects.Memory);
@@ -389,7 +392,8 @@ internal static partial class WordExpansion
                     await scope.Effects.ReportCircularNameReferenceAsync(name, scope).ConfigureAwait(false);
             }
 
-            bool AssignExpansion(VariableReference reference, ResolvedVariableReference target, ShellValue value)
+            bool AssignExpansion(VariableReference reference, ResolvedVariableReference target,
+                VariableBinding? sourceBinding, ShellValue value)
             {
                 if (target.ReadOwner is { } owner && !ReferenceEquals(owner, scope.Variables))
                     return target.TryPublishValue(scope with { Variables = owner, ExpansionWriteTarget = null, SelectorBindings = null },
@@ -397,9 +401,8 @@ internal static partial class WordExpansion
                 // Whole-name writes retain scalar-prefix ownership and preserve the caller's array.
                 // Element namerefs use their already selected location, without replaying the selector.
                 if (reference.Kind == VariableReferenceKind.Name
-                    && scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
-                    && binding.Reference.Kind == VariableReferenceKind.Name)
-                    return TrySetVariable(reference.Name, value, scope).HasValue;
+                    && sourceBinding is { Reference.Kind: VariableReferenceKind.Name })
+                    return TrySetWritableVariable(reference.Name, sourceBinding, value, scope).HasValue;
                 return target.TryPublishValue(scope, reference.Name, value);
             }
         }

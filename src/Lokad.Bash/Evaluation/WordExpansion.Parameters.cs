@@ -260,7 +260,8 @@ internal static partial class WordExpansion
                             if (scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
                                 assigned = await EvaluateIntegerAssignmentAsync(expanded, null, scope, ShellValue.Empty).ConfigureAwait(false);
                             if (assigned is { } value && scope.CanExpand)
-                                assigned = TrySetVariable(named.Name, value, scope);
+                                assigned = !named.Name.IsEmpty && !scope.Variables.IsReadonly(named.Name, out var writableBinding)
+                                    ? TrySetWritableVariable(named.Name, writableBinding, value, scope) : null;
                         }
                         else if (target != null && parameter.Source is { } source)
                         {

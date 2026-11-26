@@ -1236,24 +1236,16 @@ internal static partial class WordExpansion
     private static ShellScanContext CreateExpansionScanContext(ScopedEvaluation scope) =>
         new() { SyntaxMemory = scope.Effects.Memory.Workspace, LegacyOrigin = scope.ExpansionOrigin };
 
-    private static ShellValue? TrySetVariable(
+    private static ShellValue? TrySetWritableVariable(
         BindingName name,
+        VariableBinding? binding,
         ShellValue value,
         ScopedEvaluation scope)
     {
-        if (name.IsEmpty)
-        {
+        if (binding is { } reached
+            && Variables.GetNamerefAssignmentFailure(name, reached, value, scope.Effects.Memory) != NamerefAssignmentFailure.None)
             return null;
-        }
 
-        var key = name;
-        if (scope.Variables.IsReadonly(key)
-            || scope.Variables.GetNamerefAssignmentFailure(key, key, value, scope.Effects.Memory)
-                != NamerefAssignmentFailure.None)
-        {
-            return null;
-        }
-
-        return scope.SetExpansionValueIgnoringReadonly(key, value);
+        return scope.SetExpansionValueIgnoringReadonly(name, value);
     }
 }

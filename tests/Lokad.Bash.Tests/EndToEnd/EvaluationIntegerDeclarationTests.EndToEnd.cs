@@ -235,6 +235,24 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
     public Task InvalidIntegerAssignmentStopsAtCaptureAndExitActionBoundaries(string script, string expected, int status) =>
         CheckIntegerFailureAsync(script, expected, status, configure: null, check: null);
 
+    [Theory]
+    [InlineData("", "<3>\n<0:3>\ndeclare -i dst=\"3\"\n", "")]
+    [InlineData("; readonly dst", "<2:0>\ndeclare -ir dst\n", "line 2: dst: readonly variable\n")]
+    public async Task IntegerDefaultThroughNamerefsConvertsOnlyForAWritableReferent(
+        string attributes, string expected, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -i dst; declare -n hop=dst ref=hop; i=0{{attributes}}
+            printf '<%s>\n' "${ref:=i+=3}"
+            printf '<%s:%s>\n' "$?" "$i"
+            declare -p dst
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+    }
+
     [Fact]
     public Task InvalidIntegerAssignmentRestoresCompoundRedirection() =>
         CheckIntegerFailureAsync("""

@@ -1532,7 +1532,10 @@ public sealed partial class Variables
     }
 
     private bool IsResolvedBindingReadonly(BindingName source, VariableBinding binding) =>
-        IsReadonlyBinding(source) || binding.Name != source && binding.Owner.IsReadonlyBinding(binding.Name);
+        IsReadonlyBinding(source) || IsReadonlyReferent(source, binding);
+
+    private static bool IsReadonlyReferent(BindingName source, VariableBinding binding) =>
+        binding.Name != source && binding.Owner.IsReadonlyBinding(binding.Name);
 
     /// <summary>
     /// Resolves whole bindings; returns empty for cycles, unset references or elements requiring scoped selection.
@@ -2111,15 +2114,22 @@ public sealed partial class Variables
     /// <summary>
     /// Returns true when a name is readonly (after nameref resolution).
     /// </summary>
-    public bool IsReadonly(BindingName name)
+    public bool IsReadonly(BindingName name) => IsReadonly(name, out _);
+
+    /// <summary>Checks readonly status and returns the binding if the check reached a referent.</summary>
+    internal bool IsReadonly(BindingName name, out VariableBinding? binding)
     {
+        binding = null;
         if (name.IsEmpty)
             return false;
 
-        if (HasAttribute(name, BindingAttributes.Readonly))
+        if (IsReadonlyBinding(name))
             return true;
 
-        return TryResolveBinding(name, selectOwner: null, out var binding) && HasAttribute(binding.Name, BindingAttributes.Readonly);
+        if (!TryResolveBinding(name, selectOwner: null, out var reached))
+            return false;
+        binding = reached;
+        return IsReadonlyReferent(name, reached);
     }
 
     /// <summary>
