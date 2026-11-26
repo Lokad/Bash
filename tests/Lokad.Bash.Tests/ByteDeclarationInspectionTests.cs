@@ -345,36 +345,32 @@ public sealed class ByteDeclarationInspectionTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
-    [Fact]
-    public async Task PreparedFunctionListingsBorrowNameBytesThroughOutput()
+    [Theory]
+    [InlineData("declare -F", true)]
+    [InlineData("declare -Frx", false)]
+    public async Task PreparedFunctionListingsBorrowNameBytesThroughOutput(string listing, bool includesOrdinary)
     {
         const int Count = 128;
         var names = Enumerable.Range(0, Count)
             .Select(index => "probe_" + new string('x', 118) + $"{index:D4}").ToArray();
         var setup = string.Join('\n', names.Reverse().Select(name => name + "(){ :; }"))
             + $"\nexport -f {names[0]}\nreadonly -f {names[^1]}\n";
-        var all = await RunListingAsync("declare -F");
-        var ordinary = string.Concat(names.Skip(1).Take(Count - 2).Select(name => $"declare -f {name}\n"));
-        Assert.Equal($"declare -fx {names[0]}\n{ordinary}declare -fr {names[^1]}\n", all);
-        var selected = await RunListingAsync("declare -Frx");
-        Assert.Equal($"declare -fx {names[0]}\ndeclare -fr {names[^1]}\n", selected);
+        var ordinary = includesOrdinary
+            ? string.Concat(names.Skip(1).Take(Count - 2).Select(name => $"declare -f {name}\n"))
+            : string.Empty;
+        var state = new Eval(Parser.Parse(setup + listing));
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = governor };
 
-        async Task<string> RunListingAsync(string listing)
-        {
-            var state = new Eval(Parser.Parse(setup + listing));
-            var governor = new MemoryGovernor(64 * 1024);
-            using var owner = governor.CreateScope();
-            await using var host = new TestHost { MemoryBudget = governor };
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
 
-            var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
-
-            Assert.Empty(host.StandardError.TextContent);
-            Assert.Equal(0, result.ExitCode);
-            Assert.Equal(0, host.OpenFileCount);
-            owner.Dispose();
-            Assert.Equal(0, governor.ReservedBytes);
-            return host.StandardOutput.TextContent;
-        }
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"declare -fx {names[0]}\n{ordinary}declare -fr {names[^1]}\n", host.StandardOutput.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]
