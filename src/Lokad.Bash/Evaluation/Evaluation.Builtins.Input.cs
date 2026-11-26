@@ -158,7 +158,7 @@ public sealed partial class Evaluation
             using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
             var fields = ReadFieldSplitter.Split(input.Content, fieldCount, new ReadBuiltinOptions(
                 ignoreDelimiter ? FieldSeparators.Empty : FieldSeparators.FromVariables(scope.Variables),
-                backslashMode, fieldMode),
+                input.FieldBackslashMode, fieldMode),
                 fieldMemory, scope.Variables, Memory, _cancellationToken);
             if (arrayTarget is { } array)
             {
@@ -247,23 +247,23 @@ public sealed partial class Evaluation
             FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(command, name,
                 diagnostics, ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(scope.Context)), 1);
 
-        async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> CollectInputAsync()
+        async Task<(int ExitCode, ReadOnlyMemory<byte> Content, ReadBackslashMode FieldBackslashMode, bool Failed)> CollectInputAsync()
         {
             var content = memory.Content;
             if (count.HasValue || delimiter != (byte)'\n')
             {
                 // A zero count skips the borrow and uses the known access mode of the selected binding.
                 if (count == 0)
-                    return (inputBinding.CannotRead ? 1 : 0, default, false);
-                var completion = new TaskCompletionSource<(bool Complete, OperationError? Error)>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    return (inputBinding.CannotRead ? 1 : 0, default, ReadBackslashMode.Preserve, false);
+                var completion = new TaskCompletionSource<ReadInputResult>(TaskCreationOptions.RunContinuationsAsynchronously);
                 PublishOperation(new ReadInputOperation(completion, inputBinding.Handle,
                     ignoreDelimiter ? null : delimiter, count, backslashMode, content));
                 try
                 {
-                    var (complete, failure) = await completion.Task.ConfigureAwait(false);
+                    var result = await completion.Task.ConfigureAwait(false);
                     CheckCancellation();
-                    return failure is { } error ? await ReadFailureAsync(error).ConfigureAwait(false)
-                        : (complete ? 0 : 1, content.ToMemory(), false);
+                    return result.Error is { } error ? await ReadFailureAsync(error).ConfigureAwait(false)
+                        : (result.Complete ? 0 : 1, content.ToMemory(), result.FieldBackslashMode, false);
                 }
                 catch (ByteMemoryBuilder.LimitExceededException)
                 {
@@ -293,7 +293,7 @@ public sealed partial class Evaluation
                     if (result.IsError)
                         return result.Error is { } error
                             ? await ReadFailureAsync(error).ConfigureAwait(false)
-                            : (1, default, true);
+                            : (1, default, ReadBackslashMode.Preserve, true);
 
                     if (result.Content.IsEmpty)
                     {
@@ -320,7 +320,7 @@ public sealed partial class Evaluation
                     break;
                 }
 
-                return (exitCode, content.ToMemory(), false);
+                return (exitCode, content.ToMemory(), normalization.FieldBackslashMode, false);
             }
             catch (MemoryBudgetExceededException)
             {
@@ -336,19 +336,19 @@ public sealed partial class Evaluation
                 }
             }
 
-            async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> ReadFailureAsync(OperationError error)
+            async Task<(int, ReadOnlyMemory<byte>, ReadBackslashMode, bool)> ReadFailureAsync(OperationError error)
             {
                 await ReportBuiltinOperationErrorAsync(command, $"read error: {inputNumber}: ", path: null, error,
                         GetBuiltinDiagnosticPrefix(scope.Context))
                     .ConfigureAwait(false);
-                return (1, default, true);
+                return (1, default, ReadBackslashMode.Preserve, true);
             }
 
-            async Task<(int ExitCode, ReadOnlyMemory<byte> Content, bool Failed)> RejectInputAsync()
+            async Task<(int, ReadOnlyMemory<byte>, ReadBackslashMode, bool)> RejectInputAsync()
             {
                 ReleaseReadWorkspace();
                 await ReportInputRefusalAsync().ConfigureAwait(false);
-                return (1, default, true);
+                return (1, default, ReadBackslashMode.Preserve, true);
             }
         }
     }

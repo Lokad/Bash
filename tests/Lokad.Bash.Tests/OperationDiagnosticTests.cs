@@ -38,7 +38,7 @@ public sealed class OperationDiagnosticTests
                 line.SetResult(ReadResult.Failure(error));
                 break;
             case ReadInputOperation input:
-                input.SetResult((false, error));
+                input.SetResult(new ReadInputResult(false, ReadBackslashMode.Preserve, error));
                 break;
             case WriteOperation output:
                 output.SetResult(DescriptorWriteResult.Failure(error));

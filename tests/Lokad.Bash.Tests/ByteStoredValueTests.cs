@@ -424,24 +424,35 @@ public sealed class ByteStoredValueTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
-    [Fact]
-    public void RawReadWithShortAsciiIfsFitsWithoutAMembershipIndex()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadWithoutRetainedEscapesFitsWithoutAnAsciiMembershipIndex(bool raw)
     {
         var governor = new MemoryGovernor(256);
         using var owner = governor.CreateScope();
         var memory = new EvaluationMemory(owner);
         var variables = Variables.CreateEmpty();
         Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(" \t:")));
+        using var content = new ByteMemoryBuilder(0, owner);
+        var input = new ReadInputBuffer(content, raw
+            ? ReadBackslashMode.Preserve : ReadBackslashMode.InterpretEscapes);
+        var firstLine = raw ? " first \t:second:third \t "u8 : " first \t:second:third \t \\"u8;
+        Assert.Equal(!raw, input.AppendLine(firstLine, hasTerminator: true, CancellationToken.None));
+        if (!raw)
+            Assert.False(input.AppendLine([], hasTerminator: true, CancellationToken.None));
         using (var scratch = new MemoryCapacity(owner, 0))
         {
-            var options = new ReadBuiltinOptions(FieldSeparators.FromVariables(variables), ReadBackslashMode.Preserve, ReadFieldMode.Split);
-            var fields = ReadFieldSplitter.Split(" first \t:second:third \t "u8.ToArray(), 2,
+            var options = new ReadBuiltinOptions(FieldSeparators.FromVariables(variables),
+                input.FieldBackslashMode, ReadFieldMode.Split);
+            var fields = ReadFieldSplitter.Split(content.ToMemory(), 2,
                 options, scratch, variables, memory, CancellationToken.None);
 
             Assert.Equal([ShellValue.FromText("first"), ShellValue.FromText("second:third")], fields);
             Assert.Equal(0, memory.Workspace.Bytes);
         }
         memory.Finish(retainVariables: false);
+        content.Dispose();
         Assert.Equal(0, governor.ReservedBytes);
     }
 

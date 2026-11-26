@@ -7,12 +7,12 @@ namespace Lokad.Bash.Evaluation;
 
 /// <summary>Normalizes input through the count or delimiter into the evaluator's reusable buffer.</summary>
 internal sealed class ReadInputOperation(
-    TaskCompletionSource<(bool Complete, OperationError? Error)> completion,
+    TaskCompletionSource<ReadInputResult> completion,
     FileDescriptor descriptor,
     byte? delimiter,
     int? count,
     ReadBackslashMode backslashMode,
-    ByteMemoryBuilder content) : EvaluationOperation<(bool Complete, OperationError? Error)>(completion)
+    ByteMemoryBuilder content) : EvaluationOperation<ReadInputResult>(completion)
 {
     public FileDescriptor Descriptor { get; } = descriptor;
     public byte? Delimiter { get; } = delimiter;
@@ -20,6 +20,8 @@ internal sealed class ReadInputOperation(
     public ReadBackslashMode BackslashMode { get; } = backslashMode;
     public ByteMemoryBuilder Content { get; } = content;
 }
+
+internal readonly record struct ReadInputResult(bool Complete, ReadBackslashMode FieldBackslashMode, OperationError? Error);
 
 /// <summary>Reads a bounded batch of raw records into caller-owned storage.</summary>
 internal sealed class ReadRecordBatchOperation(

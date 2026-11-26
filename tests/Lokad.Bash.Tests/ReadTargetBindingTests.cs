@@ -10,6 +10,28 @@ namespace Lokad.Bash.Tests;
 public sealed class ReadTargetBindingTests
 {
     [Theory]
+    [InlineData("", "a\\ b c\nnext word\n", "<0:a b:c><0:next:word>")]
+    [InlineData("-d :", "a\\ b c:next word:", "<0:a b:c><0:next:word>")]
+    [InlineData("-n 5", "a\\ b cnext ", "<0:a b:c><0:next:>")]
+    public async Task ReadInterpretsRetainedEscapesAcrossRecordRoutes(string options, string input, string expected)
+    {
+        var script = $$"""
+            IFS=' '
+            read {{options}} first last
+            printf '<%s:%s:%s>' "$?" "$first" "$last"
+            read {{options}} first last
+            printf '<%s:%s:%s>' "$?" "$first" "$last"
+            """;
+        await using var host = new TestHost();
+        var result = await EndToEndHarness.RunScriptAsync(script, host, System.Text.Encoding.UTF8.GetBytes(input));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("a=([1]=old [4]=seed); declare -n REPLY='a[4]'; builtin read -r; status=$?",
         "${a[1]}", "${a[4]}")]
     [InlineData("declare -A a=([keep]=old [key]=seed); f(){ local -n REPLY='a[key]'; command read -r; }; f; status=$?",

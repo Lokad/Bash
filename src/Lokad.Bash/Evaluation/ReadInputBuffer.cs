@@ -10,6 +10,9 @@ internal struct ReadInputBuffer(ByteMemoryBuilder content, ReadBackslashMode bac
     private bool _escaped;
     private bool _assignedContentEnded;
 
+    /// <summary>Indicates whether the normalized record still needs escape interpretation.</summary>
+    public ReadBackslashMode FieldBackslashMode { get; private set; } = ReadBackslashMode.Preserve;
+
     /// <summary>Appends a framed line and reports whether its LF was escaped.</summary>
     public bool AppendLine(ReadOnlySpan<byte> bytes, bool hasTerminator, CancellationToken cancellationToken)
     {
@@ -65,6 +68,7 @@ internal struct ReadInputBuffer(ByteMemoryBuilder content, ReadBackslashMode bac
         if (value == (byte)'\n' || _assignedContentEnded)
             return;
         content.Append((byte)'\\').Append(value);
+        FieldBackslashMode = ReadBackslashMode.InterpretEscapes;
         // Quoted NUL participates in splitting as a protected empty field.
         _assignedContentEnded = value == 0;
     }

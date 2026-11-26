@@ -189,7 +189,7 @@ internal static class ShellOperationDispatcher
             }
         }
 
-        static async ValueTask<(bool Complete, OperationError? Error)> ReadInputAsync(
+        static async ValueTask<ReadInputResult> ReadInputAsync(
             ReadInputOperation request, IBashHost host, CancellationToken cancellationToken)
         {
             var input = new ReadInputBuffer(request.Content, request.BackslashMode);
@@ -210,7 +210,7 @@ internal static class ShellOperationDispatcher
                         var stop = bytes.IndexOf(delimiter);
                         buffer.Consume(stop < 0 ? bytes.Length : stop + 1);
                     }
-                    return (false, error);
+                    return new ReadInputResult(false, input.FieldBackslashMode, error);
                 }
 
                 var window = sourceRemaining is { } limit && limit < bytes.Length ? bytes[..limit] : bytes;
@@ -221,7 +221,7 @@ internal static class ShellOperationDispatcher
                 sourceRemaining -= consumed;
                 buffer.Consume(consumed);
                 if (complete || buffer.Result.ReachedEoF)
-                    return (complete, null);
+                    return new ReadInputResult(complete, input.FieldBackslashMode, null);
             }
         }
 
