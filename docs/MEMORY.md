@@ -155,6 +155,8 @@ Function definition rendering admits its pending work records, borrowed
 here-document references and reusable long UTF-8 fragment buffer as scratch.
 Scratch is refunded when rendering returns. The output owner retains the
 rendered bytes through display, export or reparsing.
+Function listing records admit the complete name and attribute line in one
+buffer growth. Each row's output charge stays live through write settlement.
 
 Do not recover by retrying, waiting, spilling, switching to streaming, evicting caches
 or dropping optional storage. Failed allocation releases unused admission. Refusal

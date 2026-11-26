@@ -156,12 +156,14 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
     /// </summary>
     /// <remarks>The returned span is already part of the written payload.</remarks>
     /// <param name="length">The number of bytes to append.</param>
-    public Span<byte> AppendSpan(int length)
+    public Span<byte> AppendSpan(int length) => AppendSpan(length, exactCapacity: false);
+
+    internal Span<byte> AppendSpan(int length, bool exactCapacity)
     {
         if (length < 0)
             throw new ArgumentOutOfRangeException(nameof(length));
 
-        EnsureCapacity(checked(_length + length), exactCapacity: false);
+        EnsureCapacity(checked(_length + length), exactCapacity);
         var span = _buffer.AsSpan(_length, length);
         _length += length;
         return span;

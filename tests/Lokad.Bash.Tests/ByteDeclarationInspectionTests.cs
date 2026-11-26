@@ -374,6 +374,38 @@ public sealed class ByteDeclarationInspectionTests
     }
 
     [Fact]
+    public async Task FunctionListingAdmitsEachCompleteNameRecord()
+    {
+        var first = "a" + new string('x', 127);
+        var second = "b" + new string('x', 254);
+        var state = new Eval(Parser.Parse($"c(){{ :; }}\n{second}(){{ :; }}\n{first}(){{ :; }}\n"
+            + $"export -f {first}\nreadonly -f {second}\ndeclare -F"));
+        var governor = new MemoryGovernor(64 * 1024);
+        var budget = new CountingMemoryBudget(governor);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var rows = new List<(FileDescriptor Descriptor, string Text, long AdmissionCalls, long OtherBytes)>();
+
+        while (await state.GetNextStep(deadline.Token) is { } step)
+        {
+            var write = Assert.IsType<WriteOperation>(step);
+            rows.Add((write.FileDescriptor, Utf8Text.Decode(write.Content), budget.AdmissionCalls,
+                governor.ReservedBytes - write.Content.Length));
+            write.SetResult(DescriptorWriteResult.Open);
+        }
+
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal([$"declare -fx {first}\n", $"declare -fr {second}\n", "declare -f c\n"], rows.Select(row => row.Text));
+        Assert.All(rows, row => Assert.Equal(FileDescriptor.StdOut, row.Descriptor));
+        Assert.Equal(3, rows[1].AdmissionCalls - rows[0].AdmissionCalls);
+        Assert.Equal(3, rows[2].AdmissionCalls - rows[1].AdmissionCalls);
+        Assert.All(rows, row => Assert.Equal(rows[0].OtherBytes, row.OtherBytes));
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task ExportListingUsesEachSavedPrefixBindingOnce()
     {
         var result = await EndToEndHarness.RunScriptAsync("""

@@ -193,16 +193,31 @@ internal sealed record FunctionBinding
             if (!FunctionDefinitionFormatter.TryAppend(Definition, output)) return false;
             if (style == FunctionDisplayStyle.Definition || Attributes == FunctionAttributes.None) return true;
         }
-        if (style != FunctionDisplayStyle.Name
-            && (!output.TryAppend("declare -f"u8)
-                || Attributes.HasFlag(FunctionAttributes.Readonly) && !output.TryAppend((byte)'r')
-                || Attributes.HasFlag(FunctionAttributes.Exported) && !output.TryAppend((byte)'x')
-                || Attributes.HasFlag(FunctionAttributes.Capitalize) && !output.TryAppend((byte)'c')
-                || Attributes.HasFlag(FunctionAttributes.Lowercase) && !output.TryAppend((byte)'l')
-                || Attributes.HasFlag(FunctionAttributes.Uppercase) && !output.TryAppend((byte)'u')
-                || !output.TryAppend((byte)' ')))
+        var declaration = "declare -f"u8;
+        Span<byte> prefix = stackalloc byte[declaration.Length + 6]; // Five flags and a space.
+        var prefixLength = 0;
+        if (style != FunctionDisplayStyle.Name)
+        {
+            declaration.CopyTo(prefix);
+            prefixLength = declaration.Length;
+            if (Attributes.HasFlag(FunctionAttributes.Readonly)) prefix[prefixLength++] = (byte)'r';
+            if (Attributes.HasFlag(FunctionAttributes.Exported)) prefix[prefixLength++] = (byte)'x';
+            if (Attributes.HasFlag(FunctionAttributes.Capitalize)) prefix[prefixLength++] = (byte)'c';
+            if (Attributes.HasFlag(FunctionAttributes.Lowercase)) prefix[prefixLength++] = (byte)'l';
+            if (Attributes.HasFlag(FunctionAttributes.Uppercase)) prefix[prefixLength++] = (byte)'u';
+            prefix[prefixLength++] = (byte)' ';
+        }
+
+        var name = Definition.Name.Value.Bytes.Span;
+        var length = (long)prefixLength + name.Length + 1;
+        if (length >= ByteMemoryBuilder.MaxMemoryBuilderBytes || !output.CanAppend((int)length))
             return false;
-        return output.TryAppend(Definition.Name.Value.Bytes.Span) && output.TryAppend((byte)'\n');
+
+        var row = output.AppendSpan((int)length, exactCapacity: true);
+        prefix[..prefixLength].CopyTo(row);
+        name.CopyTo(row[prefixLength..]);
+        row[^1] = (byte)'\n';
+        return true;
     }
 }
 
