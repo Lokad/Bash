@@ -1368,7 +1368,7 @@ public sealed partial class Variables
     internal bool TryApplyAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory)
     {
         if (reference.Kind != VariableReferenceKind.Name)
-            return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, ArrayAssignmentKind.Auto, memory);
+            return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, memory);
 
         if (!TryResolveBinding(reference.Name, selectOwner: null, out var binding)
             || binding.Reference.Kind != VariableReferenceKind.Name || binding.TryGetInvalidNameref(out _)
@@ -1380,26 +1380,15 @@ public sealed partial class Variables
         return true;
     }
 
-    /// <summary>
-    /// Attempts to assign a single array element for the given base name and index.
-    /// </summary>
-    internal bool TryAssignArrayElement(BindingName baseName, ShellValue index, ShellValue value, ArrayAssignmentKind kind, EvaluationMemory? memory)
+    /// <summary>Assigns a byte-valued key according to the receiver's array kind.</summary>
+    internal bool TryAssignArrayElement(BindingName name, ShellValue index, ShellValue value, EvaluationMemory? memory)
     {
-        if (kind == ArrayAssignmentKind.Auto)
-        {
-            var resolved = ResolveNamerefName(baseName);
-            // Existing bindings own their kind, even when an associative key happens to be numeric.
-            kind = AssociativeArrays.ContainsKey(resolved) ? ArrayAssignmentKind.Associative
-                : IndexedArrays.ContainsKey(resolved) || IndexedArrayIndex.TryParse(index.Bytes.Span, out _)
-                    ? ArrayAssignmentKind.Indexed : ArrayAssignmentKind.Associative;
-        }
-
-        return TrySetArrayElement(
-            baseName,
-            index,
-            value,
-            kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative,
-            memory);
+        if (!TryResolveWritableName(name, out var resolved) || resolved.IsEmpty)
+            return false;
+        TryGetBinding(resolved, detachBorrowed: false, out var slot);
+        if (slot is not AssociativeSlot && IndexedArrayIndex.TryParse(index.Bytes.Span, out var position))
+            return TrySetResolvedArrayElement(resolved, position, value, memory);
+        return slot is not IndexedSlot && TrySetResolvedArrayElement(resolved, index, value, ArrayKind.Associative, memory);
     }
 
     /// <summary>Publishes an indexed position using the receiving binding's array kind.</summary>

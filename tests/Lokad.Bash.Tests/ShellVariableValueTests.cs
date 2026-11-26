@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Linq;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Tests;
 
@@ -360,6 +361,63 @@ public sealed class ShellVariableValueTests
         Assert.Equal(!readOnly, variables.TrySetScalar("unset", replacement));
         Assert.True(variables.TryGetNameref("unset", out var target));
         Assert.Equal(readOnly ? ShellValue.Empty : replacement, target);
+    }
+
+    [Fact]
+    public void AutomaticArrayKeyPromotesAScalarUsingTheParsedPosition()
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        var replacement = ShellValue.FromText("replacement");
+        Assert.True(variables.TrySetScalar("target", original));
+        Assert.True(variables.TrySetNameref("alias", ShellValue.FromText("target")));
+        var reference = VariableReference.ForElement("alias", ShellSource.FromText("0007"));
+
+        Assert.True(variables.TryApplyAssignment(reference, replacement, memory: null));
+        var array = variables.IndexedArrays["target"];
+        Assert.True(array.TryGet(default, out var zero));
+        Assert.Equal(original, zero);
+        Assert.True(array.TryGet(IndexedArrayIndex.FromUnsigned(7), out var stored));
+        Assert.Equal(replacement, stored);
+    }
+
+    [Theory]
+    [InlineData(ArrayKind.Indexed, false)]
+    [InlineData(ArrayKind.Associative, true)]
+    public void AutomaticArrayKeyKeepsTheExistingKindForNonDecimalBytes(ArrayKind kind, bool accepted)
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        var key = ShellValue.FromBytes(new byte[] { 0xff });
+        var replacement = ShellValue.FromBytes(new byte[] { 0xfe });
+        var sentinel = ShellValue.FromText("0");
+        Assert.True(variables.TrySetArrayElement("target", sentinel, original, kind));
+        var reference = VariableReference.ForElement("target", ShellSource.FromBytes(key.Bytes));
+
+        Assert.Equal(accepted, variables.TryApplyAssignment(reference, replacement, memory: null));
+        Assert.Equal(kind, variables.GetArrayMetadata("target")?.Kind);
+        Assert.True(variables.TryGetExpansionValue("target", out var stored));
+        Assert.Equal(original, stored);
+        if (accepted)
+        {
+            Assert.True(AssociativeArrayKey.TryCreate(key, out var byteKey));
+            Assert.True(variables.AssociativeArrays["target"].TryGet(byteKey, out var bytes));
+            Assert.Equal(replacement, bytes);
+        }
+    }
+
+    [Fact]
+    public void EmptyAutomaticArrayKeyLeavesAnExistingScalarInPlace()
+    {
+        var variables = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        Assert.True(variables.TrySetScalar("target", original));
+
+        var reference = VariableReference.ForElement("target", ShellSource.Empty);
+        Assert.False(variables.TryApplyAssignment(reference, ShellValue.FromText("replacement"), memory: null));
+        Assert.Null(variables.GetArrayMetadata("target"));
+        Assert.True(variables.TryGetScalar("target", out var stored));
+        Assert.Equal(original, stored);
     }
 
     private static long MeasureAllocation(Action action)

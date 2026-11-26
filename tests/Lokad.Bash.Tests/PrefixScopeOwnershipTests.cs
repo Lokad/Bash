@@ -1023,6 +1023,48 @@ public sealed class PrefixScopeOwnershipTests
     }
 
     [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public void ForwardedAssociativeKeysUseTheReceivingArrayKind(ArrayKind kind)
+    {
+        BindingName name = "marks";
+        var caller = Variables.CreateEmpty();
+        var command = Variables.CreateEmpty();
+        var original = ShellValue.FromText("original");
+        var replacement = ShellValue.FromBytes(new byte[] { 0xfe, 0x61 });
+        var canonical = ShellValue.FromText("7");
+        Assert.True(caller.TrySetArrayElement(name, canonical, original, kind));
+        Assert.True(AssociativeArrayKey.TryCreate(ShellValue.FromText("0007"), out var padded));
+        var governor = new MemoryGovernor(64 * 1024);
+        var evaluation = new Eval(Parser.Parse(":"), EvaluationDescriptorSetup.Standard,
+            publishNextStep: null, onComplete: null, EvaluationOptions.Default, governor, sourceMemory: null);
+        try
+        {
+            var scope = new ScopedEvaluation(evaluation, command, default)
+            {
+                ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(caller, new HashSet<BindingName> { name })
+            };
+            var location = new WordExpansion.ResolvedVariableReference.Associative(name, padded);
+            Assert.True(location.TryPublishValue(scope, name, replacement));
+            if (kind == ArrayKind.Indexed)
+            {
+                Assert.True(caller.IndexedArrays[name].TryGet(IndexedArrayIndex.FromUnsigned(7), out var stored));
+                Assert.Equal(replacement, stored);
+            }
+            else
+            {
+                Assert.True(location.TryRead(caller, out var stored));
+                Assert.Equal(replacement, stored);
+                Assert.True(AssociativeArrayKey.TryCreate(canonical, out var canonicalKey));
+                Assert.True(caller.TryReadArrayElement(name, canonicalKey, out var untouched));
+                Assert.Equal(original, untouched);
+            }
+        }
+        finally { evaluation.Memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("alias")]
     [InlineData("marks")]

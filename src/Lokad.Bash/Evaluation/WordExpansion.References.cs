@@ -178,7 +178,7 @@ internal static partial class WordExpansion
             {
                 Scalar => variables.TrySetScalar(name, value, scope.Effects.Memory),
                 Indexed indexed => variables.TryAssignArrayElement(name, indexed.Index, value, scope.Effects.Memory),
-                Associative associative => variables.TryAssignArrayElement(name, associative.Key.Value, value, ArrayAssignmentKind.Auto, scope.Effects.Memory),
+                Associative associative => variables.TryAssignArrayElement(name, associative.Key.Value, value, scope.Effects.Memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
 
