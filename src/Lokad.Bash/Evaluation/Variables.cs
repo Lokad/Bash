@@ -250,7 +250,7 @@ public sealed partial class Variables
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
             clone.StoreBinding(entry.Key, entry.Value.Clone());
-        clone.ReplacePositionalParameters(PositionalParameters);
+        clone._positional = _positional.CopyActiveValues();
         clone._argumentZero = _argumentZero;
         clone._getoptsCursor = _getoptsCursor;
 

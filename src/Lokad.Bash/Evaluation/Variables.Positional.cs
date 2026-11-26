@@ -16,7 +16,7 @@ internal enum PositionalParametersRestorePolicy
 
 public sealed partial class Variables
 {
-    private PositionalParametersFrame _positional = new([], 0);
+    private PositionalParametersFrame _positional = PositionalParametersFrame.Empty;
     private readonly PositionalParametersView _positionalView;
     private bool _globalPositionalsReplaced;
 
@@ -34,11 +34,11 @@ public sealed partial class Variables
     }
 
     internal void ReplacePositionalParameters(IReadOnlyList<ShellValue> values) =>
-        SetPositionalFrame(new PositionalParametersFrame(values, 0), replacedBySet: false);
+        SetPositionalFrame(PositionalParametersFrame.FromValues(values, 0), replacedBySet: false);
 
     /// <summary>Copies the selected tail and records global replacements for source return.</summary>
     internal void ReplacePositionalParametersFromSet(IReadOnlyList<ShellValue> values, int start, bool inFunction) =>
-        SetPositionalFrame(new PositionalParametersFrame(values, start), replacedBySet: !inFunction || _globalPositionalsReplaced);
+        SetPositionalFrame(PositionalParametersFrame.FromValues(values, start), replacedBySet: !inFunction || _globalPositionalsReplaced);
 
     internal void ClearPositionalReplacement() => _globalPositionalsReplaced = false;
 
@@ -74,6 +74,8 @@ public sealed partial class Variables
     /// </summary>
     private sealed class PositionalParametersFrame
     {
+        public static readonly PositionalParametersFrame Empty = new([], 0);
+
         private ShellValue[] _values;
         private int _head;
         private long _valueBytes;
@@ -82,20 +84,35 @@ public sealed partial class Variables
         public long EstimatedMemoryBytes => checked(_valueBytes + (long)PositionalEntryBytes * _values.Length);
         public ShellValue this[int index] => _values[_head + index];
 
-        public PositionalParametersFrame(IReadOnlyList<ShellValue> values, int start)
+        private PositionalParametersFrame(ShellValue[] values, long valueBytes)
+        {
+            _values = values;
+            _valueBytes = valueBytes;
+        }
+
+        public static PositionalParametersFrame FromValues(IReadOnlyList<ShellValue> values, int start)
         {
             var count = values.Count - start;
-            _values = count == 0 ? [] : new ShellValue[count];
+            if (count == 0)
+                return Empty;
+
+            var entries = new ShellValue[count];
+            var valueBytes = 0L;
             for (var index = 0; index < count; index++)
             {
                 var value = values[start + index];
-                _values[index] = value;
-                _valueBytes = checked(_valueBytes + EstimateValueBytes(value));
+                entries[index] = value;
+                valueBytes = checked(valueBytes + EstimateValueBytes(value));
             }
+            return new PositionalParametersFrame(entries, valueBytes);
         }
 
         public void Shift(int count)
         {
+            // Empty frames can be shared. Their only valid shift leaves the frame untouched.
+            if (count == 0)
+                return;
+
             var end = _head + count;
             while (_head < end)
             {
@@ -109,7 +126,8 @@ public sealed partial class Variables
             }
         }
 
-        public PositionalParametersFrame CopyActiveValues() => new(_values, _head);
+        public PositionalParametersFrame CopyActiveValues() => Count == 0
+            ? Empty : new PositionalParametersFrame(_values.AsSpan(_head).ToArray(), _valueBytes);
     }
 
     /// <summary>A live view follows frame switches without exposing owned arrays to callers.</summary>
@@ -152,7 +170,7 @@ public sealed partial class Variables
             _variables = variables;
             _saved = variables._positional;
             _restorePolicy = restorePolicy;
-            variables.SetPositionalFrame(new PositionalParametersFrame(values, start), replacedBySet);
+            variables.SetPositionalFrame(PositionalParametersFrame.FromValues(values, start), replacedBySet);
         }
 
         /// <summary>Installs a copy of the inactive caller frame for a terminating EXIT action.</summary>

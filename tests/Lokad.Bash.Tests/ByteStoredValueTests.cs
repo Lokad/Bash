@@ -496,4 +496,48 @@ public sealed class ByteStoredValueTests
         Assert.True(variables.TryGetScalar("x", out var original));
         Assert.Equal(value, original);
     }
+
+    [Fact]
+    public void Clone_CopiesOnlyActivePositionalEntries()
+    {
+        var bytes = ShellValue.FromBytes(new byte[] { 0xff, 0xc3 });
+        var last = ShellValue.FromText("tail");
+        ShellValue[] active = [bytes, ShellValue.Empty, last];
+        var variables = Variables.CreateInitial(new Dictionary<BindingName, ShellValue>(),
+            [ShellValue.FromText(new string('x', 4096)), .. active]);
+        Assert.True(variables.TryShiftPositionalParameters(1));
+
+        var clone = variables.Clone();
+        var compact = Variables.CreateInitial(new Dictionary<BindingName, ShellValue>(), active);
+
+        Assert.Equal(active, clone.PositionalParameters);
+        Assert.True(bytes.Bytes.Equals(clone.PositionalParameters[0].Bytes));
+        Assert.Equal(compact.PositionalMemoryBytes, clone.PositionalMemoryBytes);
+        Assert.True(clone.PositionalMemoryBytes < variables.PositionalMemoryBytes);
+        Assert.True(clone.TryShiftPositionalParameters(2));
+        Assert.Equal(last, Assert.Single(clone.PositionalParameters));
+        Assert.Equal(active, variables.PositionalParameters);
+    }
+
+    [Fact]
+    public void EmptyPositionalFramesSurviveIndependentReplacementAndRestoration()
+    {
+        var variables = Variables.CreateEmpty();
+        var clone = variables.Clone();
+        var live = variables.PositionalParameters;
+        var value = ShellValue.FromText("local");
+
+        using (variables.EnterFunctionPositionals([value]))
+        {
+            Assert.Equal(value, Assert.Single(live));
+            Assert.True(clone.TryShiftPositionalParameters(0));
+            Assert.Empty(clone.PositionalParameters);
+            Assert.True(variables.TryShiftPositionalParameters(1));
+        }
+
+        clone.ReplacePositionalParameters([value]);
+        Assert.Empty(live);
+        Assert.Equal(0, variables.PositionalMemoryBytes);
+        Assert.Equal(value, Assert.Single(clone.PositionalParameters));
+    }
 }

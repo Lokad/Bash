@@ -400,6 +400,8 @@ Source entry clears the replacement marker even when the active frame is reused.
 Function restores and argument-bearing source returns also clear it. Shifts
 preserve the marker and child evaluations isolate it. Saved frames remain
 admitted through their surrounding command scope.
+New empty frames share one immutable instance. Forked bindings and terminating
+EXIT snapshots copy the active entries and carry their cached value estimate.
 An unset positional scalar such as `"$1"` emits one empty field on its own in
 double quotes. An aggregate that emits zero fields suppresses empty expansions
 inside the same double quotes. Supplied empty aggregate elements and separate
