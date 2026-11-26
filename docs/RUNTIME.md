@@ -116,8 +116,10 @@ the previous array's allowance after replacement. Ordinary array entries
 receive compact values whose storage can be reclaimed as entries are replaced
 or removed. An explicit origin updates existing sparse positions in place.
 Integer-array input evaluates records in order while the original binding is
-kept for refusal and cancellation. A shell arithmetic error retains preceding
-array writes and their arithmetic effects.
+kept for refusal and cancellation. A batch supplying only empty normalized
+values releases its input storage before the next read. Batches that lend
+source bytes stay admitted through arithmetic. A shell arithmetic error
+retains preceding array writes and their arithmetic effects.
 A failed or canceled read leaves the prior array intact.
 
 With `-C`, a batch ends at the next callback record. Earlier records are

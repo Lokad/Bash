@@ -94,6 +94,7 @@ public sealed partial class Evaluation
         var values = callback.HasValue ? null : new List<ShellValue>();
         using var inputMemory = values != null ? new MemoryCapacity(Memory.Budget, 0) : null;
         long stagedBytes = 0;
+        var batchHasBorrowedIntegerValues = false;
         Variables.IndexedInputAssignment? callbackAssignment = null;
         var toCallback = quantum;
         uint written = 0;
@@ -113,31 +114,40 @@ public sealed partial class Evaluation
                 var limit = (int)Math.Min(ReadBatchRecords, skipping ? skip : remaining);
                 // A skipped batch never reaches arithmetic or array publication.
                 var retainedInput = skipping ? null : integerInputMemory;
-                var readMemory = retainedInput ?? Memory.Budget.CreateScope();
-                using var batchMemory = retainedInput == null ? readMemory : null;
-                ReadOnlyMemory<byte> content;
-                IReadOnlyList<int> recordStarts;
-                if (delimiter == (byte)'\n')
+                var readMemory = (retainedInput ?? Memory.Budget).CreateScope();
+                batchHasBorrowedIntegerValues = false;
+                try
                 {
-                    var batch = await ExecuteReadAsync(input.Handle, limit, readMemory).ConfigureAwait(false);
-                    batch.ThrowIfError();
-                    content = batch.Content;
-                    recordStarts = batch.LineStartOffsets;
-                    reachedEof = batch.ReachedEoF;
+                    ReadOnlyMemory<byte> content;
+                    IReadOnlyList<int> recordStarts;
+                    if (delimiter == (byte)'\n')
+                    {
+                        var batch = await ExecuteReadAsync(input.Handle, limit, readMemory).ConfigureAwait(false);
+                        batch.ThrowIfError();
+                        content = batch.Content;
+                        recordStarts = batch.LineStartOffsets;
+                        reachedEof = batch.ReachedEoF;
+                    }
+                    else
+                    {
+                        var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        PublishOperation(new ReadRecordBatchOperation(completion, input.Handle, delimiter, limit, readMemory));
+                        var batch = await completion.Task.ConfigureAwait(false);
+                        CheckCancellation();
+                        batch.Result.ThrowIfError();
+                        content = batch.Content;
+                        recordStarts = batch.RecordStartOffsets;
+                        reachedEof = batch.Result.ReachedEoF;
+                    }
+                    if (await AcceptBatchAsync(content, recordStarts).ConfigureAwait(false) is { } stop)
+                        return stop;
                 }
-                else
+                finally
                 {
-                    var completion = new TaskCompletionSource<DescriptorRecordBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    PublishOperation(new ReadRecordBatchOperation(completion, input.Handle, delimiter, limit, readMemory));
-                    var batch = await completion.Task.ConfigureAwait(false);
-                    CheckCancellation();
-                    batch.Result.ThrowIfError();
-                    content = batch.Content;
-                    recordStarts = batch.RecordStartOffsets;
-                    reachedEof = batch.Result.ReachedEoF;
+                    // Batches with borrowed values settle with the enclosing integer input owner.
+                    if (!batchHasBorrowedIntegerValues)
+                        readMemory.Dispose();
                 }
-                if (await AcceptBatchAsync(content, recordStarts).ConfigureAwait(false) is { } stop)
-                    return stop;
             }
             if (values == null)
             {
@@ -225,7 +235,9 @@ public sealed partial class Evaluation
                 }
                 if (value.IsEmpty)
                     value = ShellValue.Empty;
-                else if (!integer)
+                else if (integer)
+                    batchHasBorrowedIntegerValues = true;
+                else
                 {
                     if (convertCase)
                     {

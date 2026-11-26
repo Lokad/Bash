@@ -448,6 +448,63 @@ public partial class EvaluationTests
         Assert.Equal("0", GetVariable(state, "counter"));
     }
 
+    [Theory]
+    [InlineData("mapfile -t", '\n')]
+    [InlineData("readarray -td:", ':')]
+    public async Task IntegerArrayReaderRetainsOnlyBatchesWithBorrowedValues(string command, char delimiter)
+    {
+        var budget = new MemoryGovernor(2 * 1024 * 1024);
+        using var owner = budget.CreateScope();
+        var state = new Eval(Parser.Parse($"counter=1; declare -ai arr=(99); {command} -n5 arr"));
+        state.Memory.Budget = owner;
+
+        var emptyAfterNormalization = -1L;
+        var mixedWhileReading = -1L;
+        IReadOnlyList<ShellValue> prior = [];
+        var counterWhileReading = string.Empty;
+        using var empty = await CompleteBatchAsync(new string(delimiter, 2), [1], () => { });
+        using var mixed = await CompleteBatchAsync($"counter++{delimiter}{delimiter}", [10], () =>
+            emptyAfterNormalization = empty.Bytes);
+        using var last = await CompleteBatchAsync($"counter{delimiter}", [], () =>
+        {
+            mixedWhileReading = mixed.Bytes;
+            prior = state.IndexedArrays["arr"];
+            counterWhileReading = GetVariable(state, "counter");
+        });
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+        Assert.Equal(0, emptyAfterNormalization);
+        Assert.Equal(512, mixedWhileReading);
+        Assert.Equal(ShellValue.FromText("99"), Assert.Single(prior));
+        Assert.Equal("1", counterWhileReading);
+        Assert.Equal(new[] { "0", "0", "1", "0", "2" }.Select(ShellValue.FromText), state.IndexedArrays["arr"]);
+        Assert.Equal("2", GetVariable(state, "counter"));
+        Assert.Equal(0, mixed.Bytes);
+        Assert.Equal(0, last.Bytes);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+
+        async Task<IMemoryReservation> CompleteBatchAsync(string input, int[] offsets, Action check)
+        {
+            var step = await NextStepAsync(state);
+            check();
+            var bytes = Utf8Bytes(input);
+            if (delimiter == '\n')
+            {
+                var request = Assert.IsType<ReadLineOperation>(step);
+                var charge = Assert.IsAssignableFrom<IMemoryBudget>(request.DestinationBudget).Reserve(512);
+                request.SetResult(ReadResult.Success(bytes, offsets, reachedEoF: false));
+                return charge;
+            }
+
+            var records = Assert.IsType<ReadRecordBatchOperation>(step);
+            var reservation = records.DestinationBudget.Reserve(512);
+            records.SetResult(new DescriptorRecordBatch(bytes, offsets, ByteReadResult.Success(bytes.Length, reachedEoF: false)));
+            return reservation;
+        }
+    }
+
     [Fact]
     public async Task Evaluation_MapfileBuiltin_PreservesTheArrayWhenReadingTheSkipPrefixFails()
     {
