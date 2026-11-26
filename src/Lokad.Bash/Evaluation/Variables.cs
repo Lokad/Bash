@@ -1001,10 +1001,11 @@ public sealed partial class Variables
     /// <summary>Writes a resolved scalar or array element zero; callers own readonly checks.</summary>
     internal ShellValue SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory)
     {
-        if (IndexedArrays.ContainsKey(resolved))
+        TryGetBinding(resolved, detachBorrowed: false, out var slot);
+        if (slot is IndexedSlot)
             _ = TrySetResolvedArrayElement(resolved, default(IndexedArrayIndex), value, memory);
-        else if (AssociativeArrays.ContainsKey(resolved))
-            _ = TrySetResolvedArrayElement(resolved, ShellValue.FromText("0"), value, ArrayKind.Associative, memory);
+        else if (slot is AssociativeSlot)
+            _ = TrySetResolvedArrayElement(resolved, AssociativeArrayKey.Zero, value, memory);
         else
             return SetAssignedScalar(resolved, value, memory);
         return HasAttribute(resolved, BindingAttributes.Case) && TryGetExpansionValue(resolved, out var stored)
@@ -1022,17 +1023,20 @@ public sealed partial class Variables
             return false;
 
         if (resolved.IsEmpty)
-        {
-            if (!IsUnsetNameref(name) || value.IsEmpty)
-                return false;
-            memory?.Charge(checked(4L * value.Bytes.Length));
-            return TrySetNameref(name, value, memory);
-        }
+            return IsUnsetNameref(name) && TryInitializeUnsetNameref(name, value, memory);
         if (commandPrefix && TryGetBinding(resolved, out var slot) && slot is LineNumberSlot)
             ReplaceValue(resolved, new ScalarSlot(value));
         else
             SetAssignedScalar(resolved, value, memory);
         return true;
+    }
+
+    private bool TryInitializeUnsetNameref(BindingName name, ShellValue value, EvaluationMemory? memory)
+    {
+        if (value.IsEmpty)
+            return false;
+        memory?.Charge(checked(4L * value.Bytes.Length));
+        return TrySetNameref(name, value, memory);
     }
 
     /// <summary>
@@ -1372,10 +1376,11 @@ public sealed partial class Variables
 
         if (!TryResolveBinding(reference.Name, selectOwner: null, out var binding)
             || binding.Reference.Kind != VariableReferenceKind.Name || binding.TryGetInvalidNameref(out _)
-            || IsReadonly(reference.Name) || binding.Owner.IsReadonly(binding.Name))
+            || IsResolvedBindingReadonly(reference.Name, binding))
             return false;
         if (binding.IsUnsetNameref)
-            return TrySetScalar(reference.Name, value, memory);
+            return binding.Name == reference.Name && reference.Name.IsIdentifier
+                && TryInitializeUnsetNameref(reference.Name, value, memory);
         binding.Owner.SetResolvedValuePreservingArray(binding.Name, value, memory);
         return true;
     }
@@ -1523,9 +1528,11 @@ public sealed partial class Variables
     {
         resolved = BindingName.Empty;
         return name.IsIdentifier && TryResolveWholeName(name, out resolved, out var binding)
-            && !IsReadonlyBinding(name)
-            && (binding.Name == name || !binding.Owner.IsReadonlyBinding(binding.Name));
+            && !IsResolvedBindingReadonly(name, binding);
     }
+
+    private bool IsResolvedBindingReadonly(BindingName source, VariableBinding binding) =>
+        IsReadonlyBinding(source) || binding.Name != source && binding.Owner.IsReadonlyBinding(binding.Name);
 
     /// <summary>
     /// Resolves whole bindings; returns empty for cycles, unset references or elements requiring scoped selection.

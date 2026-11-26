@@ -420,6 +420,112 @@ public sealed class ShellVariableValueTests
         Assert.Equal(original, stored);
     }
 
+    [Theory]
+    [InlineData(ArrayKind.Indexed)]
+    [InlineData(ArrayKind.Associative)]
+    public void NamedOutputThroughANamerefUpdatesOnlyElementZero(ArrayKind kind)
+    {
+        var variables = Variables.CreateEmpty();
+        var zero = ShellValue.FromText("0");
+        var other = ShellValue.FromText("7");
+        var original = ShellValue.FromText("original");
+        var replacement = ShellValue.FromText("replacement");
+        Assert.True(variables.TrySetArrayElement("target", zero, original, kind));
+        Assert.True(variables.TrySetArrayElement("target", other, original, kind));
+        Assert.True(variables.TrySetNameref("middle", ShellValue.FromText("target")));
+        Assert.True(variables.TrySetNameref("source", ShellValue.FromText("middle")));
+        variables.SetReadonlyBinding("middle");
+        var reference = VariableReference.ForName("source");
+
+        Assert.True(variables.TryApplyAssignment(reference, replacement, memory: null));
+        variables.SetReadonlyBinding("target");
+        Assert.False(variables.TryApplyAssignment(reference, original, memory: null));
+        Assert.Equal(kind, variables.GetArrayMetadata("target")?.Kind);
+        Assert.True(variables.TryGetExpansionValue("target", out var stored));
+        Assert.Equal(replacement, stored);
+        if (kind == ArrayKind.Indexed)
+        {
+            Assert.True(variables.IndexedArrays["target"].TryGet(IndexedArrayIndex.FromUnsigned(7), out var preserved));
+            Assert.Equal(original, preserved);
+        }
+        else
+        {
+            Assert.True(AssociativeArrayKey.TryCreate(other, out var key));
+            Assert.True(variables.AssociativeArrays["target"].TryGet(key, out var preserved));
+            Assert.Equal(original, preserved);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NamedOutputAcceptsASelectedByteValuedLiteralName(bool readOnly)
+    {
+        var variables = Variables.CreateEmpty();
+        var spelling = ShellValue.FromBytes(new byte[] { (byte)'a', (byte)'[', 0xff, (byte)']' });
+        var literal = BindingName.FromValue(spelling);
+        var original = ShellValue.FromText("original");
+        var replacement = ShellValue.FromBytes(new byte[] { 0xfe, (byte)'v' });
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.True(variables.TrySetResolvedScalar(literal, original, memory));
+            if (readOnly)
+                variables.SetReadonlyBinding(literal);
+
+            Assert.Equal(!readOnly, variables.TryApplyAssignment(VariableReference.ForName(literal), replacement, memory));
+            Assert.True(variables.TryGetScalar(literal, out var stored));
+            Assert.Equal(readOnly ? original : replacement, stored);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData("target", true)]
+    [InlineData("", false)]
+    [InlineData("bad name", false)]
+    public void NamedOutputInitializesOnlyTheDirectUnsetNameref(string text, bool accepted)
+    {
+        var variables = Variables.CreateEmpty();
+        var value = ShellValue.FromText(text);
+        Assert.True(variables.TrySetNameref("unset", ShellValue.Empty));
+        Assert.True(variables.TrySetNameref("alias", ShellValue.FromText("unset")));
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            Assert.False(variables.TryApplyAssignment(VariableReference.ForName("alias"), ShellValue.FromText("target"), memory));
+            Assert.Equal(0, governor.ReservedBytes);
+            Assert.Equal(accepted, variables.TryApplyAssignment(VariableReference.ForName("unset"), value, memory));
+            Assert.True(variables.TryGetNameref("unset", out var stored));
+            Assert.Equal(accepted ? value : ShellValue.Empty, stored);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void NamedOutputRetainsAnInvalidNamerefSpelling()
+    {
+        var variables = Variables.CreateEmpty();
+        var spelling = ShellValue.FromText("bad name");
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            variables.PublishNamerefPrefix("source", spelling, memory);
+            Assert.True(variables.TryGetInvalidNameref("source", out var invalid));
+            Assert.Equal(spelling, invalid);
+            Assert.False(variables.TryApplyAssignment(VariableReference.ForName("source"), ShellValue.FromText("target"), memory));
+            Assert.True(variables.TryGetInvalidNameref("source", out var stored));
+            Assert.Equal(spelling, stored);
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     private static long MeasureAllocation(Action action)
     {
         var before = GC.GetAllocatedBytesForCurrentThread();
