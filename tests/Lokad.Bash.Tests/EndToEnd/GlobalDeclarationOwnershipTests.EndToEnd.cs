@@ -428,6 +428,148 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("-gix")]
+    [InlineData("-gaix")]
+    public async Task GlobalIndexedInitializerUsesTheAttributesOfTheTemporaryReferent(string flags)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            declare -ai b=(44 55); declare -n ref=b; i=0
+            b=5 declare {flags} ref='++i'
+            printf '<%s:%s>\n' "$?" "$i"
+            declare -p b ref
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0>\ndeclare -aix b=([0]=\"44\" [1]=\"55\")\ndeclare -n ref=\"b\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("local -ai b=(11 12)", "", "-gix", "1", "-ai b=([0]=\"1\" [1]=\"12\")", "-aix")]
+    [InlineData("local -ai b=(11 12)", "b=5 ", "-gix", "1", "-ai b=([0]=\"1\" [1]=\"12\")", "-aix")]
+    [InlineData("local b=local", "", "-gix", "0", "-a b=([0]=\"++i\")", "-aix")]
+    [InlineData("local -ai b=(11 12)", "", "-g +i", "1", "-ai b=([0]=\"1\" [1]=\"12\")", "-a")]
+    public async Task GlobalIndexedInitializerCanWriteAnArrayWithDifferentAttributes(
+        string local, string prefix, string flags, string index, string active, string globalFlags)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -ai b=(44 55); i=0
+            f() {
+                {{local}}
+                {{prefix}}declare {{flags}} b='++i'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p b
+            }
+            f
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:{index}>\ndeclare {active}\ndeclare {globalFlags} b=([0]=\"44\" [1]=\"55\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("local -n ref='other[i++]'", "other[i++]")]
+    [InlineData("local -n ref", "")]
+    public async Task GlobalIndexedInitializerReportsARejectedActiveNameref(string local, string spelling)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -ai b=(44 55); declare -n ref=b; i=0; j=0
+            f() {
+                {{local}}; local -ai other=(11 12)
+                declare -gix ref='++j' later=7
+                printf '<%s:%s:%s:%s>\n' "$?" "$i" "$j" "$later"
+            }
+            f
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0:0:7>\ndeclare -aix b=([0]=\"44\" [1]=\"55\")\n", result.StdOut);
+        Assert.Equal($"line 4: declare: `{spelling}': not a valid identifier\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("b=5", "-gix", 1)]
+    [InlineData("i=7 b=5", "-gaix", 8)]
+    public async Task GlobalCompoundInitializerKeepsArithmeticEffectsInTheCaller(string prefix, string flags, int index)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -ai b=(44 55); declare -n ref=b; i=0
+            f() {
+                local -ai b=(11 12)
+                {{prefix}} declare {{flags}} ref='(b=6,++i)'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p b
+            }
+            f
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<0:{index}>\ndeclare -ai b=([0]=\"6\" [1]=\"12\")\ndeclare -aix b=([0]=\"{index}\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task GlobalCompoundInitializerChecksTheSavedReadonlyBinding()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -ai b=(44 55); declare -n ref=b; i=0
+            b=5 declare -gir ref='(b=6,++i)' extra=7
+            printf '<%s:%s:%s>\n' "$?" "$i" "$extra"
+            declare -p b
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:0:>\ndeclare -air b=()\n", result.StdOut);
+        Assert.Equal("line 2: b: readonly variable\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("=", "([\"$((++i))\"]=7 [0]=b+1)", "<0:8:11:::>\n<0:8:6:::7>\n")]
+    [InlineData("+=", "([0]=\"(b=6,++i)\" [keep]=b+1)", "<0:8:6:::>\n<0:8:8:55:7:>\n")]
+    public async Task GlobalAssociativeInitializerRetainsSelectorAndValueEffects(string operation, string expression, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -Ai b=([0]=44 [tail]=55); declare -n ref=b; i=0
+            f() {
+                local -Ai b=([0]=11 [local]=12)
+                i=7 b=5 declare -gAix ref{{operation}}'{{expression}}'
+                printf '<%s:%s:%s:%s:%s:%s>\n' "$?" "$i" "${b[0]-}" "${b[tail]-}" "${b[keep]-}" "${b[$i]-}"
+            }
+            f
+            printf '<%s:%s:%s:%s:%s:%s>\n' "$?" "$i" "${b[0]-}" "${b[tail]-}" "${b[keep]-}" "${b[$i]-}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task LaterGlobalIntegerOperandReadsTheActivePrefix()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -ai b=(44 55); declare -n ref=bridge bridge=b; i=0
+            f() {
+                local -ai b=(11 12)
+                i=7 b=5 declare -gix ref='++i' j='i'
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p b
+            }
+            f
+            declare -p b j
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:0:7>\ndeclare -ai b=([0]=\"11\" [1]=\"12\")\n"
+            + "declare -aix b=([0]=\"44\" [1]=\"55\")\ndeclare -ix j=\"7\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task GlobalNamerefRemovalKeepsTheReadonlyAttributeOnTheGlobalReferent()
     {
@@ -566,7 +708,7 @@ public sealed class GlobalDeclarationOwnershipTestsEndToEnd
     [InlineData("declare -n r=s s; f(){ local r=local; declare -ga r+=value; printf '<%s>/' \"$r\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<localvalue>/<>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local r=local; declare -gA r=value; printf '<%s>/' \"$r\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<local>/<value>/<>", "", 0)]
     [InlineData("declare -n r=s s; f(){ local s=local; declare -gA r=value; printf '<%s>/' \"$s\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "<value>/<>/<>", "", 0)]
-    [InlineData("declare -n r=s s; f(){ local -n r; declare -ga r=value; printf 'status=%s/' \"$?\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "status=0/<>/<>", "declare: `': not a valid identifier\n", 0)]
+    [InlineData("declare -n r=s s; f(){ local -n r; declare -ga r=value; printf 'status=%s/' \"$?\"; }; f; printf '<%s>/<%s>' \"${r[*]}\" \"${s[*]}\"", "status=0/<>/<>", "line 1: declare: `': not a valid identifier\n", 0)]
     [InlineData("declare -A a=([key]=old); f(){ local a=inner; declare -ga a=(new); printf 'status=%s:<%s>/' \"$?\" \"$a\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1:<inner>/<old>", "line 1: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
     [InlineData("declare -A a=([key]=old); f(){ declare -ga a=(new); printf 'status=%s/' \"$?\"; }; f; printf '<%s>' \"${a[key]}\"", "status=1/<old>", "line 1: f: a: cannot convert associative to indexed array\nline 1: declare: a: cannot convert associative to indexed array\n", 0)]
     public async Task Evaluation_GlobalDeclarations_SelectOwnersWithoutLeakingAcrossScopes(

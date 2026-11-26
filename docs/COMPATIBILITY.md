@@ -1154,6 +1154,18 @@ still use the existing source preparation phase. When a global indexed write
 converts a shadowing associative binding, it keeps the binding's attributes.
 Append uses the old value at key `0` as the previous element.
 
+A simple whole-name initializer for a global indexed array applies its
+declaration flags to the global binding and assigns element zero through
+the active binding. This includes indexed arrays selected without `-a`.
+An active local or temporary referent supplies the assignment's integer
+and case attributes. A direct name reaches the caller binding behind its
+temporary prefix. A nameref can reach the temporary binding itself.
+An active element nameref or an unset nameref reports its target spelling
+and leaves the global flags in place. The selector stays unevaluated.
+A compound initializer parsed from an expanded operand stores the array
+in its selected binding. Arithmetic reads the active prefix values and
+retains its direct writes in the caller.
+
 An explicit element assignment through `declare -g` prepares the global
 array and applies the declaration attributes there. The write uses the
 active binding, including its array kind, readonly state and nameref target.

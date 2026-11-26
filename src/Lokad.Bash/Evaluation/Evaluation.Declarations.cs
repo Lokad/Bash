@@ -175,7 +175,7 @@ public sealed partial class Evaluation
                         targetVariables.SetIntegerBinding(name, setCompoundTransforms);
                     targetVariables.SetCaseAttributes(name, GetCompoundCaseChange(setCompoundTransforms));
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
-                            name, assignment.Operator, kind, expanded, scope, targetVariables, declaredName,
+                            name, assignment.Operator, kind, expanded, scope, scope, targetVariables, declaredName,
                             initializeReadonly: false)).ConfigureAwait(false))
                     {
                         if (!HasPendingExpansionError)

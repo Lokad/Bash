@@ -439,6 +439,11 @@ attributes before the shared assignment evaluator runs. The evaluator
 uses the usual readonly checks for arithmetic effects. A whole-name
 declaration that has just made the destination readonly holds the existing
 initializer permission for its final write to that destination.
+Global indexed initializers select the declaration binding separately
+from the active binding used by a simple element-zero write. Expanded
+compound initializers publish into their selected array while their expansion
+scope forwards direct effects to the caller. With installed command
+bindings that forwarding targets only names in the saved prefix store.
 Full child snapshots still detach all visible state.
 
 External-command redirection expansion uses the same command-local detachment.

@@ -128,6 +128,8 @@ internal readonly record struct ScopedEvaluation(
     internal readonly record struct ExpansionBindings(Variables Variables, IReadOnlySet<BindingName> PrefixNames)
     {
         internal bool PreparingPrefixes { get; init; }
+        /// <summary>The receiving store contains saved prefix bindings.</summary>
+        internal bool OnlyPrefixNames { get; init; }
     }
 
     public ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)
@@ -164,7 +166,7 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Selects the additional bindings receiving this expansion write, if any.</summary>
     public Variables? GetExpansionWriteTarget(BindingName name)
     {
-        if (ExpansionWriteTarget is not { } target)
+        if (ExpansionWriteTarget is not { } target || target.OnlyPrefixNames && !target.PrefixNames.Contains(name))
             return null;
 
         return IsIndirectPrefixWrite(name, target.PrefixNames) ? null : target.Variables;
