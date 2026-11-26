@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Helpers;
 
@@ -21,6 +22,11 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
     /// <summary>Removes active backslash escapes while retaining which resulting bytes are literal.</summary>
     /// <returns>False for a terminal active backslash, which stays in the returned pattern.</returns>
     internal bool TryUnescape(ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken,
+        out ShellValue unescaped, out GlobMask unescapedMask) =>
+        TryUnescape(value, memory, memory.Workspace, cancellationToken, out unescaped, out unescapedMask);
+
+    /// <summary>Admits decoded bytes and activity against an explicit owner through their last use.</summary>
+    internal bool TryUnescape(ShellValue value, EvaluationMemory memory, MemoryCapacity owner, CancellationToken cancellationToken,
         out ShellValue unescaped, out GlobMask unescapedMask)
     {
         unescaped = value;
@@ -33,7 +39,7 @@ public sealed class GlobMask(ReadOnlyMemory<byte> mask)
         if (firstEscape == bytes.Length - 1)
             return false;
 
-        memory.Charge(checked(4L * (2L * bytes.Length)));
+        memory.Charge(owner, checked(4L * (2L * bytes.Length)));
         var content = new byte[bytes.Length];
         var activity = new byte[bytes.Length];
         bytes[..firstEscape].CopyTo(content);

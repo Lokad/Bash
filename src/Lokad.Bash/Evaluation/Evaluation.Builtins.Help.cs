@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Unicode;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -53,39 +54,56 @@ public sealed partial class Evaluation
         else
         {
             GlobMask? allActive = null;
-            ReadOnlyMemory<byte> previousTopic = default;
-            var previousStart = 0;
-            var previousLength = 0;
-            for (var index = firstPattern; index < words.Count; index++)
+            MemoryCapacity? patternMemory = null;
+            try
             {
-                _cancellationToken.ThrowIfCancellationRequested();
-                var topic = words[index];
-                if (index != firstPattern && topic.Bytes.Span.SequenceEqual(previousTopic.Span))
+                ReadOnlyMemory<byte> previousTopic = default;
+                var previousStart = 0;
+                var previousLength = 0;
+                for (var index = firstPattern; index < words.Count; index++)
                 {
-                    if (previousLength != 0)
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    var topic = words[index];
+                    if (index != firstPattern && topic.Bytes.Span.SequenceEqual(previousTopic.Span))
                     {
-                        // Read the source range after the builder admits any required growth.
-                        var destination = output.AppendSpan(previousLength);
-                        output.ToMemory().Span.Slice(previousStart, previousLength).CopyTo(destination);
+                        if (previousLength != 0)
+                        {
+                            // Read the source range after the builder admits any required growth.
+                            var destination = output.AppendSpan(previousLength);
+                            output.ToMemory().Span.Slice(previousStart, previousLength).CopyTo(destination);
+                        }
+                        continue;
                     }
-                    continue;
-                }
 
-                previousTopic = topic.Bytes;
-                previousStart = output.Length;
-                matched |= AppendTopics(topic);
-                previousLength = output.Length - previousStart;
+                    previousTopic = topic.Bytes;
+                    previousStart = output.Length;
+                    matched |= AppendTopics(topic);
+                    previousLength = output.Length - previousStart;
+                }
             }
+            finally { patternMemory?.Dispose(); }
 
             bool AppendTopics(ShellValue topic)
             {
                 if (topic.Bytes.Span.IndexOfAny("*?[\\"u8) >= 0)
                 {
                     allActive ??= new GlobMask(ReadOnlyMemory<byte>.Empty);
-                    if (!allActive.TryUnescape(topic, Memory, _cancellationToken, out var pattern, out var mask))
-                        return false;
-                    if (AppendPatternTopics(pattern, mask))
-                        return true;
+                    var scratch = patternMemory ??= new MemoryCapacity(Memory.Budget, 0);
+                    try
+                    {
+                        if (!allActive.TryUnescape(topic, Memory, scratch, _cancellationToken, out var pattern, out var mask))
+                            return false;
+                        if (AppendPatternTopics(pattern, mask, scratch))
+                            return true;
+                    }
+                    finally
+                    {
+                        if (scratch.Bytes != 0)
+                        {
+                            scratch.Resize(0);
+                            scratch.TrimExcess();
+                        }
+                    }
                 }
                 return AppendLiteralTopics(topic.Bytes.Span);
             }
@@ -103,7 +121,7 @@ public sealed partial class Evaluation
         var result = await WriteBuiltinOutputAsync(command, output.ToMemory(), sourcePrefix).ConfigureAwait(false);
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(result.IsError ? 1 : 0), negated).ConfigureAwait(false);
 
-        bool AppendPatternTopics(ShellValue pattern, GlobMask mask)
+        bool AppendPatternTopics(ShellValue pattern, GlobMask mask, MemoryCapacity scratch)
         {
             var found = false;
             var activity = mask.AsSpan();
@@ -112,7 +130,7 @@ public sealed partial class Evaluation
             foreach (var registration in BuiltinClassification.Entries)
             {
                 if (TextGlobMatcher.MatchUtf8(bytes, in activity, registration.NameBytes.Span,
-                        requireEnd: true, byteCharacters, Memory.Workspace, _cancellationToken, out _) != GlobMatchResult.Match)
+                        requireEnd: true, byteCharacters, scratch, _cancellationToken, out _) != GlobMatchResult.Match)
                     continue;
                 AppendTopic(registration.Name, registration.Kind, format);
                 found = true;

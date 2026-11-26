@@ -109,6 +109,38 @@ public sealed class EvaluationHelpTestsEndToEnd
     }
 
     [Fact]
+    public async Task HelpReleasesAnUnfinishedPatternBeforeWritingItsDiagnostic()
+    {
+        var literalWorkspace = await GetPendingWorkspaceAsync("missxyz");
+        var escapedWorkspace = await GetPendingWorkspaceAsync("m\\issx\\");
+
+        Assert.Equal(literalWorkspace, escapedWorkspace);
+
+        static async Task<long> GetPendingWorkspaceAsync(string topic)
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var state = new Eval(Parser.Parse($"help '{topic}'"));
+            state.Memory.Budget = owner;
+
+            var write = Assert.IsType<WriteOperation>(await state.GetNextStep(deadline.Token));
+            var workspace = state.Memory.Workspace.Bytes;
+            var diagnostic = System.Text.Encoding.UTF8.GetString(write.Content.Span);
+            write.SetResult(DescriptorWriteResult.Open);
+
+            Assert.Null(await state.GetNextStep(deadline.Token));
+            Assert.Equal(FileDescriptor.StdErr, write.FileDescriptor);
+            Assert.Equal($"help: no help topics match `{topic}'.  Try `help help' or `man -k {topic}' or `info {topic}'.\n",
+                diagnostic);
+            Assert.Equal(1, state.LastExitCode);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return workspace;
+        }
+    }
+
+    [Fact]
     public async Task HelpPreservesTheByteOfAnInvalidOption()
     {
         await using var host = new TestHost();
@@ -196,12 +228,13 @@ public sealed class EvaluationHelpTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("true")]
-    [InlineData("'t\\rue'")]
-    public async Task HelpKeepsTheAdmittedOutputUntilTheWriteSettles(string topic)
+    [InlineData("true", "true")]
+    [InlineData("'t\\rue'", "'t\\rue'")]
+    [InlineData("'t\\rue'", "'tr\\ue'")]
+    public async Task HelpKeepsTheAdmittedOutputUntilTheWriteSettles(string firstTopic, string secondTopic)
     {
         const int topics = 512;
-        var source = "help -d" + string.Concat(Enumerable.Repeat(" " + topic, topics));
+        var source = "help -d" + string.Concat(Enumerable.Repeat($" {firstTopic} {secondTopic}", topics / 2));
         var record = "true - Return success.\n"u8.ToArray();
         const int allowance = 72 * 1024;
         var governor = new MemoryGovernor(allowance);

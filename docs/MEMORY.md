@@ -132,6 +132,8 @@ and redirection setup. The shared diagnostic writer admits the final record at
 the reached stderr and keeps its reservation until the write completes.
 Prepared help retains the reached builtin and admits its output after
 descriptor setup. Shell-closed stdout bypasses that allocation.
+The `help` builtin reuses a separate scratch allowance across topic patterns
+and refunds it before writing output or a diagnostic.
 Command-name and command-control preparation admit captured fields and
 borrow the unexpanded operand tail from its existing source owner.
 The builtin wrapper checks the target in the byte registry and decodes names
