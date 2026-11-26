@@ -166,7 +166,7 @@ internal static class ArithmeticExpansionScanner
     }
 
     /// <summary>Checks expansions in quotes while reading the raw arithmetic operand.</summary>
-    internal static bool HasMissingCloserInOperandQuotes(ShellSource source, bool bracketed, MemoryCapacity? memory)
+    internal static bool HasMissingCloserInOperandQuotes(ShellSource source, bool skipLegacyCaptures, MemoryCapacity? memory)
     {
         var spelling = source.AsSpan();
         if (!spelling.Contains((byte)'"') || !HasPossibleExpansionComment(spelling))
@@ -178,8 +178,7 @@ internal static class ArithmeticExpansionScanner
         {
             if (cursor.TryConsumeQuoteOrEscape(recognizeAnsiC: false))
                 continue;
-            // The bracket delimiter reader skips legacy captures before checking quotes.
-            if (cursor.IsDoubleQuoted || bracketed && !cursor.IsQuoted && cursor.Current == (byte)'`')
+            if (cursor.IsDoubleQuoted || skipLegacyCaptures && !cursor.IsQuoted && cursor.Current == (byte)'`')
             {
                 var nested = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
                 if (context.MissingReachedArithmeticParenthesis)

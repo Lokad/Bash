@@ -148,6 +148,14 @@ public sealed class ArithmeticErrorTestsEndToEnd
         0, "[after:1:0]", "line 2: bad substitution: no closing `)' in " + QuotedChild + ":2\n")]
     [InlineData("v=0; text=abcdef\nprintf '<%s>' \"${text:$((v=1)):" + QuotedChild + "}\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
         0, "<bcd>[after:0:1]", "line 2: bad substitution: no closing `)' in \"$((1 # note))\"\n")]
+    [InlineData("v=0; text=abcdef\nprintf '<%s>' \"${text:$((v=5)) + (" + QuotedChild + ")}\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "[after:1:0]", "line 2: bad substitution: no closing `)' in $((v=5)) + (" + QuotedChild + ")\n")]
+    [InlineData("text=abcdef\nprintf '<%s>' \"${text:($(printf 3; printf %s $((1 # note))))}\"\nprintf '[after:%s]' \"$?\"",
+        0, "<def>[after:0]", "line 2: bad substitution: no closing `)' in $((1 # note))\n")]
+    [InlineData("v=0; text=abcdef\nprintf '<%s>' \"${text:$((v=1)):(" + QuotedChild + ")}\"\nprintf '[after:%s:%s]' \"$?\" \"$v\"",
+        0, "<bcd>[after:0:1]", "line 2: bad substitution: no closing `)' in \"$((1 # note))\"\n")]
+    [InlineData("set -- a b c d e f\nprintf '<%s>' \"${@:(" + QuotedChild + "):2}\"\nprintf '[after:%s]' \"$?\"",
+        0, "[after:1]", "line 2: bad substitution: no closing `)' in (" + QuotedChild + "):2\n")]
     [InlineData("present=kept\nprintf '<%s>' \"${present:-$((1+" + QuotedChild + "))}\"\nprintf '[after:%s]' \"$?\"",
         0, "<kept>[after:0]", "")]
     [InlineData("v=0\nfor ((v=0; v<1; v=1+" + QuotedChild + ")); do printf body; done\nprintf '[after:%s:%s]' \"$?\" \"$v\"",

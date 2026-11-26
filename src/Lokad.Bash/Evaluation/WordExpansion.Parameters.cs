@@ -1504,6 +1504,7 @@ internal static partial class WordExpansion
                 position = -1;
                 var cursor = new ShellSourceCursor(expression, 0, boundsScan);
                 var parentheses = 0;
+                var groupStart = 0;
                 var conditional = 0;
                 while (!cursor.IsAtEnd)
                 {
@@ -1520,8 +1521,19 @@ internal static partial class WordExpansion
                     if (!cursor.IsQuoted)
                     {
                         var current = cursor.Current;
-                        if (current == '(') parentheses++;
-                        else if (current == ')' && parentheses > 0) parentheses--;
+                        if (current == '(')
+                        {
+                            if (parentheses == 0)
+                                groupStart = cursor.Position + 1;
+                            parentheses++;
+                        }
+                        else if (current == ')' && parentheses > 0)
+                        {
+                            parentheses--;
+                            if (parentheses == 0 && ArithmeticExpansionScanner.HasMissingCloserInOperandQuotes(
+                                    expression[groupStart..cursor.Position], skipLegacyCaptures: true, boundsScan.SyntaxMemory))
+                                return false;
+                        }
                         else if (parentheses == 0 && current == '?') conditional++;
                         else if (parentheses == 0 && current == ':' && conditional > 0)
                         {
