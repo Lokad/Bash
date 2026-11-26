@@ -439,14 +439,14 @@ public sealed partial class Evaluation
                         return resolution == BuiltinReferenceResolution.NoWrite;
                     return bindings != null && ReferenceEquals(binding.Owner, commandVars)
                         ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory, _cancellationToken)
-                        : binding.Owner.TryApplyAssignment(binding.Reference, value, Memory);
+                        : binding.Owner.TryApplyArithmeticAssignment(binding.Reference, value, Memory);
                 }
                 // Keep an intermediate alias: its prefix-owned write must not reach the caller.
                 sourceName = selected.Name;
             }
             // A prefix hiding a caller nameref stays temporary, just like other builtin outputs.
             var outputBindings = bindings?.CanRetainOutput(target.Name) == true ? bindings : null;
-            return !commandVars.IsReadonly(reference.Name)
+            return !commandVars.IsReadonlyWriteTarget(reference.Name, out _)
                 && target.TryPublishValue(new ScopedEvaluation(this, commandVars, context) { SelectorBindings = outputBindings },
                     sourceName, value);
         }
@@ -669,9 +669,10 @@ public sealed partial class Evaluation
         Variables variables,
         BindingName name,
         EvaluationContext context,
-        Variables.CommandBindings? bindings)
+        Variables.CommandBindings? bindings,
+        bool appliesToNameref)
     {
-        var resolved = StripArraySubscript(variables.ResolveNamerefName(name));
+        var resolved = StripArraySubscript(appliesToNameref ? name : variables.ResolveNamerefName(name));
         if (resolved.IsEmpty)
             return;
 

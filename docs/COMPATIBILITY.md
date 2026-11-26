@@ -1413,7 +1413,12 @@ Arithmetic diagnostics report the reached source line and active `source`
 filename. Parser errors preserve the failing operand and token bytes, including
 trailing whitespace and physical LF in arithmetic `for` clauses. Arithmetic
 commands, `let`, numeric conditionals and substring bounds identify the reached
-caller for expression errors. Readonly arithmetic writes name the target.
+caller for expression errors. Arithmetic and parameter defaults can write
+through an initialized readonly nameref to a writable referent. The nameref's
+attributes stay on its own binding. Readonly arithmetic diagnostics name the
+selected binding. A spelled subscript or an implicit indexed element-zero
+write names the operand. Readonly parameter defaults with a spelled
+subscript also name the operand.
 
 The substring offset scan finds the length delimiter outside balanced
 parentheses. A stray closing parenthesis leaves the scan at the current level.

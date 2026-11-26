@@ -169,6 +169,8 @@ public sealed class ParameterOperatorTests
         "<1>|1[0:0:1]", "line 2: a: bad array subscript\n")]
     [InlineData("readonly v=; i=0; declare -n r=v\n: \"${r:=$((++i))}\"; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
         "[2:2:1]", "line 2: v: readonly variable\n")]
+    [InlineData("a=(keep ''); readonly a; declare -n r=a; i=0\n: \"${r[1]:=$((++i))}\"; printf skipped\nprintf '[%s:%s:%s]' \"$?\" \"${PIPESTATUS[*]}\" \"$i\"",
+        "[2:2:1]", "line 2: r: readonly variable\n")]
     public async Task DefaultAssignmentSelectsTheWriteTargetAfterItsRightHandSide(string script, string output, string error)
     {
         foreach (var prepared in new[] { false, true })

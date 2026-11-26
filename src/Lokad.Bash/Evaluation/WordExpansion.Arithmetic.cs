@@ -289,24 +289,30 @@ internal static partial class WordExpansion
                     target = target.SelectPrefixElementWrite(reference, scope);
                 var activeVariables = scope.Variables;
                 var targetVariables = target.ReadOwner ?? activeVariables;
-                var readOnly = activeVariables.IsReadonly(reference.Name, out var sourceBinding)
+                var readOnly = activeVariables.IsReadonlyWriteTarget(reference.Name, out var sourceBinding)
                     || (target.Name != reference.Name || !ReferenceEquals(targetVariables, activeVariables)) && targetVariables.IsReadonly(target.Name)
                     || scope.ExpansionWriteTarget is { PreparingPrefixes: true }
-                        && scope.GetExpansionWriteTarget(reference.Name)?.IsReadonly(reference.Name) == true;
+                        && scope.GetExpansionWriteTarget(reference.Name)?.IsReadonlyWriteTarget(reference.Name, out _) == true;
                 if (assignOutput == null && !readOnly && AssignExpansion(reference, target, sourceBinding, formatted))
                     return null;
                 var namerefFailure = scope.Variables.GetNamerefAssignmentFailure(
                     reference.Name, target.Name, formatted, scope.Effects.Memory);
-                if (!readOnly && namerefFailure != NamerefAssignmentFailure.None)
+                var unsetNameref = target.IsWholeBindingRead && sourceBinding is { IsUnsetNameref: true };
+                if (namerefFailure != NamerefAssignmentFailure.None && (!readOnly || unsetNameref))
                 {
                     // A rejected nameref initializer diagnoses without discarding the arithmetic value.
-                    await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command,
-                        namerefFailure == NamerefAssignmentFailure.InvalidTarget ? formatted : ShellValue.Empty, scope)
-                        .ConfigureAwait(false);
+                    if (!readOnly || namerefFailure == NamerefAssignmentFailure.InvalidTarget)
+                        await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command,
+                            namerefFailure == NamerefAssignmentFailure.InvalidTarget ? formatted : ShellValue.Empty, scope)
+                            .ConfigureAwait(false);
                     return null;
                 }
-                return new ArithmeticError(readOnly ? ArithmeticErrorKind.ReadonlyVariable : ArithmeticErrorKind.InvalidTarget,
-                    reference.Name.ToValue());
+                if (!readOnly)
+                    return new ArithmeticError(ArithmeticErrorKind.InvalidTarget, reference.Name.ToValue());
+                // Spelled subscripts and implicit indexed element zero retain the operand name.
+                var diagnosticName = reference.Kind != VariableReferenceKind.Name
+                    || target is ResolvedVariableReference.Indexed { IsWholeBindingRead: true } ? reference.Name : target.Name;
+                return new ArithmeticError(ArithmeticErrorKind.ReadonlyVariable, diagnosticName.ToValue());
 
                 ArithmeticError? AssignCircular(ResolvedVariableReference.Indexed target, VariableBinding? resolved)
                 {

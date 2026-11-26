@@ -4181,7 +4181,7 @@ public sealed partial class Evaluation : IFileTester
                     if (local)
                         declarationScope.Context.FunctionContext?.Locals.Publish(name, variables);
                     if (exportChange == DeclarationAttributeChange.Set || options.Readonly)
-                        PromoteAttributeBinding(variables, name, declarationScope.Context, bindings);
+                        PromoteAttributeBinding(variables, name, declarationScope.Context, bindings, appliesToNameref: options.Nameref);
                 }
             }
 

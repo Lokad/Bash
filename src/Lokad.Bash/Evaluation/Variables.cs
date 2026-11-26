@@ -349,13 +349,13 @@ public sealed partial class Variables
             var element = reference.Kind != VariableReferenceKind.Name
                 || _owner.GetArrayMetadata(reference.Name) is { Kind: ArrayKind.Indexed };
             var destination = SelectOutputVariables(reference.Name, memory, cancellationToken, element);
-            if (!destination.TryApplyAssignment(reference, value, memory))
+            if (!destination.TryApplyArithmeticAssignment(reference, value, memory))
                 return false;
             if (ReferenceEquals(destination, _owner))
                 return true;
 
             // Scalar arithmetic assignments also update the temporary value read by later expressions.
-            if (!element && !_owner.TryApplyAssignment(reference, value, memory))
+            if (!element && !_owner.TryApplyArithmeticAssignment(reference, value, memory))
                 return false;
 
             _retainedNames.Add(reference.Name);
@@ -1369,14 +1369,20 @@ public sealed partial class Variables
     /// <summary>
     /// Applies a parsed operand or an already selected literal binding used by builtin output.
     /// </summary>
-    internal bool TryApplyAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory)
+    internal bool TryApplyAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory) =>
+        TryApplyAssignment(reference, value, memory, checkSourceReadonly: true);
+
+    internal bool TryApplyArithmeticAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory) =>
+        TryApplyAssignment(reference, value, memory, checkSourceReadonly: false);
+
+    private bool TryApplyAssignment(VariableReference reference, ShellValue value, EvaluationMemory? memory, bool checkSourceReadonly)
     {
         if (reference.Kind != VariableReferenceKind.Name)
             return TryAssignArrayElement(reference.Name, reference.Subscript.ToValue(), value, memory);
 
         if (!TryResolveBinding(reference.Name, selectOwner: null, out var binding)
             || binding.Reference.Kind != VariableReferenceKind.Name || binding.TryGetInvalidNameref(out _)
-            || IsResolvedBindingReadonly(reference.Name, binding))
+            || (checkSourceReadonly ? IsResolvedBindingReadonly(reference.Name, binding) : binding.Owner.IsReadonlyBinding(binding.Name)))
             return false;
         if (binding.IsUnsetNameref)
             return binding.Name == reference.Name && reference.Name.IsIdentifier
@@ -2114,22 +2120,19 @@ public sealed partial class Variables
     /// <summary>
     /// Returns true when a name is readonly (after nameref resolution).
     /// </summary>
-    public bool IsReadonly(BindingName name) => IsReadonly(name, out _);
+    public bool IsReadonly(BindingName name) => !name.IsEmpty
+        && (IsReadonlyBinding(name) || TryResolveBinding(name, selectOwner: null, out var binding) && IsReadonlyReferent(name, binding));
 
-    /// <summary>Checks readonly status and returns the binding if the check reached a referent.</summary>
-    internal bool IsReadonly(BindingName name, out VariableBinding? binding)
+    /// <summary>Checks the reached write binding while a nameref keeps its own attributes.</summary>
+    internal bool IsReadonlyWriteTarget(BindingName name, out VariableBinding? binding)
     {
-        binding = null;
-        if (name.IsEmpty)
-            return false;
-
-        if (IsReadonlyBinding(name))
-            return true;
-
         if (!TryResolveBinding(name, selectOwner: null, out var reached))
-            return false;
+        {
+            binding = null;
+            return IsReadonlyBinding(name);
+        }
         binding = reached;
-        return IsReadonlyReferent(name, reached);
+        return reached.Owner.IsReadonlyBinding(reached.Name);
     }
 
     /// <summary>

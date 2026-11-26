@@ -236,13 +236,14 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
         CheckIntegerFailureAsync(script, expected, status, configure: null, check: null);
 
     [Theory]
-    [InlineData("", "<3>\n<0:3>\ndeclare -i dst=\"3\"\n", "")]
-    [InlineData("; readonly dst", "<2:0>\ndeclare -ir dst\n", "line 2: dst: readonly variable\n")]
+    [InlineData("-n", "", "<3>\n<0:3>\ndeclare -i dst=\"3\"\n", "")]
+    [InlineData("-nr", "", "<3>\n<0:3>\ndeclare -i dst=\"3\"\n", "")]
+    [InlineData("-n", "; readonly dst", "<2:0>\ndeclare -ir dst\n", "line 2: dst: readonly variable\n")]
     public async Task IntegerDefaultThroughNamerefsConvertsOnlyForAWritableReferent(
-        string attributes, string expected, string diagnostic)
+        string flags, string attributes, string expected, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync($$"""
-            declare -i dst; declare -n hop=dst ref=hop; i=0{{attributes}}
+            declare -i dst; declare -n hop=dst; declare {{flags}} ref=hop; i=0{{attributes}}
             printf '<%s>\n' "${ref:=i+=3}"
             printf '<%s:%s>\n' "$?" "$i"
             declare -p dst

@@ -260,7 +260,7 @@ internal static partial class WordExpansion
                             if (scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
                                 assigned = await EvaluateIntegerAssignmentAsync(expanded, null, scope, ShellValue.Empty).ConfigureAwait(false);
                             if (assigned is { } value && scope.CanExpand)
-                                assigned = !named.Name.IsEmpty && !scope.Variables.IsReadonly(named.Name, out var writableBinding)
+                                assigned = !named.Name.IsEmpty && !scope.Variables.IsReadonlyWriteTarget(named.Name, out var writableBinding)
                                     ? TrySetWritableVariable(named.Name, writableBinding, value, scope) : null;
                         }
                         else if (target != null && parameter.Source is { } source)
@@ -284,7 +284,8 @@ internal static partial class WordExpansion
                     }
                     else if (scope.CanExpand)
                     {
-                        var subject = target == null ? parsed.Name.ToValue() : target.Name.ToValue();
+                        var subject = parameter.Source is { Kind: VariableReferenceKind.Element } element
+                            ? element.Name.ToValue() : target?.Name.ToValue() ?? parsed.Name.ToValue();
                         await scope.Effects.ReportParameterDefaultFailureAsync([subject], [ShellValue.FromText("readonly variable")], scope)
                             .ConfigureAwait(false);
                     }

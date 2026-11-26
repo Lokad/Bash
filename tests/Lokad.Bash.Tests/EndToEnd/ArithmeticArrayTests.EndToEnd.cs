@@ -492,6 +492,7 @@ public sealed class ArithmeticArrayTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("declare -n hop=dst; declare -nr ref=hop", "<0:7:13>", false)]
     [InlineData("declare -nr hop=dst; declare -n ref=hop", "<0:7:13>", false)]
     [InlineData("declare -n hop=dst ref=hop; readonly dst", "<1:6:13>", true)]
     public async Task ArithmeticWriteChecksReadonlyOnTheReachedBinding(string setup, string expected, bool readonlyTarget)
@@ -508,6 +509,42 @@ public sealed class ArithmeticArrayTestsEndToEnd
             Assert.EndsWith(": readonly variable\n", result.StdErr, StringComparison.Ordinal);
         else
             Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("dst=6", "dst", "ref", "dst")]
+    [InlineData("dst=(6 13)", "dst", "ref", "ref")]
+    [InlineData("dst=(6 13)", "dst[1]", "ref", "dst")]
+    [InlineData("dst=(6 13)", "dst", "ref[1]", "ref")]
+    public async Task ArithmeticReadonlyDiagnosticUsesTheSelectedSpelling(string setup, string referent, string operand, string subject)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}; declare -n ref='{{referent}}'; readonly dst
+            (({{operand}}=7))
+            printf '<%s:%s>' "$?" "${dst[0]}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1:6>", result.StdOut);
+        Assert.Equal($"line 2: {subject}: readonly variable\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task ReadonlyLocalNamerefLeavesItsReferentPrefixTemporary()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            dst=(6 13)
+            f() { local -nr ref=dst
+                let 'ref=7'
+                printf '<inside:%s:%s>' "$?" "$dst"
+            }
+            dst=8 f
+            printf '<outside:%s:%s:%s>' "$?" "${dst[0]}" "${dst[1]}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<inside:0:7><outside:0:6:13>", result.StdOut);
+        Assert.Empty(result.StdErr);
     }
 
     [Theory]
