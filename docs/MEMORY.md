@@ -105,10 +105,12 @@ stderr write. Standalone formatting that returns diagnostics owns their
 materialized bytes under the caller's scope. Output-only formatting and
 shell-closed stderr skip diagnostic storage.
 `printf -v` admits the retained prefix of its formatted output. It counts
-the first NUL and later bytes without storing them. Quoted fields with zero
-width and no output precision use the final buffer and roll back an
-incomplete field at the output limit. Conversions that stage their bytes
-carry their logical lengths into field padding and precision.
+the first NUL and later bytes without storing them. Quoted fields can write
+directly to the final buffer when the width fits the remaining output,
+output precision is absent, and alignment or operand length rules out
+leading padding. The writer rolls back an incomplete quote at the output
+limit. Conversions that stage their bytes carry their logical lengths into
+field padding and precision.
 Their output scratch retains a prefix while those bytes can reach the
 assignment. `%b` and `%q` cap that scratch prefix at output field precision
 for both stdout and assignment. Decoding and quoting still count the full
