@@ -2348,7 +2348,7 @@ public sealed partial class Evaluation : IFileTester
                 IEnumerable<ShellValue> GetListedFunctionNames(MemoryCapacity listingMemory)
                 {
                     var count = _state.FunctionCount;
-                    if (count == 0 || filterNames && !_state.EnumerateFunctions().Any(entry => MatchesFilter(entry.Value)))
+                    if (count == 0 || filterNames && !HasListingMatch())
                         return [];
 
                     // A host write can replace attributes on any name already in the listing.
@@ -2369,6 +2369,15 @@ public sealed partial class Evaluation : IFileTester
                     }
                     Array.Sort(sorted, ShellValue.ByteOrder);
                     return sorted;
+
+                    bool HasListingMatch()
+                    {
+                        CheckCancellation();
+                        if (filter.HasFlag(FunctionAttributes.Exported) && _state.HasExportedFunctions)
+                            return true;
+                        return (filter & ~FunctionAttributes.Exported) != FunctionAttributes.None
+                            && _state.EnumerateFunctions().Any(entry => MatchesFilter(entry.Value));
+                    }
                 }
 
                 bool MatchesFilter(FunctionBinding function)

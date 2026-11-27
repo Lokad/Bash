@@ -364,6 +364,7 @@ internal sealed class EvaluationState
     private int DirectoryStackSlot(int index) => _directoryStack.Count - 1 - index;
 
     internal int FunctionCount => _functions.Count;
+    internal bool HasExportedFunctions => _exportedFunctionCount != 0;
 
     internal bool TryGetFunction(ShellValue name, [NotNullWhen(true)] out FunctionBinding? binding)
     {

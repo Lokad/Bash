@@ -244,8 +244,9 @@ the existing function-bypass lookup policy. `type -p` selects the ordinary
 resolution and emits a path only for an external result. `type -P` sends the
 selected names to the same host lookup with the reached directory and environment.
 
-Function listings capture the sorted names before the first write. Each
-row looks up its current function and attributes when reached, so a host
+Function listings capture the sorted names before the first write. The
+live export count can establish an exported match before taking the snapshot.
+Each row looks up its current function and attributes when reached, so a host
 publication during a write can change a later row. The listing borrows
 caller-owned names and copies names tied to evaluator-owned source. It
 holds the snapshot through output and lets retired source owners settle
