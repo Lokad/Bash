@@ -72,7 +72,10 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Readonly => new("[-aAfnp] [name[=value] ...]",
             "Mark bindings readonly, or list readonly bindings. -f selects functions; -a and -A select indexed and associative arrays. With named operands, -n skips adding the readonly attribute and preserves existing attributes."),
         BuiltinKind.Mapfile => new("[-t] [-d delim] [-n count] [-s count] [-O origin] [-u fd] [-C callback] [-c quantum] [--] [array]",
-            "Read standard input into an indexed array, defaulting to MAPFILE. -d uses the first delimiter byte, or NUL for an empty delimiter. -t removes each record's trailing delimiter.\n    -n limits records read; zero reads to EOF. -O writes at the supplied starting index and preserves other entries.\n    -C evaluates a callback before every quantum-th record is assigned, appending the index and record as arguments. -c sets the positive quantum, which defaults to 5000."),
+            "Read records into an indexed array. The default destination is MAPFILE.\n"
+            + "    Read standard input unless -u selects a descriptor. -d uses the first delimiter byte, or NUL for an empty delimiter. -t removes each record's trailing delimiter.\n"
+            + "    -s skips the first count records. The -n limit applies to records after the skip. With -n 0, read to EOF. -O writes at the supplied starting index and preserves other entries.\n"
+            + "    -C evaluates a callback before every quantum-th record is assigned, appending the index and record as arguments. -c sets the positive quantum, which defaults to 5000."),
         BuiltinKind.Hash => new("[-dlrt] [--] [name ...]",
             "Report an empty command cache. -l lists its reusable entries and -r clears it. Both succeed silently.\n    -d deletes named entries and succeeds against the empty cache. -t reports each queried name as missing."),
         BuiltinKind.Shift => new("[--] [n]", "Remove the first n positional parameters. With no count, remove one."),

@@ -72,6 +72,19 @@ public sealed class EvaluationHelpTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("help -m mapfile", 0)]
+    [InlineData("readarray --help", 2)]
+    public async Task ArrayInputHelpDescribesTheInputDescriptorAndSkippedRecords(string source, int status)
+    {
+        var result = await EvaluationTestHelper.RunAsync(source);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Contains("Read standard input unless -u selects a descriptor.", result.StdOut);
+        Assert.Contains("The -n limit applies to records after the skip.", result.StdOut);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task HelpReportsOnlyTheLastTopicWhenEveryTopicMisses(bool merged)
