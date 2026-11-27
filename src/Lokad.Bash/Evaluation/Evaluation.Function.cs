@@ -73,7 +73,13 @@ public sealed partial class Evaluation
                     await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
             }
 
-            if (IsDirectPipelineStageScope(scope) && _state.Traps?.HasPendingExitAction == true)
+            var hasExitAction = _state.Traps?.HasPendingExitAction == true;
+            if (hasExitAction && _state.ForkKind == ShellForkKind.PipelineSimpleCommand
+                && _state.FatalExpansion is { ExitsCommandString: true } && functionResult.Flow == FlowControlKind.Exit)
+            {
+                functionResult = await RunExitTrapAsync(functionScope, functionResult, ExitTrapKind.Expansion).ConfigureAwait(false);
+            }
+            else if (hasExitAction && IsDirectPipelineStageScope(scope))
             {
                 if (functionResult.Flow is FlowControlKind.None or FlowControlKind.Return)
                     functionResult = await RunExitTrapAsync(functionScope, functionResult).ConfigureAwait(false);

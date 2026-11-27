@@ -36,7 +36,11 @@ public sealed partial class Evaluation
         BashCommandInheritance.ImportEntry[]? ImportOrder)? _inheritedFunctions;
     private (ShellValue Name, SourceMemory.ReaderKind Kind)? _inheritedReader;
 
-    internal void SetInheritedReader(ShellValue name, SourceMemory.ReaderKind kind) => _inheritedReader = (name, kind);
+    internal void SetInheritedReader(ShellValue name, SourceMemory.ReaderKind kind)
+    {
+        _inheritedReader = (name, kind);
+        _state.UsesCommandStringExpansionExit = kind == SourceMemory.ReaderKind.CommandString;
+    }
 
     internal void SetInheritedFunctions(string commandName, IReadOnlyList<ExportedFunction> functions) =>
         SetInheritedFunctions(commandName, functions, null);

@@ -166,8 +166,7 @@ public sealed partial class Evaluation
     {
         var failure = _state.FatalExpansion;
         var useInheritedPipelineAction = kind == ExitTrapKind.Completion && failure is { UseInheritedPipelineExitAction: true };
-        var parameterTransform = useInheritedPipelineAction
-            && failure is { Kind: ExpansionFailureKind.InvalidParameterTransform };
+        var inheritedParameterFailure = useInheritedPipelineAction && failure is { IsTerminalParameterFailure: true };
         var status = kind == ExitTrapKind.Completion && result.Flow == FlowControlKind.Exit
             && failure is { Kind: ExpansionFailureKind.ReaderSyntax } readerFailure
                 ? ExitActionStatus(readerFailure) : result.ExitCode;
@@ -190,12 +189,12 @@ public sealed partial class Evaluation
             var sourceMemory = scope.Context.SourceMemory;
             var readerDepth = kind == ExitTrapKind.LoadedErrexit ? scope.InnerReaderRedirectionDepth : null;
             var readerUnwind = readerDepth is { } reachedDepth ? new LoadedExitUnwind(scope, reachedDepth) : default;
-            var keepsInheritedBindings = parameterTransform
+            var keepsInheritedBindings = inheritedParameterFailure
                 && (_state.ErrexitEnabled || _pipelineExitBoundary.KeepsReachedBindings);
             if (useInheritedPipelineAction && !keepsInheritedBindings)
             {
                 var retainDepth = scope.LoadedSyntaxFunctionDepth;
-                if (parameterTransform)
+                if (inheritedParameterFailure)
                 {
                     if (_pipelineExitRedirections is { } redirections)
                         _state.RestorePipelineExitRedirections(redirections, Memory);
@@ -363,7 +362,7 @@ public sealed partial class Evaluation
                 prefix.Bindings.Dispose();
             if (restorePositionals)
             {
-                if (parameterTransform)
+                if (inheritedParameterFailure)
                 {
                     // A source's saved arguments are newer than its containing function's saved arguments.
                     for (var source = active.Context.CallerSource;

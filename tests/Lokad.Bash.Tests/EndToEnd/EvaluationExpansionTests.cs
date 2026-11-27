@@ -161,7 +161,7 @@ public sealed class EvaluationExpansionTests
 
         var result = await host.RunCommandAsync(invocation, CommandLaunchFailureReporting.Host, cancellation.Token);
 
-        Assert.Equal(1, result.ShellExitCode);
+        Assert.Equal(127, result.ShellExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
         Assert.Equal(diagnostic, host.StandardError.TextContent);
     }
@@ -182,7 +182,7 @@ public sealed class EvaluationExpansionTests
 
         var result = await host.RunCommandAsync(invocation, CommandLaunchFailureReporting.Host, cancellation.Token);
 
-        Assert.Equal(1, result.ShellExitCode);
+        Assert.Equal(127, result.ShellExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
         Assert.Equal("sh: line 1: MISSING: first\n", host.StandardError.TextContent);
     }
@@ -251,7 +251,7 @@ public sealed class EvaluationExpansionTests
 
         var result = await host.RunCommandAsync(invocation, CommandLaunchFailureReporting.Host, cancellation.Token);
 
-        Assert.Equal(1, result.ShellExitCode);
+        Assert.Equal(127, result.ShellExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
         Assert.Equal("sh: line 1: MISSING: first\n", host.StandardError.TextContent);
     }

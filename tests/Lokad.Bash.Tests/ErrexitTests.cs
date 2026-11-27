@@ -1,3 +1,4 @@
+using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Memory;
@@ -539,6 +540,66 @@ public sealed class ErrexitTests
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
         Assert.Equal("line 1: missing: required\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("unset v; : \"${v:?required}\"", "v: required", 127)]
+    [InlineData("set -e; unset v; : \"${v:?required}\"", "v: required", 1)]
+    [InlineData("v=x; : \"${v@X}\"", "${v@X}: bad substitution", 127)]
+    public async Task CommandStringExpansionExitKeepsTheFailedExpansionPipelineStatus(string command, string diagnostic, int status)
+    {
+        await using var host = new TestHost();
+        var script = """trap 'printf "[%s:%s]" "$?" "${PIPESTATUS[*]}"' EXIT; """ + command;
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(script), ShellValue.FromText("label")],
+            ShellPath.Root, [], null, null, null);
+
+        var result = await host.RunCommandAsync(invocation, CommandLaunchFailureReporting.Host, CancellationToken.None);
+
+        Assert.Equal(status, result.ShellExitCode);
+        Assert.Equal($"[{status}:1]", host.StandardOutput.TextContent);
+        Assert.Equal("label: line 1: " + diagnostic + "\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task TestedSourceUnwindsTheFunctionAndItsRedirectionsBeforeCommandStringExit()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/reader", ": \"${v:?required}\"\n")]);
+        const string script = """
+            unset v; set -e; tag=outer
+            trap 'printf "[%s:%s:%s]" "$?" "${PIPESTATUS[*]}" "$tag" >&2' EXIT
+            f(){ local tag=inner; if source ./reader 2>errors; then :; fi; }
+            f
+            """;
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(script), ShellValue.FromText("label")],
+            ShellPath.Root, [], null, null, null);
+
+        var result = await host.RunCommandAsync(invocation, CommandLaunchFailureReporting.Host, CancellationToken.None);
+
+        Assert.Equal(127, result.ShellExitCode);
+        Assert.Equal("[127:1:outer]", host.StandardError.TextContent);
+        Assert.Equal("./reader: line 1: v: required\n", host.ReadFile("/errors"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(": \"${v:?required}\"", "[127:1][127:0 127]", 127)]
+    [InlineData(": <\"${v:?required}\"", "[127:0 127]", 127)]
+    [InlineData("eval ': \"${v:?required}\"'", "[1:0 1]", 1)]
+    [InlineData("{ : \"${v:?required}\"; }", "[1:0 1]", 1)]
+    public async Task CommandStringPipelineUsesTheReachedExitBoundary(string stage, string output, int status)
+    {
+        await using var host = new TestHost();
+        var script = """unset v; trap 'printf "[%s:%s]" "$?" "${PIPESTATUS[*]}"' EXIT; : | """ + stage;
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(script), ShellValue.FromText("label")],
+            ShellPath.Root, [], null, null, null);
+
+        var result = await host.RunCommandAsync(invocation, CommandLaunchFailureReporting.Host, CancellationToken.None);
+
+        Assert.Equal(status, result.ShellExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal("label: line 1: v: required\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]

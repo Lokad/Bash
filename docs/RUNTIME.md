@@ -739,6 +739,12 @@ a required-parameter failure or invalid parameter transformation skips pending
 timing reports and uses its active lexical frame for EXIT. With errexit disabled,
 a loaded reader unwinds inner readers, bindings and descriptors before running
 EXIT in the outer reader.
+A command-string terminal word expansion publishes `PIPESTATUS=(1)` before
+propagating status 127 through loaded readers. EXIT runs after command-string
+calls retire their bindings and redirections. A simple pipeline stage retains
+the command-string status during preparation and function execution. A directly
+piped builtin handles its own terminal failures. Pipeline functions with a
+locally installed action keep their function frame through EXIT.
 A capturing child finishes unwinding the reader invocation before running its
 action. Pending timings in the reader and around its invocation report through
 their reached descriptors. Arity and recoverable expansion failures retain

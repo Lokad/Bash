@@ -1640,6 +1640,9 @@ public sealed partial class Evaluation : IFileTester
 
             if (executable.Resolution is CommandResolution.EvaluatorBuiltin evaluatorBuiltin)
             {
+                // A piped builtin handles failures from its body after argument and redirection preparation.
+                if (directPipelineStage)
+                    _state.UsesCommandStringExpansionExit = false;
                 // These builtins publish after their temporary environment has retired.
                 // Other builtins see the temporary scalar when selecting the status array.
                 publishStatus &= !hasStatusPrefix || evaluatorBuiltin.Kind is BuiltinKind.Eval or BuiltinKind.Source
@@ -5270,13 +5273,20 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
 
-        // Publish status while the reached lexical scope is still active.
-        SetScopedExpansionFailure(new ExpansionFailure(kind)
+        var failure = new ExpansionFailure(kind);
+        if (failure.IsTerminalParameterFailure)
         {
-            UseInheritedPipelineExitAction = kind == ExpansionFailureKind.InvalidParameterTransform
-                && !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope)
-        }, scope);
-        _state.LastExitCode = 1;
+            var exitsCommandString = _state.UsesCommandStringExpansionExit && !ReaderErrexitEnabled(scope);
+            failure = failure with
+            {
+                ExitCode = exitsCommandString ? 127 : failure.ExitCode,
+                ExitsCommandString = exitsCommandString,
+                UseInheritedPipelineExitAction = !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope)
+            };
+        }
+        // Expansion publishes its failure before the reader selects the shell's exit status.
+        SetScopedExpansionFailure(failure, scope);
+        _state.LastExitCode = failure.ExitCode;
         PublishExpansionPipelineStatus(1, scope);
         return WriteExpansionFailureDiagnosticAsync(subject, message, prefix, scope);
     }
@@ -5286,7 +5296,7 @@ public sealed partial class Evaluation : IFileTester
         if (failure.IsTerminalParameterFailure)
             failure = failure with
             {
-                UnwindsLoadedReader = scope.InNestedCommandUnits && !_state.ErrexitEnabled
+                UnwindsLoadedReader = scope.InNestedCommandUnits && (!_state.ErrexitEnabled || failure.ExitsCommandString)
             };
         SetFatalExpansionError(failure);
     }

@@ -1423,11 +1423,16 @@ the next unit of the root, eval or source reader sees status 1 and
 `PIPESTATUS=(1)`. A required-parameter failure reports its expanded
 message with the reached reader location and terminates that reader. An invalid
 transformation of a present value reports `bad substitution` and takes the same
-reader exit path. With errexit disabled, EXIT runs at the outer loaded reader
-after its inner scopes unwind. A command-substitution child unwinds the reader
+reader exit path. In a same-host `bash -c` command string, ordinary word expansion
+uses exit status 127 when errexit is inactive and publishes `PIPESTATUS=(1)` in
+the reached scope. This includes tested eval and source calls. A directly piped
+builtin handles failures in its body with status 1. Explicit subshells and command
+substitutions retain their own status rules. With errexit disabled, EXIT runs at
+the command-string boundary or at the outer loaded reader after inner scopes
+unwind. A command-substitution child unwinds the reader
 invocation before EXIT. With errexit enabled, EXIT uses the reached scope and skips pending
-timing reports. In pipeline stage preparation, an invalid transformation can
-reach the inherited action during argument expansion. Redirection expansion
+timing reports. In pipeline stage preparation, these failures can reach the
+inherited action during argument or prefix expansion. Redirection expansion
 runs after that action has been reset.
 An indirect read of a missing element is also unset when its base variable
 exists, including a declaration without a value. A missing base variable,

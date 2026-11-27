@@ -532,11 +532,12 @@ public sealed partial class Evaluation
                 }
                 else if (result.Flow == FlowControlKind.Exit)
                 {
-                    if (nestedLoadedReader && _state.FatalExpansion is { UnwindsLoadedReader: true })
+                    if (nestedLoadedReader && _state.FatalExpansion is { UnwindsLoadedReader: true } failureAtReader)
                     {
                         // Timers around this invocation run through its still-active descriptors.
                         await ReportPendingTimingsAsync(scope.Timing, enclosingReaderTiming).ConfigureAwait(false);
-                        if (outermostLoadedReader && _state.ForkKind != ShellForkKind.CommandSubstitution)
+                        if (outermostLoadedReader && _state.ForkKind != ShellForkKind.CommandSubstitution
+                            && !failureAtReader.ExitsCommandString)
                             return await RunExitTrapAsync(scope with { Timing = null }, result, ExitTrapKind.Expansion)
                                 .ConfigureAwait(false);
                         return result;

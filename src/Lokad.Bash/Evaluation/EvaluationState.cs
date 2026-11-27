@@ -67,6 +67,9 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
 
     // A terminal parameter failure with errexit off exits through the active loaded readers.
     internal bool UnwindsLoadedReader { get; init; }
+
+    // Carries the command-string exit status through loaded-reader cleanup.
+    internal bool ExitsCommandString { get; init; }
 }
 
 internal enum ExpansionErrorKind
@@ -354,6 +357,7 @@ internal sealed class EvaluationState
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
     public bool ErrexitEnabled { get; set; }
+    internal bool UsesCommandStringExpansionExit { get; set; }
     internal ShellForkKind? ForkKind { get; private init; }
     internal bool KeepsLocalsOnErrexit => ForkKind is ShellForkKind.Subshell or ShellForkKind.PipelineSimpleCommand;
 
@@ -628,6 +632,7 @@ internal sealed class EvaluationState
             PreparationDiagnosticName = PreparationDiagnosticName,
             FunctionBraceLine = FunctionBraceLine,
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
+            UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,
             Traps = Traps?.Fork(kind),
