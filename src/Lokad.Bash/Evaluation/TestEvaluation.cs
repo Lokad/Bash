@@ -361,13 +361,12 @@ public sealed class TestEvaluation
         }
         else
         {
-            var comparison = ShellValue.ByteOrder.Compare(left, right);
             Constant(predicate.Operator switch
             {
-                BinaryPredicateKind.StringEqual => comparison == 0,
-                BinaryPredicateKind.StringNotEqual => comparison != 0,
-                BinaryPredicateKind.StringLess => comparison < 0,
-                BinaryPredicateKind.StringGreater => comparison > 0,
+                BinaryPredicateKind.StringEqual => left.Equals(right),
+                BinaryPredicateKind.StringNotEqual => !left.Equals(right),
+                BinaryPredicateKind.StringLess => ShellValue.ByteOrder.Compare(left, right) < 0,
+                BinaryPredicateKind.StringGreater => ShellValue.ByteOrder.Compare(left, right) > 0,
                 _ => throw new InvalidOperationException("Unsupported test predicate.")
             });
         }

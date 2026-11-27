@@ -115,6 +115,30 @@ public sealed class TestBuiltinTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Theory]
+    [InlineData("test", "")]
+    [InlineData("[", " ]")]
+    public async Task ComparisonsPreserveByteEqualityAndOrderAcrossCommonPrefixes(string command, string closing)
+    {
+        await using var host = new TestHost();
+        var script = $"""
+            prefix='{new string('x', 512)}'
+            left="$prefix"$'\377'
+            longer="$left"tail
+            other="$prefix"$'\376'
+            {command} "$left" == "$longer"{closing}; printf '%s:' "$?"
+            {command} "$left" != "$longer"{closing}; printf '%s:' "$?"
+            {command} "$left" = "$other"{closing}; printf '%s:' "$?"
+            {command} "$left" \< "$longer"{closing}; printf '%s:' "$?"
+            {command} "$left" \> "$other"{closing}; printf '%s' "$?"
+            """;
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1:0:1:0:0", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
     [Fact]
     public async Task InvalidByteNumericDiagnosticPreservesItsOperand()
     {
