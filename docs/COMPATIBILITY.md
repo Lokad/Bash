@@ -1348,6 +1348,16 @@ including the previous value followed by the new operand for append.
 An integer initializer while clearing a local nameref can fail with the
 reference and integer attribute in place. Clearing a nonlocal unset
 nameref with such an initializer removes its binding.
+With `+n` and an explicit array flag, a missing local target can receive
+the declaration while the alias remains a reference. When the alias is
+converted, a parsed compound initializer can write the referent before
+dispatch creates the empty array on the alias. A simple indexed initializer
+can report an invalid identifier with successful status and
+leave the prepared array empty. An authored element initializer can
+evaluate its selector once before reporting failure and retaining the
+prepared array's nameref attribute. Preparing a compound initializer
+through an unset readonly local nameref stops the function with failure
+and emits no diagnostic.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

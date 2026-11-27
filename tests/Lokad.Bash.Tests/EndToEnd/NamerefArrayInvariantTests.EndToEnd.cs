@@ -151,6 +151,101 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("local -n slot=dest", "slot=value$((j++))", "0:0:1", "-a slot=()")]
+    [InlineData("local -n slot=dest", "slot[i++]=value$((j++))", "1:1:1", "-an slot=()")]
+    [InlineData("local -n slot", "slot+=value$((j++))", "0:0:1", "-a slot")]
+    public async Task ClearingLocalIndexedNamerefSeparatesPreparationFromTheInitializer(
+        string setup, string operand, string outcome, string listing)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot=outside; dest=target; i=0; j=0
+            f() {
+                {{setup}}
+                local +n -a {{operand}} after=kept
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot after dest
+            }
+            f
+            declare -p slot dest
+            """);
+
+        Assert.Equal($"<{outcome}>\ndeclare {listing}\ndeclare -a after=([0]=\"kept\")\n"
+            + "declare -- dest=\"target\"\ndeclare -- slot=\"outside\"\ndeclare -- dest=\"target\"\n", result.StdOut);
+        Assert.Equal<byte>([
+            .. "line 4: local: `"u8,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            .. "': not a valid identifier\n"u8
+        ], result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("-n", 0, "-a slot=()", "")]
+    [InlineData("-nr", 1, "-anr slot=()", "line 4: local: slot: readonly variable\n")]
+    public async Task ClearingLocalNamerefInCompoundDeclarationPreservesTheReferentWrite(
+        string aliasFlags, int status, string listing, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot=outside; dest=target
+            f() {
+                local {{aliasFlags}} slot=dest
+                local +n -a slot=(fresh tail)
+                printf '<%s>\n' "$?"
+                declare -p slot dest
+            }
+            f
+            declare -p slot dest
+            """);
+
+        Assert.Equal($"<{status}>\ndeclare {listing}\ndeclare -a dest=([0]=\"fresh\" [1]=\"tail\")\n"
+            + "declare -- slot=\"outside\"\ndeclare -- dest=\"target\"\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ClearingReadonlyLocalNamerefCanInitializeItsMissingTarget()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; slot=outside
+            f() {
+                local -nr slot=dest
+                local +n -a slot[i++]=fresh
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot dest
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal("<0:1>\ndeclare -nr slot=\"dest\"\ndeclare -a dest=([0]=\"fresh\")\ndeclare -- slot=\"outside\"\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local +n -a slot=(fresh tail)")]
+    [InlineData("declare +n -A slot=([key]=fresh)")]
+    public async Task ReadonlyUnsetNamerefStopsCompoundPreparation(string declaration)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                local -nr slot
+                printf 'before\n'
+                {{declaration}}
+                printf 'after\n'
+            }
+            f
+            printf 'outside:%s\n' "$?"
+            """);
+
+        Assert.Equal("before\noutside:1\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("$slot")]
     [InlineData("${slot:-fallback$((i++))}")]
     [InlineData("${slot@a}")]

@@ -144,6 +144,12 @@ public sealed partial class Evaluation
                     var rejectsElementReference = !local && referencedElement && !globalInFunction;
                     if (rejectsTarget || rejectsElementReference)
                     {
+                        if (local && !memberAssignment && targetVariables.IsUnsetNameref(name))
+                        {
+                            // An unset readonly local reference stops compound preparation without a diagnostic.
+                            SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
+                            break;
+                        }
                         var owner = declarationBinding.Owner;
                         var arrayName = declarationBinding.Name;
                         // Source attributes belong to the declaration phase, before the initializer attempts to write.
