@@ -1122,6 +1122,11 @@ even when the operator would skip the operand. An already complete prefix
 expands normally. Only selected operands evaluate their expansions.
 Definition display uses the prepared spelling, including truncated operands
 in `[[` and conditional captures nested in ordinary words and other parameters.
+With brace expansion enabled, the argument word list checks damaged capture
+spelling before evaluating any of its words. A command-only assignment list
+checks each value when it reaches that value. An ordinary capture can
+report a delimiter error while rereading the normalized word. Adjacent
+parentheses can report a missing delimiter in the truncated enclosing word.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split

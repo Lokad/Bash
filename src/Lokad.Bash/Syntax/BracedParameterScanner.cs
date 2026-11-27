@@ -457,6 +457,7 @@ internal static class BracedParameterScanner
         private MemoryCapacity? _scratch;
         private List<SpellingCapture>? _captures;
         private bool _hasQuoteEdits;
+        private bool _endsAtCapture;
 
         internal readonly bool HasEdits => _edits != null;
         internal RejectedSelectorCapture RejectedSelector { get; set; }
@@ -474,8 +475,12 @@ internal static class BracedParameterScanner
             HasUnprotectedEdits |= !protect;
         }
 
-        internal void AddCapture(ShellScanContext context, int start, int end, CommandSubstitutionSyntax capture) =>
-            PrepareEdit(context).Add(new Edit(start, end, default, Protect: false, capture, EndsAtDecodedNul: false));
+        internal void AddCapture(ShellScanContext context, int start, int end, CommandSubstitutionSyntax capture)
+        {
+            var endsAtNul = capture is CommandSubstitutionSyntax.Parsed { AdjacentSpelling.EndsAtDecodedNul: true };
+            PrepareEdit(context).Add(new Edit(start, end, default, Protect: false, capture, endsAtNul));
+            _endsAtCapture |= endsAtNul;
+        }
 
         private List<Edit> PrepareEdit(ShellScanContext context)
         {
@@ -498,7 +503,7 @@ internal static class BracedParameterScanner
             var payload = source.Slice(start, end - start);
             if (_edits == null)
                 return ShellSourceCursor.PrepareExpansionSource(context, payload, ref adjustment);
-            if (!_hasQuoteEdits && context.HereDocumentReadAhead == null && payload.AsSpan().IndexOf("\\\n"u8) < 0)
+            if (!_hasQuoteEdits && !_endsAtCapture && context.HereDocumentReadAhead == null && payload.AsSpan().IndexOf("\\\n"u8) < 0)
             {
                 // Display-only edits can retain the operand bytes and the capture offsets.
                 foreach (var edit in _edits)
@@ -523,13 +528,11 @@ internal static class BracedParameterScanner
                         throw new ByteMemoryBuilder.LimitExceededException();
                 }
                 else
-                {
                     output.Append(edit.Value.Bytes.Span);
-                    if (edit.EndsAtDecodedNul)
-                    {
-                        EndsAtDecodedNul = true;
-                        return ShellSource.FromBytes(output.ToCompactMemory(context.SyntaxMemory));
-                    }
+                if (edit.EndsAtDecodedNul)
+                {
+                    EndsAtDecodedNul = true;
+                    return ShellSource.FromBytes(output.ToCompactMemory(context.SyntaxMemory));
                 }
                 start = edit.End;
             }

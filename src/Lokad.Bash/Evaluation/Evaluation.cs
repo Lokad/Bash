@@ -1205,7 +1205,7 @@ public sealed partial class Evaluation : IFileTester
         if (publishStatus)
             PreparePipelineStatusStorage(1);
         _state.LastCommandSubstitutionExitCode = null;
-        if (!await WordExpansion.CheckBraceDelimitersAsync(simpleCommand.Words, scope).ConfigureAwait(false))
+        if (!await WordExpansion.CheckWordSyntaxAsync(simpleCommand.Words, scope).ConfigureAwait(false))
             return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
 
         PreparedDeclaration? declaration = null;
@@ -4821,7 +4821,7 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Validates redirection fields in order and decodes a single candidate.</summary>
     internal async Task<(int Count, string Value)> ExpandRedirectionFieldsAsync(Word word, ScopedEvaluation scope)
     {
-        if (scope.CanExpand && !await WordExpansion.CheckBraceDelimitersAsync(word, scope).ConfigureAwait(false))
+        if (scope.CanExpand && !await WordExpansion.CheckWordSyntaxAsync(word, scope).ConfigureAwait(false))
             return (0, string.Empty);
         var (count, field) = await CollectRedirectionFieldsAsync(word, scope).ConfigureAwait(false);
         return (count, count == 1 ? await DecodeExpandedValueAsync(field).ConfigureAwait(false) : string.Empty);
@@ -5356,6 +5356,18 @@ public sealed partial class Evaluation : IFileTester
 
     private bool UsesInheritedPipelineExitAction(ScopedEvaluation scope) =>
         IsDirectPipelineStageScope(scope) && _state.Traps?.HasInheritedPipelineExitAction == true;
+
+    internal Task ReportDecodedNulCaptureEofAsync(UnclosedDelimiter eof, int lines, ScopedEvaluation scope)
+    {
+        if (_state.FatalExpansion.HasValue)
+            return Task.CompletedTask;
+        var exitCode = _state.ErrexitEnabled ? 2 : 1;
+        SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
+        _state.LastExitCode = exitCode;
+        var line = Math.Max(1, scope.Context.Coordinates.Line) + lines + 1;
+        return ReportUnclosedDelimiterAsync(eof, line, scope.Context.DiagnosticPath,
+            SyntaxDiagnosticOrigin.CommandSubstitution, SyntaxDiagnosticDetail.PrimaryOnly);
+    }
 
     internal async Task ReportCommandSubstitutionSyntaxAsync(SubstitutionSyntaxFailure failure,
         CommandSubstitutionSyntax.Parsed? capture, ScopedEvaluation scope, bool quoted, RejectedSelectorCapture rejectedSelector)

@@ -29,6 +29,8 @@ public sealed class ParsedScript
     internal CommandLocations? Locations { get; init; }
     internal int? RenderedLineBreaks { get; set; }
     internal int RenderedFunctionBraceLine { get; set; }
+    internal char TruncatedAdjacentDelimiter { get; set; }
+    internal bool HasDecodedNulWord { get; set; }
     internal bool HasReadAheadHereDocuments { get; set; }
     /// <summary>End of the final command before its delimiter and trailing trivia in a whole-source parse.</summary>
     internal int LastCommandEnd { get; set; }

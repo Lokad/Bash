@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -391,6 +392,13 @@ public static class Parser
                     closingParenthesisIndex, workspace, prepareReplay: true, out var projectedInput, out var lineAdjustments,
                     out var renderedLines);
                 var projected = adjacentSpelling.GetValueOrDefault();
+                if (projected.EndsAtDecodedNul)
+                {
+                    parsed.RenderedLineBreaks = renderedLines;
+                    parsed.TruncatedAdjacentDelimiter = ShellSourceCursor.HasUnclosedParameter(projected.Source,
+                        new ShellScanContext { SyntaxMemory = workspace }, skipComments: true, CancellationToken.None) ? '}' : ')';
+                    return ShellScanStatus.Complete;
+                }
                 var changedBytes = !projectedInput.IsEmpty;
                 if (changedBytes || lineAdjustments != null)
                 {
@@ -430,6 +438,13 @@ public static class Parser
                     else if (changedBytes)
                         failure = SubstitutionSyntaxFailure.NestedSyntax;
                 }
+                if (projected.Captures is { } captures)
+                    foreach (var capture in captures)
+                        if (capture.Syntax is CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true })
+                        {
+                            parsed.HasDecodedNulWord = true;
+                            break;
+                        }
                 parsed.RenderedLineBreaks = renderedLines;
                 return ShellScanStatus.Complete;
             }

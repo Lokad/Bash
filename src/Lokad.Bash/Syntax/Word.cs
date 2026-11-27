@@ -28,8 +28,8 @@ public sealed class Word
             var part = parts[index];
             if (part is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None })
                 HasIncompleteQuotedParameterSubscript = true;
-            if (HasRejectedCaptureSpelling)
-                continue;
+            if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true } })
+                HasDecodedNulCapture = true;
             if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { HasRejectedDisplaySpelling: true } })
                 HasRejectedCaptureSpelling = true;
             else if (part is SourceWordPart { SpellingCaptures: { } captures } source)
@@ -37,12 +37,13 @@ public sealed class Word
                 foreach (var capture in captures)
                 {
                     var offset = capture.Offset - source.SourceOffset;
-                    if (offset >= 0 && capture.Length <= source.Source.Length - offset
-                        && capture.Syntax is CommandSubstitutionSyntax.Parsed { HasRejectedDisplaySpelling: true })
-                    {
-                        HasRejectedCaptureSpelling = true;
+                    if (offset < 0 || capture.Length > source.Source.Length - offset
+                        || capture.Syntax is not CommandSubstitutionSyntax.Parsed parsed)
+                        continue;
+                    HasRejectedCaptureSpelling |= parsed.HasRejectedDisplaySpelling;
+                    HasDecodedNulCapture |= parsed.HasDecodedNulWord;
+                    if (HasRejectedCaptureSpelling && HasDecodedNulCapture)
                         break;
-                    }
                 }
             }
         }
@@ -95,6 +96,7 @@ public sealed class Word
     internal bool HasIncompleteQuotedParameterSubscript { get; }
     internal bool HasRejectedCaptureSpelling { get; }
     internal bool HasBraceDelimiterCandidate { get; }
+    internal bool HasDecodedNulCapture { get; }
 
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)

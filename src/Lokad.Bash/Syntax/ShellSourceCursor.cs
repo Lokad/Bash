@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
@@ -121,6 +122,30 @@ internal sealed class ShellSourceCursor
             return false;
         Position = SkipComment(_text.AsSpan(), Position);
         return true;
+    }
+
+    internal static bool HasUnclosedParameter(ShellSource source, ShellScanContext context, bool skipComments,
+        CancellationToken cancellationToken)
+    {
+        var cursor = new ShellSourceCursor(source, 0, context);
+        while (!cursor.IsAtEnd)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (skipComments && cursor.TrySkipArithmeticExpansionComment() || cursor.TryConsumeQuoteOrEscape())
+                continue;
+            switch (cursor.SkipNestedExpansion(BracedParameterRecognition.All))
+            {
+                case ShellNestedExpansionScan.Complete:
+                    continue;
+                case ShellNestedExpansionScan.Incomplete { Kind: ShellNestedExpansionKind.Parameter }:
+                case ShellNestedExpansionScan.Invalid { Kind: ShellNestedExpansionKind.Parameter }:
+                    return true;
+                default:
+                    cursor.Advance();
+                    break;
+            }
+        }
+        return false;
     }
 
     /// <summary>Reads one ordinary or ANSI-C literal, retaining its physical span even after decoded NUL.</summary>
@@ -244,6 +269,7 @@ internal sealed class ShellSourceCursor
         List<SourceLineAdjustment>? changes = null;
         var written = 0;
         var delta = 0;
+        var endsAtDecodedNul = false;
         var previousFailure = context.SubstitutionFailure;
         try
         {
@@ -294,9 +320,12 @@ internal sealed class ShellSourceCursor
                             resolveLateSubscripts: false, out _, out _) == BracedParameterScanStatus.Found)
                     {
                         cursor.Position = close + 1;
-                        // Replay must retain the literal that ends the normalized word.
-                        if (!payload.EndsAtDecodedNul)
-                            ProjectNested(first, payloadStart, close, cursor.Position, "${"u8, "}"u8, payload, CountLines(payload));
+                        ProjectNested(first, payloadStart, close, cursor.Position, "${"u8, "}"u8, payload, CountLines(payload));
+                        if (payload.EndsAtDecodedNul)
+                        {
+                            endsAtDecodedNul = true;
+                            break;
+                        }
                         continue;
                     }
 
@@ -353,6 +382,11 @@ internal sealed class ShellSourceCursor
                             }
                             ProjectNested(first, operandStart, operandEnd, cursor.Position,
                                 bracketed ? "$["u8 : "$(("u8, bracketed ? "]"u8 : "))"u8, operand, lines);
+                            if (operand.EndsAtDecodedNul)
+                            {
+                                endsAtDecodedNul = true;
+                                break;
+                            }
                         }
                         continue;
                     }
@@ -361,18 +395,22 @@ internal sealed class ShellSourceCursor
             }
 
             lineAdjustments = changes;
-            renderedLines = source.AsSpan().Count((byte)'\n') + delta;
+            renderedLines = endsAtDecodedNul ? 0 : source.AsSpan().Count((byte)'\n') + delta;
             projectedInput = ShellSource.Empty;
             if (output == null)
                 return new SourceSpelling(source, captures);
-            output.Append(source.AsSpan()[written..]);
+            if (!endsAtDecodedNul)
+                output.Append(source.AsSpan()[written..]);
             var length = output.Length;
-            if (prepareReplay)
+            if (prepareReplay && !endsAtDecodedNul)
                 output.Append((byte)')');
             var normalized = ShellSource.FromBytes(output.ToCompactMemory(context.SyntaxMemory));
-            if (prepareReplay)
+            var spelling = new SourceSpelling(normalized.Slice(0, length), captures) { EndsAtDecodedNul = endsAtDecodedNul };
+            if (endsAtDecodedNul)
+                renderedLines = CountLines(spelling);
+            else if (prepareReplay)
                 projectedInput = normalized;
-            return new SourceSpelling(normalized.Slice(0, length), captures);
+            return spelling;
         }
         finally
         {
@@ -392,14 +430,16 @@ internal sealed class ShellSourceCursor
         void ProjectNested(int first, int bodyStart, int bodyEnd, int after, ReadOnlySpan<byte> opening,
             ReadOnlySpan<byte> closing, SourceSpelling spelling, int lines)
         {
-            if (bodyStart == first + opening.Length && after == bodyEnd + closing.Length
+            if (!spelling.EndsAtDecodedNul && bodyStart == first + opening.Length && after == bodyEnd + closing.Length
                 && source.Slice(bodyStart, bodyEnd - bodyStart).Bytes.Equals(spelling.Source.Bytes))
                 spelling.CopyCaptures(ProjectOffset(bodyStart), ref captures, context.SyntaxMemory);
             else
             {
                 var target = AppendBefore(first).Append(opening);
                 spelling.CopyCaptures(target.Length, ref captures, context.SyntaxMemory);
-                target.Append(spelling.Source.AsSpan()).Append(closing);
+                target.Append(spelling.Source.AsSpan());
+                if (!spelling.EndsAtDecodedNul)
+                    target.Append(closing);
                 written = after;
             }
             RecordLineChange(first, after, lines);
@@ -782,6 +822,7 @@ internal sealed class ShellScanContext
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
+    internal bool RetainCaptureEofDelimiter { get; init; }
     internal bool ReadArithmeticExpansionComments { get; set; }
     internal bool MissingReachedArithmeticParenthesis { get; set; }
     internal SubstitutionSyntaxFailure SubstitutionFailure { get; set; }

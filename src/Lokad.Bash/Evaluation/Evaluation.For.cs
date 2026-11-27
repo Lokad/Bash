@@ -25,7 +25,7 @@ public sealed partial class Evaluation
         if (!name.IsIdentifier)
             return await RejectIdentifierAsync(ReportInvalidIdentifierAsync(GetDiagnosticName(name), scope)).ConfigureAwait(false);
 
-        if (!await WordExpansion.CheckBraceDelimitersAsync(forCommand.Items, scope).ConfigureAwait(false))
+        if (!await WordExpansion.CheckWordSyntaxAsync(forCommand.Items, scope).ConfigureAwait(false))
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
         List<ShellValue>? items = new();

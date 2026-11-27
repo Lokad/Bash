@@ -38,8 +38,12 @@ internal static class FunctionDefinitionFormatter
     /// <summary>Renders a lexical suffix while borrowing the original word parts.</summary>
     internal static bool TryAppendWordSource(IReadOnlyList<WordPart> parts, int firstPart, IByteMemoryWriter output,
         IMemoryBudget budget, CancellationToken cancellationToken, bool normalizeLegacySpelling) =>
-        TryAppend(new Step.WordTail(parts, firstPart), output, budget,
+        TryAppend(new Step.WordTail(parts, firstPart, 0), output, budget,
             normalizeLegacySpelling ? Format.SubstitutionWord : Format.BraceSource, cancellationToken);
+
+    internal static bool TryAppendWordSource(IReadOnlyList<WordPart> parts, int firstPart, int firstOffset,
+        IByteMemoryWriter output, IMemoryBudget budget, CancellationToken cancellationToken) =>
+        TryAppend(new Step.WordTail(parts, firstPart, firstOffset), output, budget, Format.BraceSource, cancellationToken);
 
     /// <summary>Locates commands in Bash's rendered capture body without materializing or parsing it again.</summary>
     internal static IReadOnlyList<Range>? ProjectCaptureLocations(ParsedScript script, MemoryCapacity? memory,
@@ -55,6 +59,7 @@ internal static class FunctionDefinitionFormatter
         TryAppend(new Step.Commands(script.Commands), counter, memory?.Budget, Format.CaptureCoordinates, CancellationToken.None, locations);
         script.RenderedLineBreaks = counter.Line - 1;
         script.RenderedFunctionBraceLine = counter.FunctionBraceLine;
+        script.HasDecodedNulWord = counter.HasDecodedNulWord;
         return counter.OmittedSeparators;
     }
 
@@ -84,7 +89,7 @@ internal static class FunctionDefinitionFormatter
         if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling } adjacent
             && (style is CaptureSpelling.Display or CaptureSpelling.Diagnostic || !adjacent.PreserveAdjacentOpening))
             return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken, style)
-                && output.TryAppend((byte)')');
+                && (spelling.EndsAtDecodedNul || output.TryAppend((byte)')'));
         if (substitution is CommandSubstitutionSyntax.Parsed parsed && CanRender(parsed, style))
         {
             var commands = parsed.Script.AuthoredCaptureCommands ?? parsed.Script.Commands;
@@ -231,10 +236,10 @@ internal static class FunctionDefinitionFormatter
                         });
                     break;
                 case Step.Word(var word):
-                    if (!AppendWordParts(word.Parts, 0)) return false;
+                    if (!AppendWordParts(word.Parts, 0, 0)) return false;
                     break;
-                case Step.WordTail(var parts, var firstPart):
-                    if (!AppendWordParts(parts, firstPart)) return false;
+                case Step.WordTail(var parts, var firstPart, var firstOffset):
+                    if (!AppendWordParts(parts, firstPart, firstOffset)) return false;
                     break;
                 case Step.Commands(var commands):
                     PrepareWork(Math.Max(0, checked(2 * commands.Count - 1)));
@@ -335,7 +340,7 @@ internal static class FunctionDefinitionFormatter
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             if (index != 0 && !Append(" ")) return false;
-                            if (!AppendWordParts(values[index].Word.Parts, 0)) return false;
+                            if (!AppendWordParts(values[index].Word.Parts, 0, 0)) return false;
                         }
                         cancellationToken.ThrowIfCancellationRequested();
                         if (!Append(")")) return false;
@@ -708,14 +713,15 @@ internal static class FunctionDefinitionFormatter
             compoundDocumentLocations.Clear();
         }
 
-        bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart)
+        bool AppendWordParts(IReadOnlyList<WordPart> parts, int firstPart, int firstOffset)
         {
             var doubleQuoted = false;
             for (var index = firstPart; index < parts.Count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var part = parts[index];
-                var content = part.GetUnexpandedValue().Bytes.Span;
+                var offset = index == firstPart ? firstOffset : 0;
+                var content = part.GetUnexpandedValue().Bytes.Span[offset..];
                 var quotedPart = part.IsDoubleQuoted;
                 if (doubleQuoted && quotedPart && part.DoubleQuote != DoubleQuoteBoundary.Continuation
                     && !Append("\"\"")) return false;
@@ -727,7 +733,7 @@ internal static class FunctionDefinitionFormatter
                 {
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when !capture && part is SourceWordPart
                         { SpellingCaptures: { } nested } projected =>
-                        AppendSpelling(new SourceSpelling(projected.Source, nested), projected.SourceOffset,
+                        AppendSpelling(new SourceSpelling(projected.Source.Slice(offset), nested), projected.SourceOffset + offset,
                             output, budget, cancellationToken, captureSpelling),
                     WordPartKind.Unquoted or WordPartKind.DoubleQuoted when captures != null && part is SourceWordPart source =>
                         TryAppendSourceWithCaptures(source.Source, captures, output, budget, cancellationToken),
@@ -758,8 +764,13 @@ internal static class FunctionDefinitionFormatter
                 if (!success) return false;
                 if (lines != null && part is SourceWordPart { RenderedLineAdjustment: var adjustment })
                     lines.Adjust(adjustment);
-                if (part is SourceWordPart { EndsAtDecodedNul: true })
+                if (part is SourceWordPart { EndsAtDecodedNul: true }
+                    or CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { AdjacentSpelling.EndsAtDecodedNul: true } })
+                {
+                    if (lines != null)
+                        lines.HasDecodedNulWord = true;
                     return true;
+                }
             }
             return !doubleQuoted || Append("\"");
         }
@@ -811,6 +822,8 @@ internal static class FunctionDefinitionFormatter
 
         bool CountCaptureWord(CommandSubstitutionSyntax substitution)
         {
+            if (lines != null && substitution is CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true })
+                lines.HasDecodedNulWord = true;
             if (substitution is CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } breaks } parsed)
             {
                 if (lines != null && parsed.Script.RenderedFunctionBraceLine > 0)
@@ -835,6 +848,8 @@ internal static class FunctionDefinitionFormatter
                     continue;
                 line += source[written..offset].Count((byte)'\n');
                 written = offset + capture.Length;
+                if (capture.Syntax is CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true })
+                    counter.HasDecodedNulWord = true;
                 if (capture.Syntax is CommandSubstitutionSyntax.Parsed { Script.RenderedLineBreaks: { } breaks } parsed)
                 {
                     if (parsed.Script.RenderedFunctionBraceLine > 0)
@@ -1060,6 +1075,7 @@ internal static class FunctionDefinitionFormatter
 
     private sealed class LineCounter(bool collectOmittedSeparators, MemoryCapacity? memory) : IByteMemoryWriter
     {
+        internal bool HasDecodedNulWord { get; set; }
         internal int Line { get; private set; } = 1;
         internal int FunctionBraceLine { get; private set; }
         private bool _unitReadFunctionBrace;
@@ -1124,7 +1140,7 @@ internal static class FunctionDefinitionFormatter
         public sealed record Commands(IReadOnlyList<ICommand> Value) : Step;
         public sealed record Pipe(PipelineOperator Operator) : Step;
         public sealed record Word(Syntax.Word Value) : Step;
-        public sealed record WordTail(IReadOnlyList<WordPart> Parts, int FirstPart) : Step;
+        public sealed record WordTail(IReadOnlyList<WordPart> Parts, int FirstPart, int FirstOffset) : Step;
         public sealed record Condition(ConditionalExpression Value) : Step;
         public sealed record Assignment(AssignmentWord Value) : Step;
         public sealed record Redirection(Syntax.Redirection Value, bool LeadingSpace) : Step;

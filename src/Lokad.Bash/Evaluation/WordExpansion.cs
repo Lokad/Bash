@@ -109,20 +109,97 @@ internal static partial class WordExpansion
         word.LiteralFields == null ? BraceExpansion.ExpandAlternatives(
             word, scope.Effects.Memory, scope.Effects.CancellationToken) : null;
 
-    internal static async Task<bool> CheckBraceDelimitersAsync(IReadOnlyList<Word> words, ScopedEvaluation scope)
+    internal static async Task<bool> CheckWordSyntaxAsync(IReadOnlyList<Word> words, ScopedEvaluation scope)
     {
         for (var index = 0; index < words.Count; index++)
-            if (words[index].HasBraceDelimiterCandidate
-                && !await CheckBraceCandidateAsync(words[index], scope, protectSubscript: false).ConfigureAwait(false))
+        {
+            var word = words[index];
+            if ((word.HasDecodedNulCapture || word.HasBraceDelimiterCandidate)
+                && !await CheckWordSyntaxAsync(word, scope, protectSubscript: false).ConfigureAwait(false))
                 return false;
+        }
         return true;
     }
 
-    internal static Task<bool> CheckBraceDelimitersAsync(Word word, ScopedEvaluation scope) =>
-        CheckBraceDelimitersAsync(word, scope, protectSubscript: false);
+    internal static Task<bool> CheckWordSyntaxAsync(Word word, ScopedEvaluation scope) =>
+        CheckWordSyntaxAsync(word, scope, protectSubscript: false);
 
-    internal static Task<bool> CheckBraceDelimitersAsync(Word word, ScopedEvaluation scope, bool protectSubscript) =>
-        word.HasBraceDelimiterCandidate ? CheckBraceCandidateAsync(word, scope, protectSubscript) : Task.FromResult(true);
+    internal static async Task<bool> CheckWordSyntaxAsync(Word word, ScopedEvaluation scope, bool protectSubscript)
+    {
+        if (word.HasDecodedNulCapture
+            && await RejectDecodedNulCaptureAsync(word, scope, 0, word.Parts.Count).ConfigureAwait(false))
+            return false;
+        return !word.HasBraceDelimiterCandidate
+            || await CheckBraceCandidateAsync(word, scope, protectSubscript).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> RejectDecodedNulCaptureAsync(Word word, ScopedEvaluation scope, int firstPart, int endPart)
+    {
+        if (scope.PreserveCommandSubstitutionSpelling)
+            return false;
+        for (var index = firstPart; index < endPart; index++)
+        {
+            var part = word.Parts[index];
+            var (capture, offset) = FindCapture(part);
+            if (capture == null)
+                continue;
+            if (capture.Script.TruncatedAdjacentDelimiter is not '\0' and var delimiter)
+            {
+                await ReportWordSyntaxAsync(word, default,
+                    delimiter == '}' ? WordSyntaxFailure.MissingBrace : WordSyntaxFailure.MissingArithmeticParenthesis,
+                    scope, captures: null, quoteSegment: false).ConfigureAwait(false);
+                return true;
+            }
+
+            // The ordinary capture reader sees the normalized capture and the rest of the enclosing word.
+            var budget = scope.Effects.Memory.Budget;
+            using var spelling = new ByteMemoryBuilder(0, budget);
+            if (!FunctionDefinitionFormatter.TryAppendWordSource(word.Parts, index, offset, spelling, budget,
+                    scope.Effects.CancellationToken))
+                throw new ByteMemoryBuilder.LimitExceededException();
+            var source = ShellSource.FromBytes(spelling.ToMemory());
+            var start = part.IsDoubleQuoted ? 3 : 2;
+            using var scratch = new MemoryCapacity(budget, 0);
+            var context = new ShellScanContext
+            {
+                SyntaxMemory = scratch,
+                LegacyOrigin = LegacySubstitutionOrigin.Script,
+                RetainCaptureEofDelimiter = true
+            };
+            Parser.ScanCommandSubstitutionEnd(context, source, start, out _, out _, out _, out _, out _, out _, out var error);
+            if (error is { Kind: ParserFailureKind.Limit } limit)
+            {
+                scope.Effects.SetFatalExpansionError(ExpansionFailureKind.CommandSubstitutionSyntax);
+                await scope.Effects.ReportSyntaxErrorAsync(limit.Error).ConfigureAwait(false);
+                return true;
+            }
+            if (error?.UnclosedDelimiter is { } eof)
+            {
+                var lines = source.AsSpan(start, Math.Max(start, eof.ReadPosition) - start).Count((byte)'\n');
+                if (eof is { Delimiter: ')', AtOpeningDelimiter: false })
+                    lines++;
+                await scope.Effects.ReportDecodedNulCaptureEofAsync(eof, lines, scope).ConfigureAwait(false);
+                return true;
+            }
+        }
+        return false;
+
+        static (CommandSubstitutionSyntax.Parsed? Capture, int Offset) FindCapture(WordPart part)
+        {
+            if (part is CommandSubstitutionWordPart
+                { Substitution: CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true } capture })
+                return (capture, 0);
+            if (part is SourceWordPart { SpellingCaptures: { } captures } source)
+                foreach (var nested in captures)
+                {
+                    var offset = nested.Offset - source.SourceOffset;
+                    if (offset >= 0 && nested.Length <= source.Source.Length - offset
+                        && nested.Syntax is CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true } parsed)
+                        return (parsed, offset);
+                }
+            return default;
+        }
+    }
 
     private static async Task<bool> CheckBraceCandidateAsync(Word word, ScopedEvaluation scope, bool protectSubscript)
     {
@@ -272,8 +349,12 @@ internal static partial class WordExpansion
             return;
         if (scope.ExpansionWord == null && word.Parts is not [{ Kind: WordPartKind.HereDocument }])
             scope = scope with { ExpansionWord = word };
+        if (word.HasDecodedNulCapture
+            && await RejectDecodedNulCaptureAsync(word, scope, firstPart, endPart).ConfigureAwait(false))
+            return;
         if (endPart > firstPart && word.Parts[endPart - 1] is SourceWordPart { EndsAtDecodedNul: true } truncated
-            && HasUnclosedParameter(truncated.Source, scope))
+            && ShellSourceCursor.HasUnclosedParameter(truncated.Source, CreateExpansionScanContext(scope), skipComments: false,
+                scope.Effects.CancellationToken))
         {
             await ReportParameterWordSyntaxAsync(word, truncated.Source, missingBrace: true, scope).ConfigureAwait(false);
             return;
@@ -375,24 +456,6 @@ internal static partial class WordExpansion
         return ParameterSubscriptFailure.None;
     }
 
-    private static bool HasUnclosedParameter(ShellSource source, ScopedEvaluation scope)
-    {
-        var cursor = new ShellSourceCursor(source, 0, CreateExpansionScanContext(scope));
-        while (!cursor.IsAtEnd)
-        {
-            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-            if (cursor.TryConsumeQuoteOrEscape())
-                continue;
-            var parameter = BracedParameterScanner.HasPrefix(source, cursor.Position);
-            if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
-                continue;
-            if (parameter)
-                return true;
-            cursor.Advance();
-        }
-        return false;
-    }
-
     private static Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,
         ScopedEvaluation scope, ShellScanContext? captures = null) =>
         ReportParameterWordSyntaxAsync(word, segment, missingBrace, scope, captures, quoteSegment: false);
@@ -413,7 +476,8 @@ internal static partial class WordExpansion
             word = scope.ExpansionWord ?? word;
         var hereDocument = failure == WordSyntaxFailure.MissingArithmeticParenthesis
             && scope.ExpansionOrigin == LegacySubstitutionOrigin.HereDocument;
-        if (word == null && !quoteSegment || captures == null && word?.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted }])
+        if (word == null && !quoteSegment || captures == null
+            && word?.Parts is [SourceWordPart { Kind: WordPartKind.Unquoted, EndsAtDecodedNul: false }])
         {
             var spelling = word?.Parts is [SourceWordPart unquoted] ? unquoted.Source : segment;
             await ReportWordSyntaxAsync(spelling.ToValue(), failure, scope, hereDocument).ConfigureAwait(false);

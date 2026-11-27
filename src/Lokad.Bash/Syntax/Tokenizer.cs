@@ -579,7 +579,7 @@ internal sealed class Tokenizer
     private void RecordUnterminatedExpansion(ParserFailure? failure, string message, int offset)
     {
         var error = new SyntaxError(message, offset);
-        RecordFailure(TracksScriptDiagnostics && failure != null
+        RecordFailure((TracksScriptDiagnostics || _scanContext.RetainCaptureEofDelimiter) && failure != null
             ? failure with { Error = error } : new ParserFailure(error, ParserFailureKind.Delimiter));
     }
 

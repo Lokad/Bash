@@ -16,6 +16,7 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
         internal bool HasDiagnosticSpelling => HasRejectedDisplaySpelling
             || Failure is SubstitutionSyntaxFailure.MissingPipelinePrefixCommand or SubstitutionSyntaxFailure.NestedPipelinePrefixCommand;
         internal SourceSpelling? AdjacentSpelling { get; init; }
+        internal bool HasDecodedNulWord => Script.HasDecodedNulWord || Script.TruncatedAdjacentDelimiter != '\0';
     }
 
     /// <summary>Legacy executable bytes and their original delimiters/escapes, validated only when reached.</summary>

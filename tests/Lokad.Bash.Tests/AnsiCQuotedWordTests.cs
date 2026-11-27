@@ -86,7 +86,38 @@ public sealed class AnsiCQuotedWordTests
         0, "[a]<after:0>", "")]
     [InlineData("unset v\ntrap 'printf \"EXIT:%s\" \"$?\"' EXIT\nset -e\nprintf '%s' \"${v:-$'a\\0hidden'}\"\nprintf bad\n",
         1, "EXIT:1", "line 4: bad substitution: no closing `}' in \"${v:-a\n")]
-    public async Task DecodedNulEndsAWordWithAnUnprotectedParameterOperand(string script, int status, string stdout, string stderr)
+    public Task DecodedNulEndsAWordWithAnUnprotectedParameterOperand(string script, int status, string stdout, string stderr) =>
+        AssertDecodedNulExecutionAsync(script, status, stdout, stderr);
+
+    [Theory]
+    [InlineData("n=0; unset v\nprintf '[%s]' \"$((++n))\" \"$(printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")\" 2>err\n"
+        + "printf '[next:%s n:%s]' \"$?\" \"$n\"",
+        0, "[next:1 n:0]", "command substitution: line 3: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("n=0; unset v\nprior=$((++n)) value=$(printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")\n"
+        + "printf '[next:%s n:%s]' \"$?\" \"$n\"",
+        0, "[next:1 n:1]", "command substitution: line 3: unexpected EOF while looking for matching `}'\n")]
+    [InlineData("unset v\nprintf '[%s]' \"$(((1)); false && printf %s \"${v:-$'a\\0hidden'}\"; printf skipped)\"\n"
+        + "printf '[next:%s]' \"$?\"",
+        0, "[next:1]", "line 2: bad substitution: no closing `}' in \"$(((1)); false && printf %s \"${v:-a\n")]
+    [InlineData("unset v\nprintf '[%s]' \"$(((1)); printf %s \"${v:-$'a}\\0hidden'}\"; printf skipped)\"\n"
+        + "printf '[next:%s]' \"$?\"",
+        0, "[next:1]", "line 2: bad substitution: no closing `)' in \"$(((1)); printf %s \"${v:-a}\n")]
+    [InlineData("unset v\nprintf '[%s]' \"$(((1)); x=$(printf %s \"${v:-$'a\\0hidden'}\"); printf skipped)\"\n"
+        + "printf '[next:%s]' \"$?\"",
+        0, "[next:1]", "command substitution: line 3: unexpected EOF while looking for matching `\"'\n")]
+    [InlineData("a=ready; unset v\nprintf '[%s]' \"${a:-$(printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")}\"\n"
+        + "printf '[next:%s]' \"$?\"",
+        0, "[next:1]", "command substitution: line 4: unexpected EOF while looking for matching `)'\n")]
+    [InlineData("a=ready; unset v\nprintf '[%s]' ${a:-$(((1)); printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")}\n"
+        + "printf '[next:%s]' \"$?\"",
+        0, "[next:1]", "line 2: bad substitution: no closing `}' in ${a:-$(((1)); printf inner >&2; printf %s \"${v:-a\n")]
+    [InlineData("unset v\ntrap 'printf \"[exit:%s]\" \"$?\"' EXIT\nset -e\n"
+        + "if printf '[%s]' \"$(printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")\"; then printf skipped; fi\nprintf after",
+        2, "[exit:2]", "command substitution: line 5: unexpected EOF while looking for matching `\"'\n")]
+    public Task DecodedNulCaptureFailsBeforeItsBodyRuns(string script, int status, string stdout, string stderr) =>
+        AssertDecodedNulExecutionAsync(script, status, stdout, stderr);
+
+    private static async Task AssertDecodedNulExecutionAsync(string script, int status, string stdout, string stderr)
     {
         foreach (var prepared in new[] { false, true })
         {

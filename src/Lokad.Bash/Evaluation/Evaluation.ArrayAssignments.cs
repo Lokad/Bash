@@ -44,7 +44,7 @@ public sealed partial class Evaluation
         {
             if (!retainQuotes)
                 foreach (var item in items)
-                    if (!await WordExpansion.CheckBraceDelimitersAsync(item.Word, scope, protectSubscript: item.Element != null)
+                    if (!await WordExpansion.CheckWordSyntaxAsync(item.Word, scope, protectSubscript: item.Element != null)
                             .ConfigureAwait(false))
                         return null;
 
