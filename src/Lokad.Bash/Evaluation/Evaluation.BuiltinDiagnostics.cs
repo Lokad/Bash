@@ -30,14 +30,6 @@ public sealed partial class Evaluation
         EvaluationContext context) => WriteDiagnosticAsync(name, message, _builtinDiagnostics,
             ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(context));
 
-    private static SyntaxDiagnosticPrefix GetNamedSourceDiagnosticPrefix(EvaluationContext context)
-    {
-        var path = context.DiagnosticPath;
-        var coordinates = context.Coordinates;
-        return path == null || coordinates.Locations == null ? default
-            : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, coordinates.Line);
-    }
-
     internal Task ReportReadonlyUnsetAsync(ShellValue name, bool function, EvaluationContext context) =>
         ReportBuiltinDiagnosticAsync([ShellValue.FromText("unset")],
             [name, ShellValue.FromText(function ? ": cannot unset: readonly function" : ": cannot unset: readonly variable")], context);

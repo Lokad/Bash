@@ -16,7 +16,7 @@ public sealed partial class Evaluation
         IReadOnlyList<ShellValue> words, EvaluationContext context, bool negated)
     {
         var command = words[0];
-        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
+        var sourcePrefix = GetBuiltinDiagnosticPrefix(context);
         var descriptions = false;
         var synopses = false;
         var manual = false;

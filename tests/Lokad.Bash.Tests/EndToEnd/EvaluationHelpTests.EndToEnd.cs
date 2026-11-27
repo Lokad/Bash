@@ -90,7 +90,7 @@ public sealed class EvaluationHelpTestsEndToEnd
     public async Task HelpReportsOnlyTheLastTopicWhenEveryTopicMisses(bool merged)
     {
         const string diagnostic =
-            "help: no help topics match `last missing'.  Try `help help' or `man -k last missing' or `info last missing'.\n";
+            "line 1: help: no help topics match `last missing'.  Try `help help' or `man -k last missing' or `info last missing'.\n";
         var result = await EvaluationTestHelper.RunAsync("help -s first_missing 'last missing'" + (merged ? " 2>&1" : ""));
 
         Assert.Equal(1, result.ExitCode);
@@ -113,7 +113,7 @@ public sealed class EvaluationHelpTestsEndToEnd
     {
         await using var host = new TestHost();
         var result = await host.RunAsync("help -s $'\\377'", CancellationToken.None);
-        byte[] expected = [.. "help: no help topics match `"u8, 0xff,
+        byte[] expected = [.. "line 1: help: no help topics match `"u8, 0xff,
             .. "'.  Try `help help' or `man -k "u8, 0xff, .. "' or `info "u8, 0xff, .. "'.\n"u8];
 
         Assert.Equal(1, result.ExitCode);
@@ -144,7 +144,7 @@ public sealed class EvaluationHelpTestsEndToEnd
 
             Assert.Null(await state.GetNextStep(deadline.Token));
             Assert.Equal(FileDescriptor.StdErr, write.FileDescriptor);
-            Assert.Equal($"help: no help topics match `{topic}'.  Try `help help' or `man -k {topic}' or `info {topic}'.\n",
+            Assert.Equal($"line 1: help: no help topics match `{topic}'.  Try `help help' or `man -k {topic}' or `info {topic}'.\n",
                 diagnostic);
             Assert.Equal(1, state.LastExitCode);
             owner.Dispose();
@@ -158,7 +158,7 @@ public sealed class EvaluationHelpTestsEndToEnd
     {
         await using var host = new TestHost();
         var result = await host.RunAsync("help $'-s\\376' --help", CancellationToken.None);
-        byte[] expected = [.. "help: -"u8, 0xfe, .. ": invalid option\nhelp: usage: help [-dms] [pattern ...]\n"u8];
+        byte[] expected = [.. "line 1: help: -"u8, 0xfe, .. ": invalid option\nhelp: usage: help [-dms] [pattern ...]\n"u8];
 
         Assert.Equal(2, result.ExitCode);
         Assert.True(host.StandardOutput.Content.IsEmpty);

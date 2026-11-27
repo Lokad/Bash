@@ -12,6 +12,7 @@ public sealed class ErrexitTests
     private const string ReportOption = "flag(){ if [[ -o errexit ]]; then printf on; else printf off; fi; }; ";
     private const string SetUsage = "set: usage: set [-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]\n";
     private const string SetClosedOutput = "set: write error: Bad file descriptor\n";
+    private const string TopLevelSetClosedOutput = "line 1: " + SetClosedOutput;
 
     [Theory]
     [InlineData("-e", "+e")]
@@ -94,7 +95,7 @@ public sealed class ErrexitTests
     }
 
     [Theory]
-    [InlineData("-o invalid", 2, false, "set: invalid: invalid option name\n")]
+    [InlineData("-o invalid", 2, false, "line 1: set: invalid: invalid option name\n")]
     [InlineData("-o invalid", 2, true, "")]
     [InlineData("-oz", 1, true, "")]
     public async Task SetValidatesLaterOptionsAfterInspectionCloses(
@@ -139,17 +140,17 @@ public sealed class ErrexitTests
         Assert.Equal(new[] { FileDescriptor.StdOut, FileDescriptor.StdErr, FileDescriptor.StdOut },
             host.Appends.Select(static write => write.Descriptor));
         Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[0].Content);
-        Assert.Equal("set: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
+        Assert.Equal("line 1: set: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
         Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[2].Content);
     }
 
     [Theory]
-    [InlineData("-o", "<1><1><keep>off", SetClosedOutput)]
-    [InlineData("-o -o", "<1><1><keep>off", SetClosedOutput)]
-    [InlineData("-o +oo", "<1><1><keep>off", SetClosedOutput + SetClosedOutput)]
+    [InlineData("-o", "<1><1><keep>off", TopLevelSetClosedOutput)]
+    [InlineData("-o -o", "<1><1><keep>off", TopLevelSetClosedOutput)]
+    [InlineData("-o +oo", "<1><1><keep>off", TopLevelSetClosedOutput + TopLevelSetClosedOutput)]
     [InlineData("-o -o --", "<0><0><>off", "")]
     [InlineData("-o -e -- tail", "<0><1><tail>on", "")]
-    [InlineData("-o -o invalid -- tail", "<2><1><keep>off", "set: invalid: invalid option name\n")]
+    [InlineData("-o -o invalid -- tail", "<2><1><keep>off", "line 1: set: invalid: invalid option name\n")]
     [InlineData("-o ''", "<0><1><>off", "")]
     public async Task SetChecksShellClosedOutputForInspectionsWithoutAFollowingArgument(
         string options, string output, string diagnostic)
@@ -186,8 +187,8 @@ public sealed class ErrexitTests
     }
 
     [Theory]
-    [InlineData("-e -z", "off", "set: -z: invalid option\n" + SetUsage)]
-    [InlineData("-e -o invalid", "on", "set: invalid: invalid option name\n")]
+    [InlineData("-e -z", "off", "line 1: set: -z: invalid option\n" + SetUsage)]
+    [InlineData("-e -o invalid", "on", "line 1: set: invalid: invalid option name\n")]
     public async Task SetSeparatesShortFlagValidationFromApplyingNamedOptions(
         string options, string expectedMode, string expectedDiagnostic)
     {
@@ -250,7 +251,7 @@ public sealed class ErrexitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1><keep>" + expectedMode, host.StandardOutput.TextContent);
-        Assert.Equal($"set: {flagSpelling}: invalid option\n" + SetUsage, host.StandardError.TextContent);
+        Assert.Equal($"line 1: set: {flagSpelling}: invalid option\n" + SetUsage, host.StandardError.TextContent);
     }
 
     [Theory]
@@ -266,12 +267,12 @@ public sealed class ErrexitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(expected, host.StandardOutput.TextContent);
-        byte[] diagnostic = [.. "set: "u8, sign, flag, .. ": invalid option\n"u8, .. System.Text.Encoding.ASCII.GetBytes(SetUsage)];
+        byte[] diagnostic = [.. "line 1: set: "u8, sign, flag, .. ": invalid option\n"u8, .. System.Text.Encoding.ASCII.GetBytes(SetUsage)];
         Assert.Equal(diagnostic, host.StandardError.Content.ToArray());
     }
 
     [Theory]
-    [InlineData("2>&1", "set: --: invalid option\n" + SetUsage)]
+    [InlineData("2>&1", "line 1: set: --: invalid option\n" + SetUsage)]
     [InlineData("2>&-", "")]
     public async Task SetInvalidFlagUsesTheReachedDiagnosticDescriptor(string redirection, string diagnostic)
     {
@@ -339,7 +340,7 @@ public sealed class ErrexitTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
-        Assert.StartsWith("set: ", host.StandardError.TextContent);
+        Assert.StartsWith("line 1: set: ", host.StandardError.TextContent);
         Assert.Contains("option", host.StandardError.TextContent);
     }
 

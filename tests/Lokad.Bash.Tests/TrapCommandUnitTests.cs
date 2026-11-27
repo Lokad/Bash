@@ -948,8 +948,8 @@ public sealed class TrapCommandUnitTests
     [Theory]
     [InlineData("trap", 0, "")]
     [InlineData("trap -p EXIT", 0, "")]
-    [InlineData("trap -p unknown_name", 1, "trap: unknown_name: invalid signal specification\n")]
-    [InlineData("trap ':' unknown_name", 1, "trap: unknown_name: invalid signal specification\n")]
+    [InlineData("trap -p unknown_name", 1, "line 1: trap: unknown_name: invalid signal specification\n")]
+    [InlineData("trap ':' unknown_name", 1, "line 1: trap: unknown_name: invalid signal specification\n")]
     [InlineData("trap - EXIT", 0, "")]
     [InlineData("trap ':' EXIT; trap - EXIT", 0, "")]
     public async Task EmptyTrapCommandsLeaveNoState(string script, int status, string diagnostic)
@@ -988,6 +988,33 @@ public sealed class TrapCommandUnitTests
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(diagnostic, host.ReadFile("/errs"));
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("trap \\\n-pz EXIT", 2, "",
+        "line 3: trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
+    [InlineData("command trap \\\n-pz EXIT", 2, "",
+        "line 2: trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
+    [InlineData("trap -p \\\nUNKNOWN EXIT", 1, "trap -- ':' EXIT\n",
+        "line 2: trap: UNKNOWN: invalid signal specification\n")]
+    [InlineData("trap -p EXIT UNKNOWN TERM 1>&-", 1, "",
+        "line 2: trap: UNKNOWN: invalid signal specification\nline 2: trap: write error: Bad file descriptor\n")]
+    [InlineData("trap UNKNOWN", 2, "", "trap: usage: trap [-p] [--] [action condition ...]\n")]
+    public async Task UnnamedTrapDiagnosticsUseTheReachedStderr(string command, int status, string output, string diagnostic)
+    {
+        var script = "trap ':' EXIT\n" + command + " 2>errs\nprintf '<%s>' \"$?\"\ntrap - EXIT\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var exitCode = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(output + $"<{status}>", host.StandardOutput.TextContent);
+            Assert.True(host.StandardError.Content.IsEmpty);
+            Assert.Equal(diagnostic, host.ReadFile("/errs"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Fact]
@@ -1125,7 +1152,7 @@ public sealed class TrapCommandUnitTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2>trap -- ':' EXIT\n", result.StdOut);
-        Assert.Equal("trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n", result.StdErr);
+        Assert.Equal("line 2: trap: -z: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n", result.StdErr);
     }
 
     [Fact]
@@ -1133,7 +1160,7 @@ public sealed class TrapCommandUnitTests
     {
         await using var host = new TestHost();
         var result = await host.RunAsync("trap $'-p\\xff' 2>diagnostic", CancellationToken.None);
-        byte[] expected = [.. "trap: -"u8, 0xff,
+        byte[] expected = [.. "line 1: trap: -"u8, 0xff,
             .. ": invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n"u8];
 
         Assert.Equal(2, result.ExitCode);
@@ -1163,9 +1190,9 @@ public sealed class TrapCommandUnitTests
 
     [Theory]
     [InlineData("trap -- --help EXIT", "<0>trap -- '--help' EXIT\n", "")]
-    [InlineData("trap -pp -- --help", "<1>trap -- ':' EXIT\n", "trap: --help: invalid signal specification\n")]
+    [InlineData("trap -pp -- --help", "<1>trap -- ':' EXIT\n", "line 1: trap: --help: invalid signal specification\n")]
     [InlineData("trap --help=value", "<2>trap -- ':' EXIT\n",
-        "trap: --: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
+        "line 1: trap: --: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
     public async Task TrapOnlyRecognizesExactHelpBeforeItsTerminator(string invocation, string output, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(
@@ -1182,7 +1209,7 @@ public sealed class TrapCommandUnitTests
     [InlineData("trap -- ' +15 '", "|0|", "")]
     [InlineData("trap -- - $'\\v15'", "|0|", "")]
     [InlineData("trap -- '+15' INT", "|0|trap -- 'sample' SIGTERM\ntrap -- '+15' SIGINT\n", "")]
-    [InlineData("trap -p -- $'15\\n'", "|1|trap -- 'sample' SIGTERM\n", "trap: 15\n: invalid signal specification\n")]
+    [InlineData("trap -p -- $'15\\n'", "|1|trap -- 'sample' SIGTERM\n", "line 1: trap: 15\n: invalid signal specification\n")]
     public async Task TrapNumericConditionsPreserveActionAndResetClassification(string command, string output, string error)
     {
         var script = "trap sample TERM; trap '' EXIT; " + command + "; printf '|%s|' \"$?\"; trap -p TERM INT";
@@ -1209,7 +1236,7 @@ public sealed class TrapCommandUnitTests
 
     [Theory]
     [InlineData("000", 0, "")]
-    [InlineData("64", 1, "trap: 64: invalid signal specification\n")]
+    [InlineData("64", 1, "line 1: trap: 64: invalid signal specification\n")]
     public async Task LegacyDecimalResetStillProcessesLaterConditions(string selector, int status, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync(
@@ -1257,9 +1284,9 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
-    [InlineData("trap -p", "trap: write error: Bad file descriptor\n")]
-    [InlineData("trap -p HUP unknown_name TERM", "trap: unknown_name: invalid signal specification\n"
-        + "trap: write error: Bad file descriptor\n")]
+    [InlineData("trap -p", "line 1: trap: write error: Bad file descriptor\n")]
+    [InlineData("trap -p HUP unknown_name TERM", "line 1: trap: unknown_name: invalid signal specification\n"
+        + "line 1: trap: write error: Bad file descriptor\n")]
     public async Task ShellClosedTrapListingReportsItsWriteFailureAfterNameDiagnostics(string listing, string diagnostic)
     {
         await using var host = new TestHost();
@@ -1297,9 +1324,9 @@ public sealed class TrapCommandUnitTests
         Assert.Equal(expected, host.Appends.Select(static append => append.Descriptor));
         Assert.Equal("trap -- ':' SIGHUP\n"u8.ToArray(), host.Appends[invalidName ? 1 : 0].Content);
         if (invalidName)
-            Assert.Equal("trap: unknown_name: invalid signal specification\n"u8.ToArray(), host.Appends[0].Content);
+            Assert.Equal("line 1: trap: unknown_name: invalid signal specification\n"u8.ToArray(), host.Appends[0].Content);
         if (writeFailure)
-            Assert.Equal("trap: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
+            Assert.Equal("line 1: trap: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
     }
 
     [Theory]

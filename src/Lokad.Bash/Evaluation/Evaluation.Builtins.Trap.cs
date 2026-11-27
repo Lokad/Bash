@@ -15,7 +15,7 @@ public sealed partial class Evaluation
     private async Task<EvaluationResult> EvaluateBuiltinTrapAsync(IReadOnlyList<ShellValue> words, EvaluationContext context)
     {
         var command = words[0];
-        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
+        var sourcePrefix = GetBuiltinDiagnosticPrefix(context);
         var list = false;
         var options = new ShortOptionCursor(words);
         while (options.TryReadFlag(out var flag))

@@ -30,8 +30,9 @@ The runtime supports deterministic, non-interactive shell workflows:
 A reached `--help` prints help and returns 2. With closed stdout it returns 2 silently.
 Invalid options report the first invalid flag and usage on stderr. A shell-closed
 stderr suppresses the message and preserves status 2.
-In a named source, invalid options, invalid conditions and listing write failures
-include the file and line. A lone unrecognized operand reports usage.
+Invalid options, invalid conditions and listing write failures include the
+reached line and any active source filename. A lone unrecognized operand
+reports usage.
 Trap listings report a known output failure through the active stderr.
 With shell-closed stdout, named listings check the remaining signal names
 before reporting the write failure. Downstream reader closure stops output
@@ -860,8 +861,8 @@ Downstream closure stops inspection output and diagnostics routed to the
 same handle. Option and positional processing continues.
 With shell-closed stdout, an inspection reports a write failure only when
 it has no following argument.
-In a named source, option errors and inspection write failures include the
-filename and reached line. Functions use the source of their definition.
+Option errors and inspection write failures include the reached line and any
+active source filename. Functions use the source of their definition.
 Leading short flags are validated before they can change shell state.
 During validation, `--help` describes the supported options and returns
 status 2, including with shell-closed stdout. It leaves shell options and
@@ -992,8 +993,8 @@ During option scanning, `--help` writes the builtin synopsis and returns 2.
 It returns 2 silently with closed stdout. After `--` or the first name,
 `--help` is an ordinary name.
 
-`help` reports the source filename and reached line for an invalid option,
-an unmatched topic, or a failed topic write in named input.
+`help` reports the reached line and any active source filename for an invalid
+option, an unmatched topic, or a failed topic write.
 
 `hash` uses an empty command cache. A bare invocation reports that the
 table is empty. `-r` clears it and `-l` lists its reusable entries.
@@ -1597,8 +1598,8 @@ and renders parsed command substitutions without running them again.
 `let` consumes one leading `--` after operand expansion. A leading `--help`
 requests help on stdout and returns status 2 even with closed stdout. Later
 fields are arithmetic expressions. If no expressions remain, `let` reports
-`expression expected` and returns status 1. In a named source, the diagnostic
-includes the filename and reached line. A quoted empty expression
+`expression expected` and returns status 1. The diagnostic includes the
+reached line and any active source filename. A quoted empty expression
 evaluates to zero and returns status 1 without a diagnostic.
 
 Associative arrays enumerate keys in ascending lexicographic order of unsigned

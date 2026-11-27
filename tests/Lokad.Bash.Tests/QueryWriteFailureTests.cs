@@ -76,8 +76,8 @@ public sealed class QueryWriteFailureTests
     [InlineData("f(){ :; }; declare -f f", "line 1: declare")]
     [InlineData("export label=sample; export -p", "export")]
     [InlineData("readonly label=sample; readonly -p", "readonly")]
-    [InlineData("set -o", "set")]
-    [InlineData("set +o", "set")]
+    [InlineData("set -o", "line 1: set")]
+    [InlineData("set +o", "line 1: set")]
     public async Task ListingsReportClosedOutputThroughTheReachedErrorDescriptor(string script, string diagnosticName)
     {
         await using var host = new TestHost();

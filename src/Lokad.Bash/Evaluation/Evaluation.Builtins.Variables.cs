@@ -279,7 +279,7 @@ public sealed partial class Evaluation
         EvaluationContext context,
         bool negated)
     {
-        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
+        var sourcePrefix = GetBuiltinDiagnosticPrefix(context);
         var inspectionClosed = false;
         // Validate the leading groups before publishing option changes. A bare
         // plus ends validation but is skipped when applying the options.
@@ -428,8 +428,7 @@ public sealed partial class Evaluation
         }
 
         if (first == words.Count)
-            await WriteDiagnosticAsync([words[0]], [ShellValue.FromText("expression expected")], _builtinDiagnostics,
-                ClosedStderrHandling.AttemptWrite, GetNamedSourceDiagnosticPrefix(context)).ConfigureAwait(false);
+            await ReportBuiltinDiagnosticAsync(words[0], "expression expected", context).ConfigureAwait(false);
 
         long? lastResult = 0;
         for (var index = first; index < words.Count; index++)

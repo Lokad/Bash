@@ -152,6 +152,31 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Theory]
+    [InlineData("help \\\n-Z", 2, "line 3: help: -Z: invalid option\nhelp: usage: help [-dms] [pattern ...]\n")]
+    [InlineData("help -s : 1>&-", 1, "line 2: help: write error: Bad file descriptor\n")]
+    [InlineData("let \\\n--", 1, "line 3: let: expression expected\n")]
+    [InlineData("let ''", 1, "")]
+    [InlineData("command set \\\n-Z", 2, "line 2: set: -Z: invalid option\n"
+        + "set: usage: set [-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]\n")]
+    [InlineData("set -o \\\nsynthetic_missing", 2, "line 2: set: synthetic_missing: invalid option name\n")]
+    public async Task BuiltinDiagnosticsUseTheReachedLineInAnUnnamedScript(string invocation, int failureStatus, string diagnostic)
+    {
+        var script = "set -- kept\n" + invocation + " 2>log\nprintf '<%s><%s>' \"$?\" \"$1\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal($"<{failureStatus}><kept>", host.StandardOutput.TextContent);
+            Assert.True(host.StandardError.Content.IsEmpty);
+            Assert.Equal(diagnostic, host.ReadFile("/log"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData("dirs -c stray")]
     [InlineData("pushd -x")]
     [InlineData("popd stray")]

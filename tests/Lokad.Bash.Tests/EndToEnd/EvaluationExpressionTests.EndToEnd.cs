@@ -104,7 +104,7 @@ public sealed class EvaluationExpressionTestsEndToEnd
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal("let: expression expected\n", result.StdErr);
+        Assert.Equal("line 1: let: expression expected\n", result.StdErr);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class EvaluationExpressionTestsEndToEnd
         Assert.Equal("<1>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("once", host.ReadFile("/fact"));
-        Assert.Equal("let: expression expected\n", host.ReadFile("/err"));
+        Assert.Equal("line 1: let: expression expected\n", host.ReadFile("/err"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
