@@ -109,6 +109,30 @@ public sealed class ArithmeticCommandBoundaryTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("", "", 7, 0)]
+    [InlineData("i+=5", "", 12, 0)]
+    [InlineData(" \t", "++updates", 7, 3)]
+    [InlineData("i+=5", "++updates", 12, 3)]
+    public async Task ArithmeticForPreservesReachedEffectsWithOmittedSideClauses(
+        string initialization, string update, int expectedValue, int expectedUpdates)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            i=7; n=0; updates=0
+            for (({initialization}; n<4; {update})); do
+                ((step=n++))
+                ((step==1)) && continue
+                ((step==3)) && break
+                printf 'body:%s;' "$step"
+            done
+            printf 'end:%s:%s:%s:%s' "$?" "$n" "$i" "$updates"
+            """);
+
+        Assert.Equal($"body:0;body:2;end:0:4:{expectedValue}:{expectedUpdates}", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("\\\n")]
     public async Task ArithmeticForSeparatorScanReusesNestedUpdateLookahead(string continuation)

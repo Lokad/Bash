@@ -57,8 +57,16 @@ public sealed partial class Evaluation
 
         return await FinalizeResultAsync(lastBodyResult, negated);
 
-        async Task<long?> EvaluateOperandAsync(ArithmeticSource expression)
+        async ValueTask<long?> EvaluateOperandAsync(ArithmeticSource expression)
         {
+            // An omitted initialization or update has no arithmetic work to run.
+            if (expression.Source.IsEmpty)
+            {
+                CheckCancellation();
+                _state.PreparationDiagnosticName = ArithmeticDiagnosticName;
+                return scope.CanExpand ? 0 : null;
+            }
+
             // The condition and increment finish each iteration, just like the body command.
             using var memory = Memory.BeginCommand(scope);
             var result = await EvaluateArithmeticCommandOperandAsync(expression, scope).ConfigureAwait(false);
