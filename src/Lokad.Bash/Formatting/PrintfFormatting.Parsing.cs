@@ -1,4 +1,6 @@
 using System;
+using System.Buffers;
+using System.Buffers.Text;
 using System.Text;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -385,16 +387,8 @@ public static partial class PrintfFormatting
                             var value = ParseSigned(GetValueArgument());
                             var negative = value < 0;
                             var magnitude = negative ? unchecked((ulong)(-(value + 1)) + 1) : (ulong)value;
-                            var digits = ApplyIntegerPrecision(magnitude.ToString(Culture), magnitude == 0, specification.Precision);
-                            AppendNumber(
-                                specification,
-                                new FormattedNumber(
-                                    digits,
-                                    string.Empty,
-                                    negative ? FormattedNumberSign.Negative : FormattedNumberSign.Positive,
-                                    specification.Precision == null
-                                        ? FormattedNumberPadding.ZeroAllowed
-                                        : FormattedNumberPadding.SpaceOnly));
+                            ApplyInteger(specification, magnitude,
+                                negative ? FormattedNumberSign.Negative : FormattedNumberSign.Positive);
                             return;
                         }
                     case 'o':
@@ -403,55 +397,8 @@ public static partial class PrintfFormatting
                     case 'X':
                         {
                             var value = ParseUnsigned(GetValueArgument());
-                            var digitText = specification.Conversion switch
-                            {
-                                'o' => ConvertUnsigned(value, 8, uppercase: false),
-                                'x' => ConvertUnsigned(value, 16, uppercase: false),
-                                'X' => ConvertUnsigned(value, 16, uppercase: true),
-                                _ => value.ToString(Culture)
-                            };
-                            var digits = ApplyIntegerPrecision(digitText, value == 0, specification.Precision);
-
-                            var prefix = string.Empty;
-                            if (specification.Flags.HasFlag(FormatFlags.Alternate))
-                            {
-                                if (specification.Conversion == 'o' && (digits.Length == 0
-                                    || digits.Zeros == 0 && !digitText.StartsWith('0')))
-                                    prefix = "0";
-                                else if (value != 0 && specification.Conversion == 'x')
-                                    prefix = "0x";
-                                else if (value != 0 && specification.Conversion == 'X')
-                                    prefix = "0X";
-                            }
-
-                            AppendNumber(
-                                specification,
-                                new FormattedNumber(
-                                    digits,
-                                    prefix,
-                                    FormattedNumberSign.None,
-                                    specification.Precision == null
-                                        ? FormattedNumberPadding.ZeroAllowed
-                                        : FormattedNumberPadding.SpaceOnly));
+                            ApplyInteger(specification, value, FormattedNumberSign.None);
                             return;
-
-                            static string ConvertUnsigned(ulong unsigned, int numberBase, bool uppercase)
-                            {
-                                if (unsigned == 0)
-                                    return "0";
-
-                                Span<char> buffer = stackalloc char[64];
-                                var index = buffer.Length;
-                                var alphabet = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
-                                var radix = (ulong)numberBase;
-                                while (unsigned > 0)
-                                {
-                                    buffer[--index] = alphabet[(int)(unsigned % radix)];
-                                    unsigned /= radix;
-                                }
-
-                                return new string(buffer[index..]);
-                            }
 
                             ulong ParseUnsigned(ShellValue unsignedArgument)
                             {
@@ -595,12 +542,52 @@ public static partial class PrintfFormatting
                 ShellValue GetValueArgument() =>
                     TryGetArgument(out var argument) ? argument : ShellValue.Empty;
 
-                static NumberText ApplyIntegerPrecision(string digits, bool isZero, int? precision)
+                void ApplyInteger(FormatSpecification specification, ulong value, FormattedNumberSign sign)
                 {
-                    if (precision == 0 && isZero)
-                        return new NumberText(string.Empty, 0, string.Empty);
-                    return new NumberText(string.Empty,
-                        precision is { } minimum ? Math.Max(0, minimum - digits.Length) : 0, digits);
+                    // A 64-bit unsigned value needs at most 22 octal digits.
+                    Span<byte> buffer = stackalloc byte[22];
+                    var conversion = specification.Conversion;
+                    scoped ReadOnlySpan<byte> digits;
+                    if (conversion == 'o')
+                        digits = FormatOctal(value, buffer);
+                    else
+                    {
+                        var format = conversion is 'x' or 'X' ? new StandardFormat(conversion) : default;
+                        if (!Utf8Formatter.TryFormat(value, buffer, out var length, format))
+                            throw new InvalidOperationException("Integer digits exceed their maximum format length.");
+                        digits = buffer[..length];
+                    }
+
+                    var precision = specification.Precision;
+                    if (precision == 0 && value == 0)
+                        digits = [];
+                    var zeros = precision is { } minimum ? Math.Max(0, minimum - digits.Length) : 0;
+                    var prefix = string.Empty;
+                    if ((specification.Flags & FormatFlags.Alternate) != 0)
+                    {
+                        prefix = conversion switch
+                        {
+                            'o' when digits.IsEmpty || zeros == 0 && value != 0 => "0",
+                            'x' when value != 0 => "0x",
+                            'X' when value != 0 => "0X",
+                            _ => string.Empty
+                        };
+                    }
+
+                    var padding = precision == null ? FormattedNumberPadding.ZeroAllowed : FormattedNumberPadding.SpaceOnly;
+                    AppendNumber(specification,
+                        new FormattedNumber(new NumberText(string.Empty, zeros, string.Empty), prefix, sign, padding), digits);
+
+                    static ReadOnlySpan<byte> FormatOctal(ulong value, Span<byte> buffer)
+                    {
+                        var index = buffer.Length;
+                        do
+                        {
+                            buffer[--index] = (byte)('0' + (value & 7));
+                            value >>= 3;
+                        } while (value != 0);
+                        return buffer[index..];
+                    }
                 }
 
                 void ApplyText(FormatSpecification textSpecification, ReadOnlySpan<byte> bytes, bool ignorePrecision) =>
@@ -621,7 +608,7 @@ public static partial class PrintfFormatting
                         else if (result.RangeError)
                             AddNumericDiagnostic(argument, ": Numerical result out of range", warning: true);
 
-                        AppendNumber(numberSpecification, result.Number);
+                        AppendNumber(numberSpecification, result.Number, []);
                     }
                     finally { ReleaseConversionScratch(capacity); }
                 }
@@ -696,21 +683,23 @@ public static partial class PrintfFormatting
 
                 void AppendNumber(
                     FormatSpecification numberSpecification,
-                    FormattedNumber number)
+                    FormattedNumber number,
+                    scoped ReadOnlySpan<byte> trailingBytes)
                 {
                     if (ApplyFieldOverride(numberSpecification))
                         return;
 
+                    var flags = numberSpecification.Flags;
                     var sign = number.Sign switch
                     {
                         FormattedNumberSign.Negative => "-",
                         FormattedNumberSign.Positive
-                            when numberSpecification.Flags.HasFlag(FormatFlags.PlusSign) => "+",
+                            when (flags & FormatFlags.PlusSign) != 0 => "+",
                         FormattedNumberSign.Positive
-                            when numberSpecification.Flags.HasFlag(FormatFlags.SpaceSign) => " ",
+                            when (flags & FormatFlags.SpaceSign) != 0 => " ",
                         _ => string.Empty
                     };
-                    var length = sign.Length + number.Prefix.Length + number.Text.Length;
+                    var length = sign.Length + number.Prefix.Length + number.Text.Length + trailingBytes.Length;
                     var paddingLength = Math.Max(0L, GetFieldWidth(numberSpecification.Width, length) - length);
                     if (length + paddingLength > _output.RemainingLength)
                     {
@@ -718,9 +707,9 @@ public static partial class PrintfFormatting
                         return;
                     }
                     var padding = (int)paddingLength;
-                    var left = numberSpecification.Flags.HasFlag(FormatFlags.LeftJustify);
+                    var left = (flags & FormatFlags.LeftJustify) != 0;
                     var zero = number.Padding == FormattedNumberPadding.ZeroAllowed
-                        && numberSpecification.Flags.HasFlag(FormatFlags.ZeroPad)
+                        && (flags & FormatFlags.ZeroPad) != 0
                         && !left;
 
                     if (!left && !zero)
@@ -732,7 +721,10 @@ public static partial class PrintfFormatting
                         AppendPadding(padding, (byte)'0');
                     AppendText(number.Text.BeforeZeros);
                     AppendPadding(number.Text.Zeros, (byte)'0');
-                    AppendText(number.Text.AfterZeros);
+                    if (trailingBytes.IsEmpty)
+                        AppendText(number.Text.AfterZeros);
+                    else
+                        TryAppendBytes(_output, trailingBytes);
 
                     if (left)
                         AppendPadding(padding, (byte)' ');

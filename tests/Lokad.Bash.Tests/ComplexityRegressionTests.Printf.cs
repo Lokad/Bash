@@ -48,6 +48,48 @@ public sealed partial class ComplexityRegressionTests
     }
 
     [Theory]
+    [InlineData("%d", "-9223372036854775808", "-9223372036854775808")]
+    [InlineData("%#o", "18446744073709551615", "01777777777777777777777")]
+    [InlineData("%08x", "2748", "00000abc")]
+    [InlineData("%#X", "2748", "0XABC")]
+    public void IntegerFormattingDoesNotAllocateADigitStringPerField(string conversion, string argument, string expected)
+    {
+        const int FieldCount = 512;
+        var integerFormat = RepeatedFormat(conversion);
+        var textFormat = RepeatedFormat("%s");
+        var integerArguments = Enumerable.Repeat(ShellValue.FromText(argument), FieldCount).ToArray();
+        var textArguments = Enumerable.Repeat(ShellValue.FromText(expected), FieldCount).ToArray();
+        var expectedBytes = System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat(expected, FieldCount)));
+
+        _ = Measure(integerFormat, integerArguments);
+        _ = Measure(textFormat, textArguments);
+        var integerBytes = Measure(integerFormat, integerArguments);
+        var textBytes = Measure(textFormat, textArguments);
+
+        Assert.True(integerBytes <= textBytes + 4096,
+            $"Integer and equal-output text fields allocated {integerBytes:N0} and {textBytes:N0} bytes.");
+
+        static ShellValue RepeatedFormat(string conversion) =>
+            ShellValue.FromText(string.Concat(Enumerable.Repeat(conversion, FieldCount)));
+
+        long Measure(ShellValue format, IReadOnlyList<ShellValue> arguments)
+        {
+            var memory = new MemoryGovernor(1024 * 1024);
+            using var owner = memory.CreateScope();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = PrintfFormatting.EvaluateCommand(format, arguments, owner);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Empty(result.Diagnostics);
+            Assert.True(result.Output.Span.SequenceEqual(expectedBytes));
+            owner.Dispose();
+            Assert.Equal(0, memory.ReservedBytes);
+            return allocated;
+        }
+    }
+
+    [Theory]
     [InlineData("%u", '9')]
     [InlineData("%a", 'f')]
     public void NumericConversionAllocationScalesWithInputRatherThanMagnitude(string format, char digit)
