@@ -3221,7 +3221,10 @@ public sealed partial class Evaluation : IFileTester
                         : owner.TryDeclareArray(arrayName, kind, ScalarArrayPromotion.RetainValue);
                     if (!declared)
                     {
-                        await DiagnoseAsync(global && reference.Kind == VariableReferenceKind.Name ? sourceName : name, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                        var diagnosticName = operand.Value == null && selectedWholeBinding is { Reference.Kind: not VariableReferenceKind.Name } elementBinding
+                            ? elementBinding.Name
+                            : global && reference.Kind == VariableReferenceKind.Name ? sourceName : name;
+                        await DiagnoseAsync(diagnosticName, ArrayConversionMessage(kind)).ConfigureAwait(false);
                         if (arrayAttributeAssignment)
                             await ApplyNamedAttributesAsync(sourceName, assignmentPrefix).ConfigureAwait(false);
                         continue;

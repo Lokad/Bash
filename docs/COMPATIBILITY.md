@@ -972,6 +972,13 @@ command clears the label. An isolated child inherits the label and updates it
 in its own state. A second diagnostic emitted during builtin dispatch uses
 the declaration builtin's name and the reached stderr mapping.
 
+An explicit array kind conflict through a whole-name nameref reports the
+declaration operand. Through an element nameref, a name-only declaration or
+compound preparation reports the reached array. At script scope, a compatible
+explicit compound declaration prepares that array before reporting the
+stored element spelling as an invalid identifier. The initializer's
+expansions have already run, and the stored selector stays unevaluated.
+
 `type -p` prints the host's reported path when the selected name resolves to an
 external command. Builtins, keywords and functions resolve successfully in this
 mode and produce no output. `type -f` skips functions during lookup and combines

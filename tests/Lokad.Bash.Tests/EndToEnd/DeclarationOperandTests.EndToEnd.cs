@@ -420,6 +420,32 @@ public sealed class DeclarationOperandTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("item=(zero one); i=0; declare -n link='item[i++]'\ndeclare -A link\nprintf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"${item[0]}\" \"${item[1]}\"",
+        "<1:0:zero:one>", "line 2: declare: item: cannot convert indexed to associative array\n")]
+    [InlineData("item=(zero one); i=0; declare -n link=item\ndeclare -A link\nprintf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"${item[0]}\" \"${item[1]}\"",
+        "<1:0:zero:one>", "line 2: declare: link: cannot convert indexed to associative array\n")]
+    [InlineData("item=(zero one); i=0; declare -n hop='item[i++]' link=hop\ndeclare -A link=([k]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"${item[0]}\" \"${item[1]}\"",
+        "<1:0:zero:one>", "rhsline 2: item: cannot convert indexed to associative array\n")]
+    [InlineData("item=(zero one); i=0; declare -n link=item\ndeclare -A link=([k]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"${item[0]}\" \"${item[1]}\"",
+        "<1:0:zero:one>", "rhsline 2: link: cannot convert indexed to associative array\n")]
+    [InlineData("declare -A item=([k]=value); declare -n link='item[k]'\neval 'declare -A link=([k]=$(printf rhs >&2; printf fresh))'\nprintf '<%s:%s>' \"$?\" \"${item[k]}\"",
+        "<1:value>", "rhsline 2: eval: `item[k]': not a valid identifier\n")]
+    [InlineData("readonly item=old; i=0; declare -n link='item[i++]'\ndeclare -A link=([k]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item",
+        "<1:0>declare -Ar item=([0]=\"old\" )\n", "rhsline 2: `item[i++]': not a valid identifier\n")]
+    [InlineData("item=(zero one); readonly item; i=0; declare -n link='item[i++]'\ndeclare -A link=([k]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"${item[0]}\" \"${item[1]}\"",
+        "<1:0:zero:one>", "rhsline 2: item: cannot convert indexed to associative array\n")]
+    [InlineData("item=(zero one); i=0; declare -n link='item[i++]'\nf(){\ndeclare -gA link=([k]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"${item[0]}\" \"${item[1]}\"\n}; f",
+        "<1:0:zero:one>", "rhsline 3: f: item: cannot convert indexed to associative array\nline 3: declare: item: cannot convert indexed to associative array\n")]
+    public async Task ArrayDeclarationDiagnosticsNameTheReachedBinding(string script, string stdout, string stderr)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(stdout, result.StdOut);
+        Assert.Equal(stderr, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("v='a b'; export x=$v; printf '<%s>\\n' \"$x\"", "<a b>\n", "", 0)]
     [InlineData("v='a b'; \"export\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
     [InlineData("v='a b'; ex\"port\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
