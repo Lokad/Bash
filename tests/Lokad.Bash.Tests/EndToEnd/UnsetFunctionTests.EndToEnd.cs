@@ -25,6 +25,30 @@ public sealed class UnsetFunctionTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("a=(zero one two); i=0; j=1; declare -n r='a[j++]'\nunset 'r[i++]'\n"
+        + "printf '<%s:%s:%s:%s:%s:%s>' \"$?\" \"$i\" \"$j\" \"${a[0]}\" \"${a[1]-missing}\" \"${a[2]}\"; declare -p r",
+        "<0:0:2:zero:missing:two>declare -n r=\"a[j++]\"\n", "")]
+    [InlineData("a=(zero one); declare -n r=hop hop='a[1]'\nunset -v 'r[@]'\n"
+        + "printf '<%s:%s:%s>' \"$?\" \"${a[0]}\" \"${a[1]-missing}\"",
+        "<0:zero:missing>", "")]
+    [InlineData("declare -A a=([first]=one [second]=two); declare -n r='a[first]'\nunset 'r[${reached:=second}]'\n"
+        + "printf '<%s:%s:%s:%s>' \"$?\" \"${a[first]-missing}\" \"${a[second]}\" \"${reached-unset}\"",
+        "<0:missing:two:unset>", "")]
+    [InlineData("declare -a a; j=1; declare -n r='a[j++]'\nunset 'r[0]'\nprintf '<%s:%s>' \"$?\" \"$j\"; declare -p a",
+        "<0:2>declare -a a\n", "")]
+    [InlineData("readonly -a a=(zero one); i=0; j=1; declare -n r='a[j++]'\nunset 'r[i++]'\n"
+        + "printf '<%s:%s:%s:%s>' \"$?\" \"$i\" \"$j\" \"${a[1]}\"",
+        "<1:0:1:one>", "line 2: unset: r: cannot unset: readonly variable\n")]
+    public async Task SubscriptedElementNamerefUsesItsStoredSelector(string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("unset --help value -q")]
     [InlineData("command unset -fv --help value")]
     public async Task ReachedHelpPreservesTheOperandAndReturnsUsageStatus(string invocation)

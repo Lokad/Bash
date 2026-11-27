@@ -1773,6 +1773,9 @@ name if it is still a scalar. An element nameref returns status 0 for ordinary
 removal failures, including an invalid array subscript. A fatal expansion error
 still applies the reader's failure rules. Reached subscript diagnostics include
 the builtin's source line and the original selector spelling.
+A subscripted operand through an element nameref selects the element recorded
+in the reference and evaluates its stored selector once. It retains the
+reference binding. Readonly protection applies before selector evaluation.
 When a nameref chain ends at an uninitialized reference, ordinary variable
 removal selects the originally named reference and preserves the terminal
 declaration. Function fallback still applies before that removal.

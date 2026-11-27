@@ -236,9 +236,14 @@ internal static partial class WordExpansion
         }
         var resolvedName = variables.ResolveNamerefName(name);
         if (resolvedName.IsEmpty && kind == UnsetReferenceKind.Direct
-            && variables.TryResolveBinding(name, selectOwner: null, out var binding)
-            && binding.TryGetInvalidNameref(out var rawTarget))
-            return new(true, rawTarget.IsEmpty ? name : BindingName.Empty);
+            && variables.TryResolveBinding(name, selectOwner: null, out var binding))
+        {
+            // An element nameref supplies its own selector even when the operand has one.
+            if (binding.Reference.Kind != VariableReferenceKind.Name)
+                return await UnsetElementAsync(binding.Reference, UnsetReferenceKind.Nameref, scope).ConfigureAwait(false);
+            if (binding.TryGetInvalidNameref(out var rawTarget))
+                return new(true, rawTarget.IsEmpty ? name : BindingName.Empty);
+        }
         if (!variables.HasBinding(resolvedName) || variables.IsArrayNameref(resolvedName))
             return new(true, BindingName.Empty);
 
