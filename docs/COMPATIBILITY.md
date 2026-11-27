@@ -210,6 +210,11 @@ selector with `-n` selects that local before rejecting the nameref flag.
 A nonempty replacement initializer in that form is validated as a nameref
 target before the array can be prepared. An append follows selector handling.
 A nonempty selector with `-n` fails before that selection or selector evaluation.
+A parsed compound declaration of a new local can shadow an inherited
+element nameref. Redeclaring an element nameref already owned by the
+function uses the complete selector spelling as the local array name.
+Later compound initializers of that name use its own array kind. The
+stored selector remains unevaluated.
 When an empty element declaration with `-n` instead reaches an existing local
 reference to a whole variable, the rejected declaration leaves an empty array
 with the nameref attribute and no target. The array is initialized when the

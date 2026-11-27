@@ -512,6 +512,33 @@ public sealed class DeclarationOperandTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("i=0; item=(zero one); declare -n link='item[i++]'\nf(){\nlocal -a link=($(printf rhs >&2; printf fresh))\nprintf '<%s:%s>' \"$i\" \"${link[0]}\"\n}; f\ndeclare -p link item",
+        "<0:fresh>declare -n link=\"item[i++]\"\ndeclare -a item=([0]=\"zero\" [1]=\"one\")\n", "rhs")]
+    [InlineData("i=0; item=(zero one)\ninner(){ local -a link=(fresh); printf '<%s:%s>' \"$i\" \"${link[0]}\"; }\nouter(){ local -nr link='item[i++]'; inner; declare -p link; }; outer\ndeclare -p item",
+        "<0:fresh>declare -nr link=\"item[i++]\"\ndeclare -a item=([0]=\"zero\" [1]=\"one\")\n", "")]
+    [InlineData("declare -A item=([k]=old)\nf(){\nlocal -nr link='item[k]'\nlocal -A link=([key]=first)\nlocal link+=([key]+=again)\ndeclare -p 'item[k]' link item\n}; f\nprintf '<%s>' \"${item[k]}\"; declare -p 'item[k]' 2>/dev/null; :",
+        "declare -A item[k]=([key]=\"firstagain\" )\ndeclare -nr link=\"item[k]\"\ndeclare -A item=([k]=\"old\" )\n<old>", "")]
+    [InlineData("i=0; item=(zero one)\nf(){\nlocal -n link='item[i++]'\nlocal -a link=([5]=first)\nlocal -A link=(next)\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p 'item[i++]' item\n}; f",
+        "<1:0>declare -a item[i++]=([5]=\"first\")\ndeclare -a item=([0]=\"zero\" [1]=\"one\")\n",
+        "line 5: link: cannot convert indexed to associative array\nline 5: local: link: cannot convert indexed to associative array\n")]
+    [InlineData("item=(zero one)\nf(){ local -n link='item[@]'; local -a link=(fresh); declare -p 'item[@]' item; }; f",
+        "declare -a item[@]=([0]=\"fresh\")\ndeclare -a item=([0]=\"zero\" [1]=\"one\")\n", "")]
+    [InlineData("i=0; item=(zero one); declare -nr link='item[i++]'\nf(){\neval 'local -a link=($(printf rhs >&2; printf fresh))'\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p link\n}; f",
+        "<1:0>declare -nr link=\"item[i++]\"\n",
+        "rhsline 3: eval: link: readonly variable\nline 3: local: link: readonly variable\n")]
+    [InlineData("i=0; item=(zero one); declare -nr link='item[i++]'\nf(){\n(( 1 ))\nlocal -a link=(fresh)\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p link\n}; f",
+        "<1:0>declare -nr link=\"item[i++]\"\n",
+        "line 4: ((: link: readonly variable\nline 4: local: link: readonly variable\n")]
+    public async Task CompoundLocalDeclarationUsesTheReachedLocalBinding(string script, string stdout, string stderr)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(stdout, result.StdOut);
+        Assert.Equal(stderr, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("v='a b'; export x=$v; printf '<%s>\\n' \"$x\"", "<a b>\n", "", 0)]
     [InlineData("v='a b'; \"export\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
     [InlineData("v='a b'; ex\"port\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
@@ -535,7 +562,7 @@ public sealed class DeclarationOperandTestsEndToEnd
     [InlineData("local(){ printf 'called:%s/' \"$1\"; }; local a=(one); printf '<%s>' \"${a[*]}\"", "called:a/<one>", "", 0)]
     [InlineData("readonly a=old; f(){ local a=($(printf rhs >&2; printf new)) b=ok; printf '%s:%s:%s/' \"$?\" \"$a\" \"$b\"; }; f; printf end", "1:old:ok/end", "rhsline 1: f: a: readonly variable\nline 1: local: a: readonly variable\n", 0)]
     [InlineData("readonly a=old; f(){ local -a a=(new) b=(two); printf '%s:%s:%s/' \"$?\" \"$a\" \"$b\"; }; f; printf end", "1:old:two/end", "line 1: f: a: readonly variable\nline 1: local: a: readonly variable\n", 0)]
-    [InlineData("readonly a=old; f(){ local -n r=a; local r=(new); printf '%s:%s/' \"$?\" \"$a\"; }; f; printf end", "1:old/end", "line 1: f: a: readonly variable\nline 1: local: a: readonly variable\n", 0)]
+    [InlineData("readonly a=old; f(){ local -n r=a; local r=(new); printf '%s:%s/' \"$?\" \"$a\"; }; f; printf end", "1:old/end", "line 1: a: readonly variable\nline 1: local: a: readonly variable\n", 0)]
     [InlineData("f(){ local -A a=([key]=old); local -a a=(new); printf '%s:%s/' \"$?\" \"${a[key]}\"; }; f; printf end", "1:old/end", "line 1: a: cannot convert associative to indexed array\nline 1: local: a: cannot convert associative to indexed array\n", 0)]
     [InlineData("f(){ local -r a=old; local a=(new); printf inside; }; f; printf outside", "", "line 1: a: readonly variable\n", 1)]
     [InlineData("arr=(old); declare -A arr; printf '<%s>:<%s>\\n' \"$?\" \"${arr[0]}\"", "<1>:<old>\n", "line 1: declare: arr: cannot convert indexed to associative array\n", 0)]

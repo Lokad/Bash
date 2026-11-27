@@ -55,6 +55,8 @@ public sealed partial class Evaluation
                         || compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto;
                     var inherit = compoundInherit && setCompoundTransforms;
                     var existingLocal = scope.Context.FunctionContext?.Locals.Declares(declaredName) == true;
+                    VariableReference? literalTarget = null;
+                    BindingName literalName = default;
                     var resolved = SelectTarget(out var name, out var targetVariables, out var targetLocal, out var targetReference);
                     var kind = SelectKind();
                     using var itemMemory = items.Count == 0 ? null : new MemoryCapacity(Memory.Budget, 0);
@@ -99,11 +101,12 @@ public sealed partial class Evaluation
 
                     // Declaration operands expand before readonly/type rejection, unlike direct assignments.
                     var referencedElement = bracket < 0 && targetReference.Kind != VariableReferenceKind.Name;
+                    var literalLocal = local && existingLocal && !name.IsIdentifier;
                     var globalInFunction = compoundGlobal && scope.Context.FunctionContext != null;
-                    var memberAssignment = bracket >= 0 || !name.IsIdentifier || (compoundGlobal
+                    var memberAssignment = bracket >= 0 || !literalLocal && !name.IsIdentifier || (compoundGlobal
                         ? targetVariables.TryResolveBinding(declaredName, selectOwner: null, out var selected)
                             && selected.Reference.Kind != VariableReferenceKind.Name
-                        : referencedElement);
+                        : !local && referencedElement);
                     if (!memberAssignment && !local && !referencedElement && compoundArrayKind != ArrayAssignmentKind.Auto
                         && targetVariables.TryGetNameref(name, out _))
                         targetVariables.RecreateDeclarationArray(name, kind);
@@ -176,17 +179,18 @@ public sealed partial class Evaluation
                         var declarationKind = existingLocal && unsetReference
                             ? kind == ArrayKind.Associative ? ArrayAssignmentKind.Associative : ArrayAssignmentKind.Indexed
                             : compoundArrayKind;
+                        var localReference = literalLocal ? VariableReference.ForName(name) : declaredReference;
                         if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
-                                new VariableOperand(VariableOperandKind.Name, declaredReference, ShellValue.Empty), prefixes: null,
+                                new VariableOperand(VariableOperandKind.Name, localReference, ShellValue.Empty), prefixes: null,
                                 declarationKind, isNameref: false, inherit, caseChange: default, elementAttributes: default,
                                 Memory, function.Enclosing))
                         {
-                            if (targetVariables.IsReadonly(name))
-                                await ReportCommandDiagnosticAsync([function.FunctionName],
-                                    [name.ToValue(), ShellValue.FromText(": readonly variable")], scope).ConfigureAwait(false);
-                            else
-                                await ReportCommandDiagnosticAsync([name.ToValue()],
-                                    [ShellValue.FromText(ArrayConversionMessage(kind))], scope).ConfigureAwait(false);
+                            var subject = (literalLocal ? declaredName : name).ToValue();
+                            var diagnosticName = _state.PreparationDiagnosticName;
+                            ReadOnlySpan<ShellValue> diagnosticSubject = diagnosticName.IsEmpty
+                                ? [subject] : [diagnosticName, ShellValue.FromText(": "), subject];
+                            var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
+                            await ReportCommandDiagnosticAsync(diagnosticSubject, [ShellValue.FromText(message)], scope).ConfigureAwait(false);
                             // Dispatch still visits this name and later operands; a shadowing function can also run.
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
                             continue;
@@ -232,6 +236,17 @@ public sealed partial class Evaluation
                             binding = (compoundGlobal ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables) : scope.Variables)
                                 .SelectArrayDeclarationBinding(declaredName, binding);
                         targetName = !found || local && !existingLocal ? declaredName : binding.Name;
+                        if (found && local && existingLocal && bracket < 0 && binding.Reference.Kind != VariableReferenceKind.Name)
+                        {
+                            // Use the complete target spelling for the local declaration and its initializer.
+                            // Reuse it if RHS expansion leaves the selector unchanged.
+                            if (literalTarget != binding.Reference)
+                            {
+                                literalTarget = binding.Reference;
+                                literalName = BindingNameExpansion.FromValue(binding.Reference.ToValue(Memory), Memory);
+                            }
+                            targetName = literalName;
+                        }
                         variables = !compoundGlobal ? scope.Variables : found ? binding.Owner
                             : scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables);
                         isLocal = local && scope.Context.FunctionContext?.Locals.Declares(targetName) == true;
