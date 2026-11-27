@@ -7,6 +7,7 @@ public sealed class CommandLineOptionParserTests
 {
     [Theory]
     [InlineData("-name", false, "")]
+    [InlineData("-name=", true, "")]
     [InlineData("-name==value", true, "=value")]
     public void KnownSingleDashLongNamesTakePrecedenceOverShortGroups(string argument, bool hasValue, string value)
     {
@@ -37,6 +38,7 @@ public sealed class CommandLineOptionParserTests
     [InlineData("FF")]
     [InlineData("C3A9")]
     [InlineData("000D0A5C")]
+    [InlineData("3DFF")]
     public void ShortGroupsRetainAttachedValueBytes(string valueHex)
     {
         var bytes = Convert.FromHexString("2D616E" + valueHex);

@@ -48,32 +48,19 @@ public static class NumberFormatting
     /// </summary>
     public static ReadOnlyMemory<byte> FormatHumanSize(long bytes)
     {
-        var suffix = ReadOnlyMemory<byte>.Empty;
-        var value = bytes;
+        if (bytes < 1024)
+            return FormatNumber(bytes);
 
-        switch (bytes)
+        var (divisor, suffix) = bytes switch
         {
-            case >= 1024L * 1024L * 1024L:
-                value = bytes / (1024L * 1024L * 1024L);
-                suffix = Utf8Text.Encode("G");
-                break;
-            case >= 1024L * 1024L:
-                value = bytes / (1024L * 1024L);
-                suffix = Utf8Text.Encode("M");
-                break;
-            case >= 1024L:
-                value = bytes / 1024L;
-                suffix = Utf8Text.Encode("K");
-                break;
-        }
+            >= 1024L * 1024L * 1024L => (1024L * 1024L * 1024L, (byte)'G'),
+            >= 1024L * 1024L => (1024L * 1024L, (byte)'M'),
+            _ => (1024L, (byte)'K'),
+        };
 
-        var number = FormatNumber(value);
-        if (suffix.IsEmpty)
-            return number;
-
-        var buffer = new byte[number.Length + suffix.Length];
-        number.CopyTo(buffer.AsMemory());
-        suffix.CopyTo(buffer.AsMemory(number.Length));
-        return buffer;
+        Span<byte> buffer = stackalloc byte[MaximumNumberLength + 1];
+        var number = FormatNumber(bytes / divisor, buffer[..^1]);
+        buffer[number.Length] = suffix;
+        return buffer[..(number.Length + 1)].ToArray();
     }
 }

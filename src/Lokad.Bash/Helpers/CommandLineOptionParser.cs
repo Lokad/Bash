@@ -42,34 +42,27 @@ public sealed class CommandLineOptionParser
         {
             var argument = _arguments[_argumentIndex++];
             var bytes = argument.Bytes;
-            if (_parsingOptions && bytes.Span.SequenceEqual("--"u8))
+            var span = _parsingOptions ? bytes.Span : default;
+            if (span.Length > 1 && span[0] == (byte)'-')
             {
-                _parsingOptions = false;
-                continue;
-            }
-
-            if (_parsingOptions && bytes.Length > 1 && bytes.Span[0] == (byte)'-')
-            {
-                var doubleDash = bytes.Span[1] == (byte)'-';
-                var longOption = doubleDash || (_allowSingleDashLongOptions && bytes.Length > 2);
-                if (!longOption && bytes.Length > 2)
+                var doubleDash = span[1] == (byte)'-';
+                if (doubleDash && span.Length == 2)
                 {
-                    var name = bytes.Span[1..];
-                    var equalsIndex = name.IndexOf((byte)'=');
-                    if (equalsIndex >= 0)
-                        name = name[..equalsIndex];
-                    foreach (var knownName in singleDashLongOptions)
-                    {
-                        if (!name.SequenceEqual(knownName.Span))
-                            continue;
-                        longOption = true;
-                        break;
-                    }
+                    _parsingOptions = false;
+                    continue;
                 }
-                if (longOption)
+
+                var optionStart = doubleDash ? 2 : 1;
+                var longOption = doubleDash || (_allowSingleDashLongOptions && span.Length > 2);
+                if (longOption || span.Length > 2 && !singleDashLongOptions.IsEmpty)
                 {
-                    item = ParseLongOption(bytes[(doubleDash ? 2 : 1)..]);
-                    return true;
+                    var option = span[optionStart..];
+                    var equalsIndex = option.IndexOf((byte)'=');
+                    if (longOption || IsKnownName(equalsIndex < 0 ? option : option[..equalsIndex], singleDashLongOptions))
+                    {
+                        item = ParseLongOption(bytes[optionStart..], equalsIndex);
+                        return true;
+                    }
                 }
 
                 _shortGroup = bytes[1..];
@@ -83,9 +76,18 @@ public sealed class CommandLineOptionParser
         item = default;
         return false;
 
-        static CommandLineOptionItem ParseLongOption(ReadOnlyMemory<byte> option)
+        static bool IsKnownName(ReadOnlySpan<byte> name, ReadOnlySpan<ReadOnlyMemory<byte>> names)
         {
-            var equalsIndex = option.Span.IndexOf((byte)'=');
+            foreach (var knownName in names)
+            {
+                if (name.SequenceEqual(knownName.Span))
+                    return true;
+            }
+            return false;
+        }
+
+        static CommandLineOptionItem ParseLongOption(ReadOnlyMemory<byte> option, int equalsIndex)
+        {
             return equalsIndex < 0
                 ? CommandLineOptionItem.LongOption(ShellValue.FromBytes(option), ShellValue.Empty, false)
                 : CommandLineOptionItem.LongOption(
