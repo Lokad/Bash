@@ -316,14 +316,14 @@ internal sealed class ConditionalParser : IDisposable
         var finalBackslash = _wordEndsWithUnframedBackslash && token.Offset + token.Source.Length == _source.Length
             ? _context.GetFinalBackslash(_source) : FinalBackslash.Invalid;
         if (Tokenizer.TryReadExpansionWord(token.Source, syntax, quote, _context,
-                recordSpelling ? new OperandSpelling(this, token.Offset) : default,
+                recordSpelling ? new OperandSpelling(this, token.Offset, token.Source.Length) : default,
                 finalBackslash, out var word, out var error))
             return word;
         Fail(error.Message, token.Offset + error.Offset);
         return null;
     }
 
-    internal readonly struct OperandSpelling(ConditionalParser? parser, int offset)
+    internal readonly struct OperandSpelling(ConditionalParser? parser, int offset, int length)
     {
         internal bool IsActive => parser != null;
 
@@ -338,11 +338,14 @@ internal sealed class ConditionalParser : IDisposable
             Record(new SpellingEdit(offset + start, offset + end, default, null, SpellingEditKind.Omit));
 
         internal void RecordParameter(int start, int end, SourceSpelling payload) =>
-            Record(new SpellingEdit(offset + start, offset + end, payload, null, SpellingEditKind.Parameter));
+            Record(new SpellingEdit(offset + start, offset + (payload.EndsAtDecodedNul ? length : end),
+                payload, null, SpellingEditKind.Parameter));
 
         private void Record(SpellingEdit edit)
         {
             if (parser == null)
+                return;
+            if (parser._spellingEdits is [.., { Spelling.EndsAtDecodedNul: true } terminal] && edit.Start < terminal.End)
                 return;
             parser.AddEdit(ref parser._spellingEdits, edit);
         }
@@ -835,7 +838,7 @@ internal sealed class ConditionalParser : IDisposable
                 if (!output.TryAppend("${"u8))
                     return false;
                 edit.Spelling.CopyCaptures(output.Length, ref captures, _context.SyntaxMemory);
-                return output.TryAppend(bytes) && output.TryAppend((byte)'}');
+                return output.TryAppend(bytes) && (edit.Spelling.EndsAtDecodedNul || output.TryAppend((byte)'}'));
             }
             if (edit.Kind == SpellingEditKind.Omit)
                 return true;

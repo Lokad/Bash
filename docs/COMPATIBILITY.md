@@ -1120,8 +1120,8 @@ word a decoded NUL in one of these operands ends the normalized word. If its
 prefix still needs a closing brace, the word fails before its expansions run,
 even when the operator would skip the operand. An already complete prefix
 expands normally. Only selected operands evaluate their expansions.
-Definition display uses the prepared spelling,
-including conditional captures nested in ordinary words and other parameters.
+Definition display uses the prepared spelling, including truncated operands
+in `[[` and conditional captures nested in ordinary words and other parameters.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split

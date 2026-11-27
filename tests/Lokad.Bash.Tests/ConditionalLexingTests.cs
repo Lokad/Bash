@@ -49,6 +49,27 @@ public sealed partial class ConditionalLexingTests
         }
     }
 
+    [Theory]
+    [InlineData("\"${v:-$'a\\0hidden'}\"\"$(printf dropped)\"$'tail' == a || x == x", "", "\"${v:-a == a || x == x", "")]
+    [InlineData("\"${v:-$'a\\0hidden'}\" == \"${v:-$'a}\\0hidden'}\"", "", "\"${v:-a == \"${v:-a}", "")]
+    [InlineData("x == x || \"${v:-$'a\\0hidden'}\" == a", "; f; printf '[%s]' \"$?\"", "x == x || \"${v:-a == a", "[0]")]
+    public async Task ConditionalDisplayEndsTheOperandAtDecodedNul(string condition, string invocation, string spelling, string output)
+    {
+        var script = "unset v\nf(){ [[ " + condition + " ]]; }; declare -f f" + invocation;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var exitCode = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal("f () \n{ \n    [[ " + spelling + " ]]\n}\n" + output, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Fact]
     public async Task ExportedConditionalKeepsItsCanonicalSpellingAndProtectedData()
     {
