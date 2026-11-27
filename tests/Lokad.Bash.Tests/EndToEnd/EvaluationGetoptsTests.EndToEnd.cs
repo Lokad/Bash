@@ -357,6 +357,33 @@ public sealed class EvaluationGetoptsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(":", ":", "local OPTIND=1", "<0:x:1><0:a:1>")]
+    [InlineData("getopts :abcdefghx opt", ":", "local OPTIND", "<0:x:2><0:b:2>")]
+    [InlineData("OPTIND=3", "OPTIND=1", "local -I OPTIND", "<0:x:1><0:f:3>")]
+    public async Task GetoptsRestoresTheEntryCursorAfterALateOrdinaryLocal(
+        string callerSetup, string functionSetup, string declaration, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                {{functionSetup}}
+                getopts :abcdefghx opt
+                {{declaration}}
+                getopts :abcdefghx opt
+            }
+            set -- -ab -cde -fgh -b
+            {{callerSetup}}
+            f -xa -bc -def -g
+            printf '<%s:%s:%s>' "$?" "$opt" "$OPTIND"
+            getopts :abcdefghx opt
+            printf '<%s:%s:%s>' "$?" "$opt" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData(@"$'\v2'", "<0:b:3>")]
     [InlineData(@"$'\f2'", "<0:b:3>")]
     [InlineData("2suffix", "<0:b:3>")]

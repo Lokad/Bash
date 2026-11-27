@@ -405,10 +405,10 @@ public sealed partial class Variables
         internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes + PrefixSetBytes(_prefixes));
         internal CommandBindings Fork(Variables owner) => new(owner, this);
 
-        internal void CaptureFunctionEntryGetoptsCursor()
+        internal void CaptureFunctionEntryGetoptsCursor(GetoptsCursor cursor)
         {
             if (_prefixes.Contains("OPTIND"))
-                _functionEntryGetoptsCursor = _owner.GetoptsPosition;
+                _functionEntryGetoptsCursor = cursor;
         }
 
         private static long PrefixSetBytes(HashSet<BindingName> names) => names.Count == 0 ? 0
@@ -612,18 +612,35 @@ public sealed partial class Variables
     /// <summary>
     /// Tracks local declaration identity and the function or temporary command scope that owns it.
     /// </summary>
-    internal sealed class LocalBindings(Variables owner, LocalBindings? parent, CommandBindings? prefixes)
+    internal sealed class LocalBindings
     {
-        private readonly Variables _owner = owner;
-        private readonly LocalBindings? _parent = parent;
+        private readonly Variables _owner;
+        private readonly LocalBindings? _parent;
         // Borrow live prefix ownership so an exposed caller no longer supplies prefix exports.
-        private readonly CommandBindings? _prefixes = prefixes;
+        private readonly CommandBindings? _prefixes;
+        private readonly GetoptsCursor _entryGetoptsCursor;
         private readonly HashSet<BindingName> _names = new();
         private readonly Variables _saved = new();
         private readonly HashSet<BindingName> _unsetNames = new();
         private readonly HashSet<BindingName> _declaredPrefixes = new();
         private readonly HashSet<BindingName> _promotedPrefixes = new();
         private long _trackedSavedBytes;
+
+        public LocalBindings(Variables owner, LocalBindings? parent, CommandBindings? prefixes)
+            : this(owner, parent, prefixes, parent == null ? owner.GetoptsPosition : default)
+        {
+            if (parent == null)
+                prefixes?.CaptureFunctionEntryGetoptsCursor(_entryGetoptsCursor);
+        }
+
+        private LocalBindings(Variables owner, LocalBindings? parent, CommandBindings? prefixes,
+            GetoptsCursor entryGetoptsCursor)
+        {
+            _owner = owner;
+            _parent = parent;
+            _prefixes = prefixes;
+            _entryGetoptsCursor = entryGetoptsCursor;
+        }
 
         internal EvaluationMemory.SavedLocalMemory? SavedMemoryTracker { get; private set; }
 
@@ -1007,7 +1024,7 @@ public sealed partial class Variables
         /// <summary>Copies local state, reconnecting borrowed script scopes to their cloned owner and prefixes.</summary>
         public LocalBindings Fork(Variables variables, LocalBindings? enclosing, CommandBindings? prefixes)
         {
-            var child = new LocalBindings(variables, _parent == null ? null : enclosing, prefixes);
+            var child = new LocalBindings(variables, _parent == null ? null : enclosing, prefixes, _entryGetoptsCursor);
             child._names.EnsureCapacity(_names.Count);
             child._unsetNames.EnsureCapacity(_unsetNames.Count);
             child._declaredPrefixes.EnsureCapacity(_declaredPrefixes.Count);
@@ -1024,7 +1041,6 @@ public sealed partial class Variables
         /// <summary>Called only when the owning function returns, never on a discarded child fork.</summary>
         public void Restore()
         {
-            var savedCursor = _saved._getoptsCursor;
             foreach (var name in _names)
             {
                 if (!_promotedPrefixes.Contains(name) || !_owner.HasBinding(name))
@@ -1035,7 +1051,7 @@ public sealed partial class Variables
                     if (isOptindReference)
                         _owner.ResetGetoptsPosition(name);
                     else if (isOptind)
-                        _owner._getoptsCursor = savedCursor;
+                        _owner._getoptsCursor = _entryGetoptsCursor;
                 }
                 else
                     _saved.ClearBinding(name);

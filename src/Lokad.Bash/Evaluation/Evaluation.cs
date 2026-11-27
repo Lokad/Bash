@@ -163,6 +163,7 @@ public sealed partial class Evaluation : IFileTester
         var one = ShellValue.FromText("1");
         _vars.TrySetScalar("OPTIND", one);
         _vars.SetIntegerBinding("OPTIND", true);
+        _vars.GetoptsPosition = GetoptsCursor.AtArgument(1);
         _vars.TrySetScalar("OPTERR", one);
         _vars.InitializeLineNumber();
     }
