@@ -825,9 +825,6 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Reads compound items, retaining whitespace inside an unquoted bracket prefix.</summary>
-    internal CompoundArrayItem ReadCompoundArrayItem(WordToken token) =>
-        TryReadCompoundArrayItem(token, declaration: false, out var item, out var error) ? item : throw error.ToException();
-
     internal bool TryReadCompoundArrayItem(WordToken token, bool declaration,
         [NotNullWhen(true)] out CompoundArrayItem? item, [NotNullWhen(false)] out SyntaxError? error)
     {

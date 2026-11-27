@@ -170,7 +170,8 @@ public sealed partial class ComplexityRegressionTests
             // Warm code, not bracket matches: each measurement must scan fresh input.
             var tokenizer = new Tokenizer(shellSource);
             Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
-            return tokenizer.ReadCompoundArrayItem(token);
+            Assert.True(tokenizer.TryReadCompoundArrayItem(token, declaration: false, out var item, out var error), error?.Message);
+            return item;
         }
     }
 }

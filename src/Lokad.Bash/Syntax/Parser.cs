@@ -661,9 +661,6 @@ public static class Parser
     /// Bodies are attached by Parse after the full grammar consumes them; the
     /// command-chain display consumer uses only words and source boundaries.
     /// </summary>
-    internal static ICommand? ParsePipeline(Tokenizer tokenizer) =>
-        TryParsePipeline(tokenizer, out var command, out var error) ? command : throw error.ToException();
-
     internal static bool TryParsePipeline(Tokenizer tokenizer, out ICommand? command,
         [NotNullWhen(false)] out SyntaxError? error)
     {

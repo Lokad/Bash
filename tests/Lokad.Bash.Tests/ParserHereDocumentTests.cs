@@ -129,7 +129,8 @@ public sealed class ParserHereDocumentTests
     public void CompletingTimedBodiesRetainsTheWrapperAndProvisionalDelimiter(string source, bool portable)
     {
         var tokenizer = new Tokenizer(ShellSource.FromText(source));
-        var provisional = Assert.IsType<TimedCommand>(Parser.ParsePipeline(tokenizer));
+        Assert.True(Parser.TryParsePipeline(tokenizer, out var parsed, out var error), error?.Message);
+        var provisional = Assert.IsType<TimedCommand>(parsed);
         var originalCommand = Assert.IsType<SimpleCommand>(provisional.Inner);
         var original = Assert.Single(originalCommand.Redirections);
         var reader = tokenizer.HereDocuments;
@@ -153,7 +154,8 @@ public sealed class ParserHereDocumentTests
         {
             TrackCommandLocations = true
         };
-        var provisional = Assert.IsType<PipelineCommand>(Parser.ParsePipeline(tokenizer));
+        Assert.True(Parser.TryParsePipeline(tokenizer, out var parsed, out var error), error?.Message);
+        var provisional = Assert.IsType<PipelineCommand>(parsed);
         var left = Assert.IsType<SimpleCommand>(provisional.Left);
         var original = Assert.Single(left.Redirections);
         Assert.Equal("END", Assert.Single(original.Target.Parts).GetUtf8Text());
@@ -183,7 +185,8 @@ public sealed class ParserHereDocumentTests
         var tokenizer = new Tokenizer(ShellSource.FromText("if false; then :;\n"
             + "elif cat <<CHECK; then cat <<BODY\ncheck\nCHECK\nbody\nBODY\n"
             + "elif true; then :; fi\n"));
-        var provisional = Assert.IsType<IfCommand>(Parser.ParsePipeline(tokenizer));
+        Assert.True(Parser.TryParsePipeline(tokenizer, out var parsed, out var error), error?.Message);
+        var provisional = Assert.IsType<IfCommand>(parsed);
         var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
         var completed = Assert.IsType<IfCommand>(reader.Complete(provisional, tokenizer.Locations, budget: null));
 
@@ -208,7 +211,8 @@ public sealed class ParserHereDocumentTests
     {
         var tokenizer = new Tokenizer(ShellSource.FromText("until cat <<CHECK\ncondition\nCHECK\n"
             + "do cat <<BODY\nbody\nBODY\ndone\n")) { TrackCommandLocations = true };
-        var original = Assert.IsType<UntilCommand>(Parser.ParsePipeline(tokenizer));
+        Assert.True(Parser.TryParsePipeline(tokenizer, out var parsed, out var error), error?.Message);
+        var original = Assert.IsType<UntilCommand>(parsed);
         var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
         var locations = Assert.IsType<CommandLocations>(tokenizer.Locations);
         Assert.True(locations.TryGet(original.Condition, out var conditionLocation));
@@ -258,7 +262,8 @@ public sealed class ParserHereDocumentTests
     public void RefusedCompletionKeepsProvisionalLocationsAndRefundsScratch()
     {
         var tokenizer = new Tokenizer(ShellSource.FromText(TwoDocuments)) { TrackCommandLocations = true };
-        var provisional = Assert.IsType<GroupCommand>(Parser.ParsePipeline(tokenizer));
+        Assert.True(Parser.TryParsePipeline(tokenizer, out var parsed, out var error), error?.Message);
+        var provisional = Assert.IsType<GroupCommand>(parsed);
         var body = Assert.IsType<ListCommand>(provisional.Body);
         var reader = Assert.IsType<HereDocumentReader>(tokenizer.HereDocuments);
         var locations = Assert.IsType<CommandLocations>(tokenizer.Locations);
