@@ -98,7 +98,7 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     public async Task ConvertedLocalNamerefArrayRetainsRawBytes()
     {
         var run = await EndToEndHarness.RunScriptAsync(
-            "f(){ local -n r; local -a r=(saved); r=$'\\xff'; r+=$'\\xfe'; declare +n r; printf %s \"${r[*]}\"; }; f",
+            "f(){ local -n r; local -a r=(saved); declare +n r; r=$'\\xff'; r+=$'\\xfe'; printf %s \"${r[*]}\"; }; f",
             EndToEndHarness.BuildTree([]), ReadOnlyMemory<byte>.Empty);
 
         Assert.Equal(new byte[] { 0xff, 0xfe }, run.Host.StandardOutput.Content.ToArray());
@@ -240,7 +240,6 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
-    // Intentional divergence from Bash 5.2: conversion clears the invalid nameref/array hybrid.
     [Theory]
     [InlineData("local -a r", "r[2]=value", "value")]
     [InlineData("local -A r", "r[key]=value", "value")]
@@ -253,7 +252,7 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
         string declaration, string assignment, string expected)
     {
         var result = await EvaluationTestHelper.RunAsync(
-            "r=outer; f(){ local -n r; " + declaration + "; " + assignment
+            "r=outer; f(){ local -n r; " + declaration + "; local +n r; " + assignment
             + "; printf '<%s>/' \"${r[*]}\"; }; f; printf '<%s>' \"$r\"");
 
         Assert.Equal("<" + expected + ">/<outer>", result.StdOut);
@@ -262,12 +261,12 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("local -ar r=(one two)", "r=new")]
-    [InlineData("local -Ar r=([key]=one)", "r[key]=new")]
+    [InlineData("local -a r=(one two)", "r=new")]
+    [InlineData("local -A r=([key]=one)", "r[key]=new")]
     public async Task ConvertedLocalNamerefArrayEnforcesReadonly(string declaration, string assignment)
     {
         var result = await EvaluationTestHelper.RunAsync(
-            "f(){ local -n r; " + declaration + "; " + assignment + "; printf should-not-run; }; f");
+            "f(){ local -n r; " + declaration + "; local +n r; local -r r; " + assignment + "; printf should-not-run; }; f");
 
         Assert.Empty(result.StdOut);
         Assert.Equal("line 1: r: readonly variable\n", result.StdErr);

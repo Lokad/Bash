@@ -180,16 +180,18 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("-n", 0, "-a slot=()", "")]
-    [InlineData("-nr", 1, "-anr slot=()", "line 4: local: slot: readonly variable\n")]
-    public async Task ClearingLocalNamerefInCompoundDeclarationPreservesTheReferentWrite(
-        string aliasFlags, int status, string listing, string diagnostic)
+    [InlineData("-n", "+n", 0, "-a slot=()", "")]
+    [InlineData("-nr", "+n", 1, "-anr slot=()", "line 4: local: slot: readonly variable\n")]
+    [InlineData("-n", "-n", 1, "-an slot=()", "line 4: local: slot: reference variable cannot be an array\n")]
+    [InlineData("-nr", "-n", 1, "-anr slot=()", "line 4: local: slot: reference variable cannot be an array\n")]
+    public async Task ChangingLocalNamerefInCompoundDeclarationPreservesTheReferentWrite(
+        string aliasFlags, string change, int status, string listing, string diagnostic)
     {
         var result = await EvaluationTestHelper.RunAsync($$"""
             slot=outside; dest=target
             f() {
                 local {{aliasFlags}} slot=dest
-                local +n -a slot=(fresh tail)
+                local {{change}} -a slot=(fresh tail)
                 printf '<%s>\n' "$?"
                 declare -p slot dest
             }
@@ -241,6 +243,102 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
             """);
 
         Assert.Equal("before\noutside:1\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -n slot", "local -a slot=(first)", "a", "[0]=\"first\"", "")]
+    [InlineData("local -n slot", "local -A slot=([0]=first)", "A", "[0]=\"first\" ", "")]
+    [InlineData("local -nr dest; local -n slot=dest", "local -a slot=(first)", "a", "[0]=\"first\"", "declare -nr dest\n")]
+    public async Task CompoundArrayNamerefKeepsCellsAcrossAttributeRemoval(
+        string setup, string declaration, string kind, string cells, string targetListing)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot=outside; i=0
+            f() {
+                {{setup}}
+                {{declaration}}
+                declare -p slot
+                declare -p dest 2>/dev/null || :
+                [[ -R slot ]]; r=$?
+                [[ -v slot ]]
+                printf '<%s:%s:%s:%s>\n' "$r" "$?" "${slot[i++]-hidden}" "${#slot[@]}"
+                local +n slot
+                printf '<%s:%s>\n' "${slot[0]}" "$i"
+                declare -p slot
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal($"declare -{kind}n slot=({cells})\n{targetListing}<0:1:hidden:0>\n<first:1>\n"
+            + $"declare -{kind} slot=({cells})\ndeclare -- slot=\"outside\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("-a slot=([i++]=value$((j++)))", "anr slot=([0]=\"value0\")")]
+    [InlineData("-A slot=([key$((i++))]=value$((j++)))", "Anr slot=([key0]=\"value0\" )")]
+    public async Task ReadonlyCompoundNamerefPublishesBeforeTheNestedReaderReturns(
+        string declaration, string listing)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot=outside; i=0; j=0
+            f() {
+                local -nr slot
+                eval 'local +n {{declaration}}'
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal($"<1:1:1>\ndeclare -{listing}\ndeclare -- slot=\"outside\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task IndexedArrayNamerefUsesTheProjectedMaximumIndex()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot
+                local -a slot=([257]=cell)
+                printf '<%s>\n' "${!slot}"
+                printf '%s' "${slot}"
+                printf 'unreached\n'
+            }
+            f
+            printf '<status:%s>\n' "$?"
+            """);
+
+        Assert.Equal<byte>([.. "<"u8, 0x01, .. ">\n<status:1>\n"u8], result.Host.StandardOutput.Content.ToArray());
+        Assert.Equal<byte>([
+            .. "line 5: "u8, 0x01, 0x01, .. ": invalid variable name for name reference\n"u8
+        ], result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task EmptyArrayNamerefSpellingLeavesStoredCellsIntact()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot
+                local -a slot=(cell)
+                printf '<%s>\n' "${slot[0]:=fallback}"
+                printf -v 'slot[0]' '%s' fresh
+                printf '<status:%s>\n' "$?"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal("<fallback>\n<status:0>\ndeclare -an slot=([0]=\"cell\")\n", result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }

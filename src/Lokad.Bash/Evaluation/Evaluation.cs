@@ -3053,6 +3053,13 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (!element && options.NamerefChange == DeclarationAttributeChange.Clear && targetVars.IsArrayNameref(name))
                 {
+                    var kind = arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
+                    if (arrayKind != ArrayAssignmentKind.Auto && !targetVars.IsReadonlyBinding(name)
+                        && HasConflictingArrayKind(targetVars, name, kind))
+                    {
+                        await DiagnoseAsync(name, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                        continue;
+                    }
                     if (!targetVars.TryRemoveNamerefAttribute(name))
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
@@ -3107,6 +3114,13 @@ public sealed partial class Evaluation : IFileTester
                     var kind = arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
                     if (local)
                     {
+                        if (operand.CompoundApplied && functionContext is { } compoundFunction)
+                        {
+                            compoundFunction.Locals.PrepareRejectedNamerefArray(targetVars, name, kind,
+                                initialized: !arrayReference.IsEmpty, attributes: default, Memory);
+                            await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
+                            continue;
+                        }
                         if (!targetVars.TryDeclareResolvedArray(name, kind, ScalarArrayPromotion.DiscardValue))
                         {
                             await DiagnoseAsync(name, "invalid local declaration").ConfigureAwait(false);

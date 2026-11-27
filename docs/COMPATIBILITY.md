@@ -1355,9 +1355,18 @@ dispatch creates the empty array on the alias. A simple indexed initializer
 can report an invalid identifier with successful status and
 leave the prepared array empty. An authored element initializer can
 evaluate its selector once before reporting failure and retaining the
-prepared array's nameref attribute. Preparing a compound initializer
-through an unset readonly local nameref stops the function with failure
-and emits no diagnostic.
+prepared array's nameref attribute. A compound declaration through a
+function-local chain ending at an unset nameref prepares the array under
+the authored local name. The nameref attribute can remain on that array.
+Listings display its cells, while element and aggregate reads treat them
+as absent until the attribute is cleared. When the authored local is
+readonly, compound preparation still publishes its cells and evaluates
+the reached selectors. The current reader then returns failure without
+a diagnostic. A direct declaration stops the function body. An `eval`
+or sourced reader returns to the caller with the prepared array visible.
+An indexed array with the nameref attribute uses the maximum index's byte
+projection as its reference spelling. An assignment through an empty
+projected spelling leaves the stored cells intact.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

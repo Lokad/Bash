@@ -587,10 +587,17 @@ internal static partial class WordExpansion
                 var referent = ShellValue.Empty;
                 if (found && terminal.IsArrayNameref)
                 {
-                    if (terminal.Owner.IndexedArrays.ContainsKey(terminal.Name))
-                        referent = IndexedArrayNamerefSpelling;
+                    if (terminal.Owner.IndexedArrays.TryGetValue(terminal.Name, out var array))
+                    {
+                        referent = GetIndexedArrayNamerefSpelling(array.MaxIndex);
+                        found = !referent.IsEmpty;
+                        if (parsed.Kind == BracedParameterOperatorKind.None)
+                            referent = UnquoteIndexedNamerefSpelling(referent);
+                    }
                 }
-                else if (!found || !terminal.Owner.TryGetNameref(terminal.Name, out referent) || referent.IsEmpty)
+                else
+                    found = found && terminal.Owner.TryGetNameref(terminal.Name, out referent) && !referent.IsEmpty;
+                if (!found)
                 {
                     await ReportParameterTargetFailureAsync([name.ToValue()], "invalid indirect expansion").ConfigureAwait(false);
                     return new ParameterValue(VariableReferenceKind.Name, [], false, null, null);
@@ -678,6 +685,30 @@ internal static partial class WordExpansion
                 else
                     joined.AppendJoinedFields(fields, allowWordSplitting: false, globQuoted: true);
                 return ExpandedWord.JoinValuesWithSpaces(joined.Build(), budget);
+            }
+
+            static ShellValue UnquoteIndexedNamerefSpelling(ShellValue spelling)
+            {
+                var bytes = spelling.Bytes.Span;
+                if (bytes.Length < 2 || !bytes.Contains(CaseQuoting.CaseQuoteEscape))
+                    return spelling;
+
+                // A bare indirect expansion consumes quote bytes from the projected index spelling.
+                Span<byte> decoded = stackalloc byte[sizeof(long)];
+                var written = 0;
+                for (var index = 0; index < bytes.Length; index++)
+                {
+                    if (bytes[index] == CaseQuoting.CaseQuoteEscape)
+                        index++;
+                    if (index < bytes.Length)
+                        decoded[written++] = bytes[index];
+                }
+                return written switch
+                {
+                    0 => ShellValue.Empty,
+                    1 => ShellValue.FromByte(decoded[0]),
+                    _ => ShellValue.FromBytes(decoded[..written].ToArray()),
+                };
             }
 
             async Task<ParameterValue> SelectOperatorValueAsync(ParameterReadSyntax selected, ParameterValue initial, ShellValue initialScalar)

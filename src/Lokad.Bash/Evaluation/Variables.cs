@@ -1092,7 +1092,7 @@ public sealed partial class Variables
     internal bool TryGetExpansionValue(BindingName name, out ShellValue value)
     {
         if (TryResolveWholeName(name, out var resolved) && !resolved.IsEmpty
-            && TryGetBinding(resolved, detachBorrowed: false, out var slot))
+            && TryGetBinding(resolved, detachBorrowed: false, out var slot) && !slot.IsArrayNameref)
         {
             switch (slot)
             {

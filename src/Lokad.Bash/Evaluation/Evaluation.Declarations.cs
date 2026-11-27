@@ -121,7 +121,10 @@ public sealed partial class Evaluation
                     var explicitNonlocalArray = !local && compoundArrayKind != ArrayAssignmentKind.Auto;
                     var conflictingKind = !local && (!compoundGlobal || explicitNonlocalArray)
                         && HasConflictingArrayKind(declarationBinding.Owner, declarationBinding.Name, kind);
-                    var rejectsTarget = memberAssignment || !writesLiteralGlobal && (!local || targetLocal) && targetVariables.IsReadonly(name);
+                    var initializesLocalNameref = targetLocal && !memberAssignment && targetReference.Kind == VariableReferenceKind.Name
+                        && targetVariables.IsUnsetNameref(targetReference.Name);
+                    var rejectsTarget = memberAssignment || !writesLiteralGlobal && (!local || targetLocal)
+                        && (initializesLocalNameref ? targetVariables.IsReadonlyBinding(name) : targetVariables.IsReadonly(name));
                     if (conflictingKind && (explicitNonlocalArray || !rejectsTarget))
                     {
                         var namesElement = compoundGlobal ? declarationBinding.Reference.Kind != VariableReferenceKind.Name : referencedElement;
@@ -142,14 +145,9 @@ public sealed partial class Evaluation
                         break;
                     }
                     var rejectsElementReference = !local && referencedElement && !globalInFunction;
-                    if (rejectsTarget || rejectsElementReference)
+                    var initializesReadonlyNameref = initializesLocalNameref && rejectsTarget;
+                    if ((rejectsTarget || rejectsElementReference) && !initializesReadonlyNameref)
                     {
-                        if (local && !memberAssignment && targetVariables.IsUnsetNameref(name))
-                        {
-                            // An unset readonly local reference stops compound preparation without a diagnostic.
-                            SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
-                            break;
-                        }
                         var owner = declarationBinding.Owner;
                         var arrayName = declarationBinding.Name;
                         // Source attributes belong to the declaration phase, before the initializer attempts to write.
@@ -182,12 +180,12 @@ public sealed partial class Evaluation
                         }
                         break;
                     }
-                    var unsetReference = targetVariables.IsUnsetNameref(name);
-                    if (local && scope.Context.FunctionContext is { } function)
+                    if (initializesReadonlyNameref)
+                        targetVariables.DetachNamerefToUnassigned(name);
+                    else if (local && scope.Context.FunctionContext is { } function)
                     {
-                        // Redeclaring a local nameref localizes its referent, even when the reference already exists.
-                        // An unset reference instead becomes the array, including implicit compound declarations.
-                        var declarationKind = existingLocal && unsetReference
+                        // A chain ending at an unset reference declares the array under the authored local name.
+                        var declarationKind = initializesLocalNameref
                             ? kind == ArrayKind.Associative ? ArrayAssignmentKind.Associative : ArrayAssignmentKind.Indexed
                             : compoundArrayKind;
                         var localReference = literalLocal ? VariableReference.ForName(name) : declaredReference;
@@ -213,7 +211,7 @@ public sealed partial class Evaluation
                             break;
                         }
                     }
-                    else if (unsetReference)
+                    else if (targetVariables.IsUnsetNameref(name))
                     {
                         if (compoundArrayKind == ArrayAssignmentKind.Auto)
                             await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
@@ -242,9 +240,16 @@ public sealed partial class Evaluation
                     }
                     else
                         ApplyCompoundAttributes(targetVariables, name, setCompoundTransforms);
-                    if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
+                    var appliedItems = await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, scope, targetVariables, declaredName,
-                            initializeReadonly: false)).ConfigureAwait(false))
+                            initializeReadonly: initializesReadonlyNameref)).ConfigureAwait(false);
+                    if (initializesLocalNameref && targetVariables.GetArrayMetadata(name) != null)
+                    {
+                        // The array keeps its cells and carries the nameref attribute on the same slot.
+                        targetVariables.UpdateBindingAttributes(name, BindingAttributes.ArrayNameref, BindingAttributes.None);
+                        scope.Context.FunctionContext?.Locals.Publish(name, targetVariables);
+                    }
+                    if (!appliedItems || initializesReadonlyNameref)
                     {
                         if (!HasPendingExpansionError)
                             SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
@@ -283,7 +288,8 @@ public sealed partial class Evaluation
                             : scope.Variables.TryResolveBinding(declaredName, selectOwner: null, out binding);
                         if (found && !local && compoundArrayKind != ArrayAssignmentKind.Auto)
                             binding = (declaredOwner ?? scope.Variables).SelectArrayDeclarationBinding(declaredName, binding);
-                        targetName = !found || local && !existingLocal ? declaredName : binding.Name;
+                        targetName = !found || local && (!existingLocal || bracket < 0 && binding.IsUnsetNameref)
+                            ? declaredName : binding.Name;
                         if (found && local && existingLocal && bracket < 0 && binding.Reference.Kind != VariableReferenceKind.Name)
                         {
                             // Use the complete target spelling for the local declaration and its initializer.
@@ -512,10 +518,10 @@ public sealed partial class Evaluation
             };
             owner.SetCaseAttributes(name, change);
         }
-
-        static bool HasConflictingArrayKind(Variables variables, BindingName name, ArrayKind kind) =>
-            kind == ArrayKind.Associative ? variables.IndexedArrays.ContainsKey(name) : variables.AssociativeArrays.ContainsKey(name);
     }
+
+    private static bool HasConflictingArrayKind(Variables variables, BindingName name, ArrayKind kind) =>
+        kind == ArrayKind.Associative ? variables.IndexedArrays.ContainsKey(name) : variables.AssociativeArrays.ContainsKey(name);
 
     private async ValueTask<bool> PrepareImplicitElementArrayAsync(
         VariableBinding binding, ScopedEvaluation scope, Variables destination, bool assignUnassigned)

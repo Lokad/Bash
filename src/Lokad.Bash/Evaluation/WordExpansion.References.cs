@@ -21,6 +21,7 @@ internal static partial class WordExpansion
         // The selected store can differ from the active scope through a fallback or a prepared prefix.
         internal Variables? ReadOwner { get; init; }
         internal bool IsWholeBindingRead { get; init; }
+        internal bool IsIgnoredArrayNamerefWrite { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName)
         {
@@ -146,7 +147,8 @@ internal static partial class WordExpansion
         internal bool TryPublishValue(
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, DeclarationWrite declarationWrite)
         {
-            if (IsWholeBindingRead && this is Indexed or Associative && scope.Variables.IsArrayNameref(Name))
+            if ((IsWholeBindingRead || IsIgnoredArrayNamerefWrite) && this is Indexed or Associative
+                && scope.Variables.IsArrayNameref(Name))
                 return !scope.Variables.IsReadonly(Name);
             if (SelectBuiltinElementOutput(scope, sourceName, declarationWrite) is { } output)
             {
@@ -648,7 +650,10 @@ internal static partial class WordExpansion
             if (parameterRead && binding.IsArrayNameref && (use != ReferenceUse.ShortRead
                 || binding.Owner.GetArrayMetadata(binding.Name) is { IsInitialized: true }))
             {
-                await scope.Effects.ReportParameterExpansionFailureAsync([GetArrayNamerefDiagnosticSubject(binding)],
+                var spelling = GetArrayNamerefDiagnosticSubject(binding);
+                if (spelling.IsEmpty)
+                    return new ResolvedVariableReference.Scalar(BindingName.Empty);
+                await scope.Effects.ReportParameterExpansionFailureAsync([spelling],
                     [ShellValue.FromText("invalid variable name for name reference")], scope, ExpansionFailureKind.ParameterTarget)
                     .ConfigureAwait(false);
                 return null;
@@ -706,8 +711,10 @@ internal static partial class WordExpansion
             // Length lookup has no selector to expand when the array nameref has no referent.
             if (reachedArrayNameref && use == ReferenceUse.Length)
                 return null;
+            var readsElement = use is ReferenceUse.Read or ReferenceUse.BindingRead or ReferenceUse.DefaultRead
+                or ReferenceUse.Presence or ReferenceUse.ArithmeticRead;
             name = reached && initial.Reference.Kind == VariableReferenceKind.Name && !initial.IsUnsetNameref && !invalidNameref
-                && !(reachedArrayNameref && (writesElement || assignsDefault))
+                && !(reachedArrayNameref && (readsElement || writesElement || assignsDefault))
                 ? initial.Name : BindingName.Empty;
             selectAfterIndex = reached && name.IsEmpty
                 && (writesElement || assignsDefault && reachedArrayNameref
@@ -813,7 +820,7 @@ internal static partial class WordExpansion
                     }
                     var stillUnset = binding.IsUnsetNameref;
                     var arrayNameref = (writesElement || assignsDefault) && binding.IsArrayNameref;
-                    if (!stillUnset && !arrayNameref && binding.Reference.Kind == VariableReferenceKind.Name
+                    if (!stillUnset && !binding.IsArrayNameref && binding.Reference.Kind == VariableReferenceKind.Name
                         && !targetVariables.AssociativeArrays.ContainsKey(binding.Name))
                     {
                         return new ResolvedVariableReference.Indexed(binding.Name, position)
@@ -828,6 +835,9 @@ internal static partial class WordExpansion
                         {
                             var spelling = arrayNameref ? GetArrayNamerefDiagnosticSubject(binding)
                                 : stillUnset ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
+                            if (arrayNameref && spelling.IsEmpty)
+                                return new ResolvedVariableReference.Indexed(binding.Name, position)
+                                    { ReadOwner = binding.Owner, IsIgnoredArrayNamerefWrite = true };
                             if (builtinOutput)
                                 await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, spelling, scope).ConfigureAwait(false);
                             else if (assignsDefault)
@@ -916,20 +926,27 @@ internal static partial class WordExpansion
     }
 
     private static ShellValue GetArrayNamerefDiagnosticSubject(VariableBinding binding) =>
-        binding.Owner.IndexedArrays.ContainsKey(binding.Name) ? IndexedArrayNamerefSpelling : binding.Name.ToValue();
+        binding.Owner.IndexedArrays.TryGetValue(binding.Name, out var array)
+            ? GetIndexedArrayNamerefSpelling(array.MaxIndex) : binding.Name.ToValue();
+
+    private static ShellValue GetIndexedArrayNamerefSpelling(long? maximum) =>
+        maximum is { } index ? FieldSeparators.ProjectIndex(index, firstOnly: false) : IndexedArrayNamerefSpelling;
 
     /// <summary>Warns at a reached read, then selects Bash's global fallback for a local cycle.</summary>
     private static async ValueTask<VariableBinding?> ResolveReadBindingAsync(
         VariableReference reference, ReferenceUse use, ScopedEvaluation scope, Variables variables)
     {
-        if (variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
-            return binding;
-        await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
-        var found = scope.Context.TryResolveCircularBinding(reference.Name, variables, out binding);
-        if (reference.Kind != VariableReferenceKind.Name && use != ReferenceUse.Length
-            || reference.Kind == VariableReferenceKind.Name && use == ReferenceUse.Length && !found)
+        if (!variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding))
+        {
             await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
-        return found ? binding : null;
+            var found = scope.Context.TryResolveCircularBinding(reference.Name, variables, out binding);
+            if (reference.Kind != VariableReferenceKind.Name && use != ReferenceUse.Length
+                || reference.Kind == VariableReferenceKind.Name && use == ReferenceUse.Length && !found)
+                await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
+            if (!found)
+                return null;
+        }
+        return reference.IsAggregate && binding.IsArrayNameref ? null : binding;
     }
 
     private enum ReferenceUse
