@@ -285,6 +285,9 @@ when its scope ends. Each child context builds its own total from copied stores.
 Ordinary element writes admit added positions and retained payload growth before
 mutating an array. Indexed dictionary replacement admits overlapping backing
 before resizing. Refusal leaves the existing entry or scalar binding intact.
+A declaration can hide an array after making its selected cell unassigned.
+The array's storage estimate still includes its hidden positions, keys and
+retained values. Child copies admit their own backing through the same estimate.
 Record input admits storage before updating the selected array. Non-integer
 records own their normalized bytes independently, so replacing or removing an
 entry retires its value estimate. The raw batch and offsets stay charged through

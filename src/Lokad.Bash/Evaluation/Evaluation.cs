@@ -2897,6 +2897,34 @@ public sealed partial class Evaluation : IFileTester
                     ? ordinaryAssignmentBinding : null;
                 var clearsArrayAttribute = options.IndexedChange == DeclarationAttributeChange.Clear
                     || options.AssociativeChange == DeclarationAttributeChange.Clear;
+                if (ordinaryDeclaration && operand.Value == null && !operand.CompoundApplied && !element
+                    && arrayKind == ArrayAssignmentKind.Auto && !clearsArrayAttribute)
+                {
+                    var elementBinding = global ? new VariableBinding(reference, targetVars) : selectedWholeBinding;
+                    // Attribute publication through a valueless element reference leaves a temporary scalar prefix alone.
+                    if (elementBinding is { Reference.Kind: not VariableReferenceKind.Name } binding
+                        && (bindings?.Contains(binding.Name) != true || assignmentExport != DeclarationAttributeChange.Set && !options.Readonly))
+                    {
+                        if (options.ReadonlyChange == DeclarationAttributeChange.Clear && binding.Owner.IsReadonlyBinding(binding.Name))
+                        {
+                            await DiagnoseReadonlyAsync(binding.Name).ConfigureAwait(false);
+                            continue;
+                        }
+                        var (set, clear) = GetAttributeChanges(assignmentExport);
+                        var assignsCell = !global && (set | clear) == BindingAttributes.None
+                            && options.ReadonlyChange == DeclarationAttributeChange.Unchanged;
+                        var destination = assignsCell && bindings?.Contains(binding.Name) == true
+                            && bindings.SavedVariables.HasBindingOrAttributes(binding.Name) ? bindings.SavedVariables : binding.Owner;
+                        if (await PrepareImplicitElementArrayAsync(binding, GetDeclarationElementScope(), destination, assignsCell)
+                                .ConfigureAwait(false))
+                            await ApplyAttributesAsync(binding.Name, destination, global, local, assignmentExport).ConfigureAwait(false);
+                        else if (HasPendingExpansionError)
+                            break;
+                        else
+                            RecordOperandFailure();
+                        continue;
+                    }
+                }
                 if (ordinaryAssignment && !global && !operand.CompoundApplied
                     && reference is { Kind: VariableReferenceKind.Element, Subscript.IsEmpty: false }
                     && arrayKind == ArrayAssignmentKind.Auto && clearsArrayAttribute

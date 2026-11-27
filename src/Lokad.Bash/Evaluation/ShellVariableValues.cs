@@ -127,6 +127,9 @@ internal sealed class IndexedArray
             IsInitialized = true;
     }
 
+    /// <summary>Hides retained entries until the next assignment.</summary>
+    public void HideEntries() => IsInitialized = false;
+
     /// <summary>Gets the greatest stored position for arithmetic indexing, including hidden metadata.</summary>
     public long? MaxIndex => _maximumIndex;
 
@@ -397,7 +400,7 @@ internal sealed class AssociativeArray
     // Subtree sizes let slices seek by ordinal without walking the preceding keys.
     private Entry? _root;
     private long _valueBytes;
-    internal long EstimatedMemoryBytes => (long)Count * IndexedArray.ElementMemoryBytes + _valueBytes;
+    internal long EstimatedMemoryBytes => (long)(_root?.Count ?? 0) * IndexedArray.ElementMemoryBytes + _valueBytes;
 
     /// <summary>Creates an empty array, retaining whether it has received an assignment.</summary>
     public AssociativeArray(bool isInitialized)
@@ -411,12 +414,15 @@ internal sealed class AssociativeArray
     /// <summary>Records an assignment even when a compound append has no elements.</summary>
     public void MarkInitialized() => IsInitialized = true;
 
+    /// <summary>Hides retained entries until the next assignment.</summary>
+    public void HideEntries() => IsInitialized = false;
+
     /// <summary>Gets one validated key without allocating.</summary>
     public bool TryGet(
         AssociativeArrayKey key,
         out ShellValue value)
     {
-        for (var entry = _root; entry != null;)
+        for (var entry = IsInitialized ? _root : null; entry != null;)
         {
             var order = ShellValue.ByteOrder.Compare(key.Value, entry.Key);
             if (order == 0)
@@ -523,7 +529,7 @@ internal sealed class AssociativeArray
         Enumerate(0, int.MaxValue).Select(static entry => KeyValuePair.Create(entry.Key, entry.Value));
 
     /// <summary>Gets the number of present entries.</summary>
-    public int Count => _root?.Count ?? 0;
+    public int Count => IsInitialized ? _root?.Count ?? 0 : 0;
 
     /// <summary>Enumerates keys in the same deterministic order as their values.</summary>
     public IEnumerable<ShellValue> PresentKeys => Enumerate(0, int.MaxValue).Select(static entry => entry.Key);
@@ -542,7 +548,7 @@ internal sealed class AssociativeArray
 
     private IEnumerable<Entry> Enumerate(int first, int count)
     {
-        if (_root is not { } root || count <= 0 || first >= root.Count)
+        if (!IsInitialized || _root is not { } root || count <= 0 || first >= root.Count)
             yield break;
 
         first = Math.Max(0, first);

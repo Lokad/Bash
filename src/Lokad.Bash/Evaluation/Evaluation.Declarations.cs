@@ -133,14 +133,21 @@ public sealed partial class Evaluation
                         break;
                     }
                     // A compatible -g initializer through an element in a function has its own binding rules.
-                    var rejectsElementReference = explicitNonlocalArray && referencedElement && !globalInFunction;
+                    var rejectsElementReference = !local && referencedElement && !globalInFunction;
                     if (rejectsTarget || rejectsElementReference)
                     {
                         var owner = declarationBinding.Owner;
                         var arrayName = declarationBinding.Name;
                         // Source attributes belong to the declaration phase, before the initializer attempts to write.
-                        var declared = explicitNonlocalArray && (!referencedElement || !globalInFunction)
-                            && owner.TryDeclareResolvedArray(arrayName, kind, ScalarArrayPromotion.RetainValue);
+                        var declared = rejectsElementReference && !explicitNonlocalArray
+                            ? await PrepareImplicitElementArrayAsync(new VariableBinding(targetReference, owner), scope,
+                                owner, assignUnassigned: (builtin is BuiltinKind.Declare or BuiltinKind.Local)
+                                    && !compoundGlobal && !compoundInteger && compoundCase == BindingAttributes.None)
+                                .ConfigureAwait(false)
+                            : explicitNonlocalArray && (!referencedElement || !globalInFunction)
+                                && owner.TryDeclareResolvedArray(arrayName, kind, ScalarArrayPromotion.RetainValue);
+                        if (HasPendingExpansionError)
+                            break;
                         if (declared)
                             ApplyCompoundAttributes(owner, arrayName, setCompoundTransforms);
 
@@ -441,6 +448,26 @@ public sealed partial class Evaluation
 
         static bool HasConflictingArrayKind(Variables variables, BindingName name, ArrayKind kind) =>
             kind == ArrayKind.Associative ? variables.IndexedArrays.ContainsKey(name) : variables.AssociativeArrays.ContainsKey(name);
+    }
+
+    private async ValueTask<bool> PrepareImplicitElementArrayAsync(
+        VariableBinding binding, ScopedEvaluation scope, Variables destination, bool assignUnassigned)
+    {
+        if (!assignUnassigned)
+        {
+            var kind = binding.Owner.GetArrayMetadata(binding.Name)?.Kind ?? ArrayKind.Indexed;
+            return binding.Owner.TryDeclareResolvedArray(binding.Name, kind, ScalarArrayPromotion.RetainValue);
+        }
+
+        var target = await AwaitWordExpansionAsync(
+            WordExpansion.ResolveDeclarationReferenceAsync(binding.Reference, scope, binding.Owner, scope.Variables)).ConfigureAwait(false);
+        // A diagnosed invalid subscript can leave a valueless declaration successful.
+        if (HasPendingExpansionError)
+            return false;
+        // A visible scalar prefix can select an indexed cell in a saved associative binding.
+        if (target is WordExpansion.ResolvedVariableReference.Indexed indexed && !ReferenceEquals(binding.Owner, destination))
+            target = indexed with { ReplaceAssociative = true };
+        return target == null || target.TryDeclareUnassignedElement(destination, Memory);
     }
 
     private bool TryParseDeclarationReference(ShellSource source, out VariableReference reference)

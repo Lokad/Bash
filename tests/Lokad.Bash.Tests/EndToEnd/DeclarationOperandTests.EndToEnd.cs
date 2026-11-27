@@ -472,6 +472,46 @@ public sealed class DeclarationOperandTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("i=1; item=([0]=zero [1]=one [4]=four); declare -n link='item[i++]'\ndeclare link\nprintf '<%s:%s:%s>' \"$i\" \"${#item[@]}\" \"${item[4]-hidden}\"; item[9]=tail; declare -p item",
+        "<2:0:hidden>declare -a item=([0]=\"zero\" [1]= [4]=\"four\" [9]=\"tail\")\n", "")]
+    [InlineData("declare -A item=([9]=old [k]=one); declare -n link='item[${key:=k}]'\ndeclare link\nprintf '<%s:%s:%s>' \"$key\" \"${#item[@]}\" \"${item[9]-hidden}\"; item[9]=tail; declare -p item",
+        "<k:0:hidden>declare -A item=([9]=\"tail\" [k]= )\n", "")]
+    [InlineData("i=1; item=(zero one); declare -n link='item[i++]'\neval 'declare link=($(printf \"rhs%s\" \"$i\" >&2; printf fresh))'\nprintf '<%s:%s:%s>' \"$?\" \"$i\" \"${#item[@]}\"; item[9]=tail; declare -p item",
+        "<1:2:0>declare -a item=([0]=\"zero\" [1]= [9]=\"tail\")\n", "rhs1line 2: eval: `item[i++]': not a valid identifier\n")]
+    [InlineData("i=1; declare -ar item=(zero one); declare -n link='item[i++]'\ndeclare link\nprintf '<%s:%s:%s>' \"$i\" \"${#item[@]}\" \"${item[0]-hidden}\"; declare -p item",
+        "<2:0:hidden>declare -ar item\n", "")]
+    [InlineData("i=1; declare -n link='item[i++]'\ndeclare -i link\nprintf '<%s:%s>' \"$i\" \"${#item[@]}\"; item[0]=2+3; declare -p item",
+        "<1:0>declare -ai item=([0]=\"5\")\n", "")]
+    [InlineData("i=1; item=(zero one); declare -n link='item[i++]'\ni=5 declare link\nprintf '<%s:%s>' \"$i\" \"${#item[@]}\"; item[9]=tail; declare -p item",
+        "<6:0>declare -a item=([0]=\"zero\" [1]=\"one\" [5]= [9]=\"tail\")\n", "")]
+    [InlineData("item=(zero one); declare -n link='item[1]'\ndeclare link\n(item[9]=tail; declare -p item); declare -p item",
+        "declare -a item=([0]=\"zero\" [1]= [9]=\"tail\")\ndeclare -a item\n", "")]
+    [InlineData("readonly item=old; i=1; declare -n link='item[i++]'\ndeclare +r link\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item",
+        "<1:1>declare -r item=\"old\"\n", "line 2: declare: item: readonly variable\n")]
+    [InlineData("i=1; declare -n link='item[i++]'\nexport link=(new)\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item",
+        "<1:1>declare -a item\n", "line 2: `item[i++]': not a valid identifier\n")]
+    public async Task ImplicitDeclarationThroughElementNamerefPreservesOtherCells(string script, string stdout, string stderr)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(stdout, result.StdOut);
+        Assert.Equal(stderr, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ValuelessElementNamerefKeepsTemporaryScalarAttributesLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "i=0; item=(one two); declare -n link='item[i++]'\nitem=temporary declare -x link\n"
+            + "item=temporary declare -r link\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item");
+
+        Assert.Equal("<0:0>declare -a item=([0]=\"one\" [1]=\"two\")\n", result.StdOut);
+        Assert.Equal("", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("v='a b'; export x=$v; printf '<%s>\\n' \"$x\"", "<a b>\n", "", 0)]
     [InlineData("v='a b'; \"export\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
     [InlineData("v='a b'; ex\"port\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]

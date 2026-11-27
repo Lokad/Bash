@@ -954,8 +954,16 @@ reject removal of a matching array kind before evaluating the selector.
 With neither array kind explicitly set, `+a` clears a scalar before the
 selector runs and creates an indexed array for an absent binding before
 rejecting removal. `+A` allows a scalar to become indexed and preserves
-its value at index zero. A name-only declaration prepares the selected
-binding without evaluating the selector.
+its value at index zero. An explicit array kind or attribute declaration
+prepares the selected binding without evaluating the selector.
+
+A bare nonlocal `declare` or `typeset` through an element nameref
+evaluates the stored selector and declares that cell without a value.
+The array remains hidden until a later assignment makes its retained
+cells visible. A parsed compound initializer expands its items before
+preparation and can then report the stored element spelling as an
+invalid identifier. A source integer or case flag prepares the reached
+array and its attribute without selecting the stored index or key.
 
 Inside a function, `local -` saves the active mutable option state. The function
 restores it on return. A second `local -` keeps the first snapshot, as in the

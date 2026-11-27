@@ -301,6 +301,19 @@ public sealed partial class Variables
         return false;
     }
 
+    internal void HideArrayEntries(BindingName name)
+    {
+        if (TryGetBinding(name, out var slot))
+        {
+            if (slot is IndexedSlot { Value.IsRecoveryPipelineStatus: false } indexed)
+                indexed.Value.HideEntries();
+            else if (slot is AssociativeSlot associative)
+                associative.Value.HideEntries();
+        }
+        if (name == FieldSeparators.Name)
+            RefreshIndexedFieldSeparators();
+    }
+
     internal BindingAttributes GetAssignmentAttributes(BindingName name) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) ? slot.Attributes : BindingAttributes.None;
 

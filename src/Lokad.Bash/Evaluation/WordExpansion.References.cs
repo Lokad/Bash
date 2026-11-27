@@ -75,18 +75,26 @@ internal static partial class WordExpansion
         }
 
         /// <summary>Assigns absence without deleting the selected binding, key, or its attributes.</summary>
-        internal bool TryAssignUnassigned(Variables variables, EvaluationMemory memory)
+        internal bool TryAssignUnassigned(Variables variables, EvaluationMemory memory) =>
+            !Name.IsEmpty && !variables.IsReadonly(Name) && WriteUnassigned(variables, memory);
+
+        /// <summary>A valueless declaration records the selected cell and hides the array.</summary>
+        internal bool TryDeclareUnassignedElement(Variables variables, EvaluationMemory memory)
         {
-            if (Name.IsEmpty || variables.IsReadonly(Name))
+            if (Name.IsEmpty || this is Scalar || !WriteUnassigned(variables, memory))
                 return false;
-            return this switch
+            variables.HideArrayEntries(Name);
+            return true;
+        }
+
+        private bool WriteUnassigned(Variables variables, EvaluationMemory memory) =>
+            this switch
             {
                 Scalar => variables.TrySetResolvedUnassigned(Name),
                 Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null, memory, indexed.ReplaceAssociative),
                 Associative associative => variables.TrySetResolvedArrayElement(Name, associative.Key, null, memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
-        }
 
         internal ValueTask<ShellValue?> AssignValueAsync(
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, AssignmentOperator operation) =>

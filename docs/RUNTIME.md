@@ -475,6 +475,10 @@ select the position. A direct element or element nameref writes to an
 existing caller binding, including an unassigned declaration. When the
 caller has no binding, the write remains in the temporary command scope.
 Later selector reads still use the active command bindings.
+A bare declaration through an element nameref records an unassigned cell
+using the same resolved element writer, then hides the array. An independent
+child can reveal its copy by assigning another cell. The parent array stays
+hidden until its own next assignment.
 Builtin element writes likewise publish to one owner. An existing or
 already published caller slot receives the element while subsequent reads
 still see the active prefix. An absent name has only the temporary element
