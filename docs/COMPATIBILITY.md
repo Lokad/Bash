@@ -1255,6 +1255,9 @@ the unset removes its target, or when `unset -n OPTIND` finds an ordinary
 variable. A local nameref named `OPTIND` reselects
 the index on entry and again when it leaves scope as a nameref. An
 ordinary local index preserves the caller's cursor for restoration.
+When a function exits with a temporary `OPTIND` prefix still in scope,
+it restores the option cursor selected at function entry. The visible
+binding follows the ordinary prefix restoration and promotion rules.
 
 `declare -i` and `local -i` evaluate subsequent assigned values as arithmetic
 and store the decimal result. For integer bindings, `+=` adds the evaluated

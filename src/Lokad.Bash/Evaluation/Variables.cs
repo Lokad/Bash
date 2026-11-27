@@ -336,6 +336,7 @@ public sealed partial class Variables
         private readonly Variables _saved;
         private readonly Variables _retained;
         private readonly HashSet<BindingName> _retainedNames;
+        private GetoptsCursor? _functionEntryGetoptsCursor;
         private long _retainedCopyCapacity;
 
         /// <remarks>The prepared prefix names remain stable until this invocation finishes.</remarks>
@@ -391,6 +392,7 @@ public sealed partial class Variables
             _prefixes = new HashSet<BindingName>(source._prefixes);
             _ownsPrefixNames = true;
             _saved = source._saved.Clone();
+            _functionEntryGetoptsCursor = source._functionEntryGetoptsCursor;
             // Child contexts never restore the caller's pending output assignments.
             _retained = new Variables();
             _retainedNames = new HashSet<BindingName>();
@@ -402,6 +404,12 @@ public sealed partial class Variables
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
         internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes + PrefixSetBytes(_prefixes));
         internal CommandBindings Fork(Variables owner) => new(owner, this);
+
+        internal void CaptureFunctionEntryGetoptsCursor()
+        {
+            if (_prefixes.Contains("OPTIND"))
+                _functionEntryGetoptsCursor = _owner.GetoptsPosition;
+        }
 
         private static long PrefixSetBytes(HashSet<BindingName> names) => names.Count == 0 ? 0
             : 64L + (long)BindingNameSetEntryBytes * names.EnsureCapacity(0);
@@ -591,9 +599,10 @@ public sealed partial class Variables
                 // Pending users have settled. The selected store can give its slot back to the caller.
                 _owner.TransferBindingFrom(retained ? _retained : _saved, name);
                 (retained ? _saved : _retained).ClearBinding(name);
-                // A temporary OPTIND changes the visible index. The current bundle belongs to the scan.
+                // Functions restore their entry cursor. Simple commands keep the reached bundle
+                // and reselect its index from the restored binding.
                 if (name.CachedText == "OPTIND")
-                    _owner._getoptsCursor = cursor with { ArgumentIndex = 0 };
+                    _owner._getoptsCursor = _functionEntryGetoptsCursor ?? (cursor with { ArgumentIndex = 0 });
             }
             _prefixes = EmptyPrefixes;
             _retainedNames.Clear();

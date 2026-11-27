@@ -411,6 +411,31 @@ public sealed class EvaluationGetoptsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("-a -bc", 1, "getopts :abcd: opt -dvalue -cb", "<d:2><a:2><b:2>")]
+    [InlineData("-abc -bc", 2, "getopts :abcd: opt -dvalue -cb", "<?:1><b:2><c:3>")]
+    [InlineData("-a -bc -d", 3, ":", "<a:2><d:4><?:4>")]
+    [InlineData("-abc -bc", 1, "getopts :abcd: opt -dvalue -cb; export OPTIND", "<d:2><a:1><b:1>")]
+    public async Task GetoptsRestoresTheFunctionEntryCursorForATemporaryIndex(
+        string arguments, int temporaryIndex, string body, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() { {{body}}; }
+            set -- {{arguments}}
+            getopts abc opt
+            OPTIND={{temporaryIndex}} f
+            printf '<%s:%s>' "$opt" "$OPTIND"
+            getopts abcd opt
+            printf '<%s:%s>' "$opt" "$OPTIND"
+            getopts abcd opt
+            printf '<%s:%s>' "$opt" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("-4", "<0:4><0:a:3>")]
     [InlineData("-4a", "<0:4><0:a:2>")]
     public async Task Getopts_WritingOptindAsTheResultKeepsTheSavedCursor(string firstOperand, string expected)

@@ -37,6 +37,7 @@ public sealed partial class Evaluation
             ? null
             : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames,
                 _state.SuppressTemporaryLookup, Memory, _cancellationToken);
+        bindings?.CaptureFunctionEntryGetoptsCursor();
         using var functionContext = new FunctionContext(
             functionDefinition.Name.Value, new Variables.LocalBindings(scope.Variables, parent: null, bindings), scope.Context.FunctionContext)
         {
