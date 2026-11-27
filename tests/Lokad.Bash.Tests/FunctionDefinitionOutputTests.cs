@@ -541,6 +541,14 @@ public sealed class FunctionDefinitionOutputTests
         + "first\nA\nsecond\nB\nprintf \"[tail]\"\n}",
         "f () \n{ \n    IFS= read -r a <<'A' && \nfirst\nA\n IFS= read -r b <<'B' && \nsecond\nB\n"
         + " printf \"<%s-%s>\" \"$a\" \"$b\"\n    printf \"[tail]\"\n}\n")]
+    [InlineData("f(){\nIFS= read -r a <<'A' && IFS= read -r b <<'B'\nalpha\nA\nbeta\nB\n"
+        + "printf \"<tail>\"\nprintf \"<last>\"\n}",
+        "f () \n{ \n    IFS= read -r a <<'A' && \nalpha\nA\n IFS= read -r b <<'B'\nbeta\nB\n\n"
+        + "    printf \"<tail>\";\n    printf \"<last>\"\n}\n")]
+    [InlineData("f(){\nprintf \"pipe\\n\" | IFS= read -r a <<'A'\nalpha\nA\n"
+        + "printf \"<tail>\"; printf \"<last>\"\n}",
+        "f () \n{ \n    printf \"pipe\\n\" | IFS= read -r a <<'A'\nalpha\nA\n\n"
+        + "    printf \"<tail>\";\n    printf \"<last>\"\n}\n")]
     [InlineData("f(){ cat <<END\nx\nEND\necho after;\n}", "f () \n{ \n    cat <<END\nx\nEND\n\n    echo after\n}\n")]
     [InlineData("f(){ cat <<E'ND'\n$x\nEND\n}", "f () \n{ \n    cat <<'END'\n$x\nEND\n\n}\n")]
     [InlineData("f(){ cat <<E\\'N\\'D\n$x\nE'N'D\n}", "f () \n{ \n    cat <<'E'\\''N'\\''D'\n$x\nE'N'D\n\n}\n")]

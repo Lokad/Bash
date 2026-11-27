@@ -297,7 +297,7 @@ internal static class FunctionDefinitionFormatter
                     else if (!Append("\n") || !FlushHereDocuments() || !Append("\n")) return false;
                     // A separator after a chain drains its pending body without affecting the next
                     // connector. A flush after the first command can still suppress a later separator.
-                    if ((capture || substitutionSource) && followsCommandChain && pendingDocuments)
+                    if ((capture || displayRedirections) && followsCommandChain && pendingDocuments)
                         flushedHereDocuments = false;
                     break;
                 case Step.LogicalSeparator(var operation):

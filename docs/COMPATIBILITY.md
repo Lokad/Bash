@@ -1214,8 +1214,12 @@ Newlines between commands and in literal data remain part of the spelling.
 Trailing comments and blank lines are omitted, and a here-document keeps the
 newlines needed to delimit its body. Pending here-documents from the left side
 of `&&` and `||` print before the right command. The connector stays on the
-preceding command line so the listing can be reloaded. A protected delimiter
-is displayed as a single-quoted word, with escaped apostrophes where needed.
+preceding command line so the listing can be reloaded, including after a
+pipeline's final stage. A sequence separator that drains a command chain's
+final here-documents leaves later statement separators intact. This layout
+can preserve execution and reload for forms that the pinned Bash builds
+reject after rendering. A protected delimiter is displayed as a single-quoted
+word, with escaped apostrophes where needed.
 Reloading the listing with `eval` locates commands using the printed lines.
 When a command substitution starts with an authored adjacent parenthesis,
 its spelling keeps internal whitespace, comments and any final separator.
