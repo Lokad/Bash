@@ -173,7 +173,7 @@ public sealed partial class Evaluation
                 fieldMemory, scope.Variables, Memory, _cancellationToken);
             if (arrayTarget is { } array)
             {
-                var attributes = array.Owner.GetAssignmentAttributes(array.Name);
+                var attributes = array.AssignmentAttributes;
                 if ((attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0)
                 {
                     var assigned = await AssignIntegerIndexedInputAsync(array, fields, null, null, scope, command)
@@ -190,8 +190,7 @@ public sealed partial class Evaluation
                 }
                 var replacement = IndexedArray.FromSequential(fields);
                 _cancellationToken.ThrowIfCancellationRequested();
-                array.PrepareForPublication();
-                if (!array.Owner.TryAssignResolvedIndexedArray(array.Name, replacement))
+                if (!array.TryPublish(replacement))
                     exitCode = 1;
                 return await FinishAsync(exitCode).ConfigureAwait(false);
             }

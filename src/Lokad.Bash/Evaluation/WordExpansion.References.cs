@@ -23,7 +23,6 @@ internal static partial class WordExpansion
         internal Variables? ReadOwner { get; init; }
         internal bool IsWholeBindingRead { get; init; }
         internal bool AppendToEmpty { get; init; }
-        internal bool IsIgnoredArrayNamerefWrite { get; init; }
         internal bool InitializesArrayNameref { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName)
@@ -32,13 +31,14 @@ internal static partial class WordExpansion
             internal bool ReplaceAssociative { get; init; }
             // A reached arithmetic selector can establish the write target after selecting an unset read.
             internal bool ReadAsUnset { get; init; }
+            internal bool RecreatesBinding { get; init; }
         }
         internal sealed record Associative(BindingName VariableName, AssociativeArrayKey Key) : ResolvedVariableReference(VariableName);
 
         /// <summary>Selects a caller-owned element while the prefix still supplies the selector's reads.</summary>
         internal ResolvedVariableReference SelectPrefixElementWrite(VariableReference source, ScopedEvaluation scope)
         {
-            if (this is Scalar || scope.ExpansionWriteTarget is not { } prefix
+            if (this is Scalar or Indexed { RecreatesBinding: true } || scope.ExpansionWriteTarget is not { } prefix
                 || !(prefix.PreparingPrefixes || prefix.DeclarationSelector)
                 || !prefix.PrefixNames.Contains(Name)
                 || source.Kind != VariableReferenceKind.Name && source.Name != Name)
@@ -52,7 +52,7 @@ internal static partial class WordExpansion
 
         internal ResolvedVariableReference WithElementWriteOwner(Variables owner)
         {
-            if (this is Indexed indexed && owner.AssociativeArrays.ContainsKey(Name)
+            if (this is Indexed { RecreatesBinding: false } indexed && owner.AssociativeArrays.ContainsKey(Name)
                 && AssociativeArrayKey.TryCreate(ShellValue.FromInteger(indexed.Index.Value), out var key))
                 return new Associative(Name, key) { ReadOwner = owner };
 
@@ -117,7 +117,8 @@ internal static partial class WordExpansion
         {
             if (Name.IsEmpty)
                 return null;
-            var retained = ReferenceEquals(destination, scope.Variables)
+            var recreatesBinding = this is Indexed { RecreatesBinding: true };
+            var retained = !recreatesBinding && ReferenceEquals(destination, scope.Variables)
                 ? SelectBuiltinElementOutput(scope, sourceName, declarationWrite) : null;
             var target = this;
             if (retained != null)
@@ -126,9 +127,10 @@ internal static partial class WordExpansion
                 destination = retained;
                 target = WithElementWriteOwner(retained);
             }
-            ShellValue? previous = operation == AssignmentOperator.Append && !target.AppendToEmpty && target.TryRead(destination, out var stored)
+            ShellValue? previous = operation == AssignmentOperator.Append && !recreatesBinding
+                && !target.AppendToEmpty && target.TryRead(destination, out var stored)
                 ? stored : null;
-            var attributes = destination.GetAssignmentAttributes(Name);
+            var attributes = recreatesBinding ? Variables.BindingAttributes.None : destination.GetAssignmentAttributes(Name);
             if ((attributes & Variables.BindingAttributes.Integer) != 0
                 && declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
                 return null;
@@ -151,7 +153,9 @@ internal static partial class WordExpansion
         internal bool TryPublishValue(
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, DeclarationWrite declarationWrite)
         {
-            if ((IsWholeBindingRead || IsIgnoredArrayNamerefWrite) && this is Indexed or Associative
+            if (this is Indexed { RecreatesBinding: true } replacement)
+                return (ReadOwner ?? scope.Variables).TryRecreateResolvedIndexedElement(Name, replacement.Index, value, scope.Effects.Memory);
+            if (IsWholeBindingRead && this is Indexed or Associative
                 && scope.Variables.IsArrayNameref(Name))
                 return !scope.Variables.IsReadonly(Name);
             if (SelectBuiltinElementOutput(scope, sourceName, declarationWrite) is { } output)
@@ -358,7 +362,8 @@ internal static partial class WordExpansion
                 scope.Variables.RefreshIndexedFieldSeparators();
             return true;
         }
-        if (destination.IsReadonly(target.Name))
+        if (target is ResolvedVariableReference.Indexed { RecreatesBinding: true }
+            ? destination.IsReadonlyBinding(target.Name) : destination.IsReadonly(target.Name))
             await scope.Effects.ReportAssignmentTargetFailureAsync(
                 (reference.Kind == VariableReferenceKind.Name ? target.Name : reference.Name).ToValue(),
                 "readonly variable", scope).ConfigureAwait(false);
@@ -563,12 +568,13 @@ internal static partial class WordExpansion
     /// <summary>Selects a builtin destination once, while expanding its selector in the active command scope.</summary>
     internal static Task<ResolvedVariableReference?> ResolveBuiltinReferenceAsync(
         VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables) =>
-        ResolveBuiltinReferenceAsync(reference, scope, destination, indexVariables, ShellValue.Empty);
+        ResolveBuiltinReferenceAsync(reference, scope, destination, indexVariables, ShellValue.Empty, authoredName: default);
 
     internal static Task<ResolvedVariableReference?> ResolveBuiltinReferenceAsync(
-        VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables, ShellValue command) =>
+        VariableReference reference, ScopedEvaluation scope, Variables destination, Variables indexVariables, ShellValue command,
+        BindingName authoredName) =>
         ResolveReferenceAsync(reference, ReferenceUse.BuiltinAssign, scope,
-            ExpansionPurpose.ArithmeticSource, null, destination, indexVariables, null, command);
+            ExpansionPurpose.ArithmeticSource, null, destination, indexVariables, null, command, authoredName);
 
     /// <summary>Separates array storage selection from the binding supplying negative-index bounds.</summary>
     internal static Task<ResolvedVariableReference?> ResolveDeclarationReferenceAsync(
@@ -615,7 +621,7 @@ internal static partial class WordExpansion
         ExpandedArraySubscript? preparedSubscript,
         ShellValue command) =>
         ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, compound, targetVariables, indexVariables,
-            preparedSubscript, command, diagnosticName: default);
+            preparedSubscript, command, authoredName: default);
 
     private static async Task<ResolvedVariableReference?> ResolveReferenceAsync(
         VariableReference reference,
@@ -627,7 +633,7 @@ internal static partial class WordExpansion
         Variables indexVariables,
         ExpandedArraySubscript? preparedSubscript,
         ShellValue command,
-        BindingName diagnosticName)
+        BindingName authoredName)
     {
         if (!scope.CanExpand)
             return null;
@@ -889,14 +895,25 @@ internal static partial class WordExpansion
                         targetVariables.RecreateDeclarationArray(reference.Name, ArrayKind.Indexed);
                         return new ResolvedVariableReference.Indexed(reference.Name, position) { ReadOwner = targetVariables };
                     }
-                    var projectedWrite = assignsProjectedElement && binding.IsArrayNameref;
-                    if (projectedWrite
+                    var followsProjection = (assignsProjectedElement || use == ReferenceUse.ArithmeticRead) && binding.IsArrayNameref;
+                    if (followsProjection
                         && !TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent, MissingProjectedLiteral.RetainNameref))
                         return null;
+                    var projectedWrite = followsProjection && assignsProjectedElement;
+                    if ((writesElement || followsProjection) && HasEmptyArrayNamerefProjection(binding))
+                    {
+                        var sourceName = authoredName.IsEmpty ? reference.Name : authoredName;
+                        return new ResolvedVariableReference.Indexed(sourceName, position)
+                        {
+                            ReadOwner = scope.Context.GetGlobalBindingOwner(sourceName, scope.Variables),
+                            ReadAsUnset = true,
+                            RecreatesBinding = true
+                        };
+                    }
                     var stillUnset = binding.IsUnsetNameref;
                     var arrayNameref = (writesElement || assignsProjectedElement) && binding.IsArrayNameref;
                     if (!stillUnset && !binding.IsArrayNameref && binding.Reference.Kind == VariableReferenceKind.Name
-                        && !targetVariables.AssociativeArrays.ContainsKey(binding.Name))
+                        && !binding.Owner.AssociativeArrays.ContainsKey(binding.Name))
                     {
                         return new ResolvedVariableReference.Indexed(binding.Name, position)
                         {
@@ -916,9 +933,6 @@ internal static partial class WordExpansion
                                     await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, spelling, scope).ConfigureAwait(false);
                                 return null;
                             }
-                            if (arrayNameref && spelling.IsEmpty)
-                                return new ResolvedVariableReference.Indexed(binding.Name, position)
-                                    { ReadOwner = binding.Owner, IsIgnoredArrayNamerefWrite = true };
                             if (builtinOutput)
                                 await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, spelling, scope).ConfigureAwait(false);
                             else if (assignsDefault)
@@ -963,7 +977,7 @@ internal static partial class WordExpansion
 
         Task ReportBadSubscriptAsync()
         {
-            var referenceName = (diagnosticName.IsEmpty ? reference.Name : diagnosticName).ToValue();
+            var referenceName = (use == ReferenceUse.DeclarationAssign && !authoredName.IsEmpty ? authoredName : reference.Name).ToValue();
             if (use is ReferenceUse.Read or ReferenceUse.ShortRead or ReferenceUse.BindingRead or ReferenceUse.Presence or ReferenceUse.DefaultRead)
                 return scope.Effects.ReportArrayReadFailureAsync([referenceName], scope, length: false);
             if (use == ReferenceUse.Length)
@@ -1009,7 +1023,11 @@ internal static partial class WordExpansion
         }
     }
 
-    private static ShellValue GetArrayNamerefDiagnosticSubject(VariableBinding binding) =>
+    internal static bool HasEmptyArrayNamerefProjection(VariableBinding binding) => binding.IsArrayNameref
+        && binding.Owner.GetArrayMetadata(binding.Name) is { Kind: ArrayKind.Indexed, MaxIndex: { } maximum }
+        && GetIndexedArrayNamerefSpelling(maximum).IsEmpty;
+
+    internal static ShellValue GetArrayNamerefDiagnosticSubject(VariableBinding binding) =>
         binding.Owner.IndexedArrays.TryGetValue(binding.Name, out var array)
             ? GetIndexedArrayNamerefSpelling(array.MaxIndex) : binding.Name.ToValue();
 

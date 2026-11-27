@@ -292,11 +292,13 @@ internal static partial class WordExpansion
                     target = target.SelectPrefixElementWrite(reference, scope);
                 var activeVariables = scope.Variables;
                 var targetVariables = target.ReadOwner ?? activeVariables;
+                var recreatesBinding = target is ResolvedVariableReference.Indexed { RecreatesBinding: true };
                 var sourceReadonly = activeVariables.IsReadonlyWriteTarget(reference.Name, out var sourceBinding);
                 var sourceOwnsReadonly = sourceBinding is not { IsArrayNameref: true } marked
                     || marked.Name == target.Name && ReferenceEquals(marked.Owner, targetVariables);
                 var readOnly = sourceReadonly && sourceOwnsReadonly
-                    || (target.Name != reference.Name || !ReferenceEquals(targetVariables, activeVariables)) && targetVariables.IsReadonly(target.Name)
+                    || (target.Name != reference.Name || !ReferenceEquals(targetVariables, activeVariables))
+                        && (recreatesBinding ? targetVariables.IsReadonlyBinding(target.Name) : targetVariables.IsReadonly(target.Name))
                     || scope.ExpansionWriteTarget is { PreparingPrefixes: true }
                         && scope.GetExpansionWriteTarget(reference.Name)?.IsReadonlyWriteTarget(reference.Name, out _) == true;
                 if (assignOutput == null && !readOnly && AssignExpansion(reference, target, sourceBinding, formatted))

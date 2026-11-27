@@ -72,7 +72,7 @@ public sealed partial class Evaluation
             var mayFallBackToFunction = !variables && (!namerefs || !isIdentifier) && !directSelector;
             var binding = default(VariableBinding);
             var resolvedBinding = (!namerefs || mayFallBackToFunction)
-                && commandVars.TryResolveBinding(name, selectOwner: null, out binding);
+                && commandVars.TryResolveBinding(directSelector ? directReference.Name : name, selectOwner: null, out binding);
             // Explicit selectors never fall back to functions; element namerefs still can.
             // Whole-name lookup follows namerefs and retains unset locals' namespace protection.
             var hidesFunction = mayFallBackToFunction && resolvedBinding && binding.Reference.Kind == VariableReferenceKind.Name
@@ -100,7 +100,10 @@ public sealed partial class Evaluation
             }
             var unsetName = directSelector ? directReference.Name : name;
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;
-            if (!namerefs && (directSelector || resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name))
+            var removesEmptyProjection = !namerefs && resolvedBinding && WordExpansion.HasEmptyArrayNamerefProjection(binding);
+            if (removesEmptyProjection)
+                name = unsetName;
+            else if (!namerefs && (directSelector || resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name))
             {
                 var elementResult = await WordExpansion.UnsetElementAsync(directSelector ? directReference : binding.Reference,
                         directSelector ? WordExpansion.UnsetReferenceKind.Direct : WordExpansion.UnsetReferenceKind.Nameref,
@@ -122,7 +125,7 @@ public sealed partial class Evaluation
             // An uninitialized terminal has no referent. After namespace fallback,
             // ordinary unset can remove the named reference without touching the terminal.
             var target = commandVars.SelectUnsetTarget(name,
-                !namerefs && resolvedBinding ? binding : null, checkUninitializedTerminal: false);
+                !namerefs && resolvedBinding && !removesEmptyProjection ? binding : null, checkUninitializedTerminal: false);
             // -n removes the named reference. A readonly terminal with a target blocks that removal.
             if (namerefs && commandVars.TryResolveBinding(name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
                 && !terminal.IsUnsetNameref && terminal.Owner.IsReadonlyBinding(terminal.Name))
@@ -130,11 +133,11 @@ public sealed partial class Evaluation
             var removedName = target.Name;
             if (removedName.IsEmpty)
                 continue;
-            if (!namerefs && target.ReadonlyName.IsEmpty && commandVars.IsArrayNameref(removedName))
+            if (!namerefs && !removesEmptyProjection && target.ReadonlyName.IsEmpty && commandVars.IsArrayNameref(removedName))
                 continue;
             var keepExport = commandVars.IsExported(removedName)
                 && context.FunctionContext?.Locals.IsDeclaredPrefix(removedName) == true;
-            if (!commandVars.TryUnsetSelected(target, unsetFlags))
+            if (!commandVars.TryUnsetSelected(target, unsetFlags, removesEmptyProjection))
             {
                 exitCode = 1;
                 if (!target.ReadonlyName.IsEmpty)
@@ -592,9 +595,13 @@ public sealed partial class Evaluation
             && selected.IsUnsetNameref)
             return await InvalidElementTargetAsync().ConfigureAwait(false);
         var target = await WordExpansion.ResolveBuiltinReferenceAsync(reference, scope, destination, binding.Owner,
-            selectElementAfterExpansion ? command : ShellValue.Empty).ConfigureAwait(false);
+            selectElementAfterExpansion ? command : ShellValue.Empty,
+            selectElementAfterExpansion ? sourceName : BindingName.Empty).ConfigureAwait(false);
         if (HasPendingExpansionError || !BuiltinDiagnosticsOpen || target == null || target.Name.IsEmpty)
             return BuiltinAssignmentResult.Failed;
+        var recreatesBinding = target is WordExpansion.ResolvedVariableReference.Indexed { RecreatesBinding: true };
+        if (recreatesBinding)
+            destination = target.ReadOwner ?? destination;
         var outputName = reference.Name;
         if (kind == BuiltinAssignmentKind.Value && persistentOutputs is { } outputBindings
             && ReferenceEquals(destination, scope.Variables) && target is not WordExpansion.ResolvedVariableReference.Scalar
@@ -617,19 +624,19 @@ public sealed partial class Evaluation
             if (target is WordExpansion.ResolvedVariableReference.Indexed indexed && destination.AssociativeArrays.ContainsKey(target.Name))
                 target = indexed with { ReplaceAssociative = true };
         }
-        if ((target.ReadOwner ?? destination).TryGetInvalidNameref(target.Name, out var rawTarget))
+        if (!recreatesBinding && (target.ReadOwner ?? destination).TryGetInvalidNameref(target.Name, out var rawTarget))
         {
             if (!rawTarget.IsEmpty && kind != BuiltinAssignmentKind.Getopts)
                 await ReportInvalidAssignmentIdentifierAsync(command, rawTarget, scope).ConfigureAwait(false);
             return kind == BuiltinAssignmentKind.Directory ? BuiltinAssignmentResult.NoWrite : BuiltinAssignmentResult.Failed;
         }
-        if (destination.IsReadonly(target.Name))
+        if (recreatesBinding ? destination.IsReadonlyBinding(target.Name) : destination.IsReadonly(target.Name))
         {
             await ReportBuiltinDiagnosticAsync(target.Name.ToValue(), "readonly variable", scope.Context).ConfigureAwait(false);
             return kind is BuiltinAssignmentKind.Directory or BuiltinAssignmentKind.Getopts
                 ? BuiltinAssignmentResult.Readonly : BuiltinAssignmentResult.Failed;
         }
-        var failure = value is { } assignedValue
+        var failure = !recreatesBinding && value is { } assignedValue
             ? destination.GetNamerefAssignmentFailure(reference.Name, target.Name, assignedValue, Memory)
             : NamerefAssignmentFailure.None;
         if (failure != NamerefAssignmentFailure.None)

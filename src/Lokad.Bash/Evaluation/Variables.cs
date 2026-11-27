@@ -1320,7 +1320,9 @@ public sealed partial class Variables
         BindingName ReadonlyName(BindingName selected) => IsReadonlyBinding(selected) ? selected : BindingName.Empty;
     }
 
-    internal bool TryUnsetSelected(VariableUnsetTarget target, UnsetFlags flags)
+    internal bool TryUnsetSelected(VariableUnsetTarget target, UnsetFlags flags) => TryUnsetSelected(target, flags, removeArrayNameref: false);
+
+    internal bool TryUnsetSelected(VariableUnsetTarget target, UnsetFlags flags, bool removeArrayNameref)
     {
         if (target.RequiresSelector || !target.ReadonlyName.IsEmpty)
             return false;
@@ -1328,7 +1330,7 @@ public sealed partial class Variables
             return true;
 
         var name = target.Name;
-        if (IsArrayNameref(name))
+        if (!removeArrayNameref && IsArrayNameref(name))
         {
             if (flags == UnsetFlags.NamerefOnly)
                 ClearBinding(name);
@@ -1480,12 +1482,36 @@ public sealed partial class Variables
     }
 
     /// <summary>Publishes an already admitted indexed array without copying its storage.</summary>
-    internal bool TryAssignResolvedIndexedArray(BindingName resolved, IndexedArray array)
+    internal bool TryAssignResolvedIndexedArray(BindingName resolved, IndexedArray array) =>
+        TryAssignResolvedIndexedArray(resolved, array, recreate: false);
+
+    internal bool TryAssignResolvedIndexedArray(BindingName resolved, IndexedArray array, bool recreate)
     {
         if (resolved.IsEmpty || IsReadonlyBinding(resolved))
             return false;
-        ReplaceIndexedPreservingFieldJoin(resolved, array);
+        if (recreate)
+            StoreRecreatedIndexedArray(resolved, array);
+        else
+            ReplaceIndexedPreservingFieldJoin(resolved, array);
         return true;
+    }
+
+    private void StoreRecreatedIndexedArray(BindingName name, IndexedArray array)
+    {
+        StoreBinding(name, new IndexedSlot(array));
+        ResetGetoptsPosition(name);
+    }
+
+    /// <summary>Stages an independently admitted element before replacing a hidden binding.</summary>
+    internal bool TryRecreateResolvedIndexedElement(BindingName name, IndexedArrayIndex index, ShellValue value, EvaluationMemory memory)
+    {
+        if (IsReadonlyBinding(name))
+            return false;
+        memory.Charge(BindingOverheadBytes);
+        var array = new IndexedArray(isInitialized: false);
+        array.Set(index, value, memory);
+        memory.CancellationToken.ThrowIfCancellationRequested();
+        return TryAssignResolvedIndexedArray(name, array, recreate: true);
     }
 
     /// <summary>Admits the binding and empty storage for an associative replacement before staging items.</summary>

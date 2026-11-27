@@ -212,6 +212,25 @@ public sealed class ShellVariableValueTests
     }
 
     [Fact]
+    public void RefusedIndexedRecreationKeepsThePreviousBinding()
+    {
+        var variables = Variables.CreateEmpty();
+        BindingName name = "destination";
+        var previous = IndexedArray.FromSequential([ShellValue.FromText("before"), ShellValue.FromText("retain")]);
+        Assert.True(variables.TryAssignResolvedIndexedArray(name, previous));
+        var budget = new MemoryGovernor(512);
+        var replacement = ShellValue.FromText(new string('x', 1024));
+        using (var owner = budget.CreateScope())
+        {
+            var memory = new EvaluationMemory(owner);
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                variables.TryRecreateResolvedIndexedElement(name, default, replacement, memory));
+            Assert.Same(previous, variables.IndexedArrays[name]);
+        }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
     public void Clone_PreservesSparseArrayOwnership()
     {
         Assert.True(IndexedArrayIndex.TryCreate(2, out var index));

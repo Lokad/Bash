@@ -86,7 +86,7 @@ public sealed partial class Evaluation
         var resolved = target.Name;
         var variables = target.Owner;
 
-        var attributes = variables.GetAssignmentAttributes(resolved);
+        var attributes = target.AssignmentAttributes;
         var integer = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
         var convertCase = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Case) != 0;
         // Arithmetic consumes borrowed records after input settles. Ordinary records can
@@ -182,17 +182,26 @@ public sealed partial class Evaluation
 
             // The staged values already have admission. The list and array coexist during publication.
             var retainedBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
-            if (origin.HasValue && (target.NamerefValue.HasValue || variables.Scalars.ContainsKey(resolved)))
+            if (!target.RecreatesBinding && origin.HasValue && (target.NamerefValue.HasValue || variables.Scalars.ContainsKey(resolved)))
                 retainedBytes += IndexedArray.ElementMemoryBytes;
             Memory.Charge(retainedBytes);
             stagedBytes += retainedBytes;
 
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
-            target.PrepareForPublication();
-            assigned = origin is { } first
-                ? variables.TryUpdateResolvedIndexedArray(resolved, first, values, target.NamerefValue, Memory, _cancellationToken)
-                : variables.TryAssignResolvedIndexedArray(resolved, IndexedArray.FromSequential(values));
+            if (origin is { } first && !target.RecreatesBinding)
+            {
+                target.PrepareForPublication();
+                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, target.NamerefValue, Memory, _cancellationToken);
+            }
+            else if (origin is { } recreatedOrigin)
+            {
+                var array = new IndexedArray(isInitialized: true, capacity: values.Count);
+                array.SetSequential(recreatedOrigin, values, memory: null, _cancellationToken);
+                assigned = target.TryPublish(array);
+            }
+            else
+                assigned = target.TryPublish(IndexedArray.FromSequential(values));
         }
         catch (ShellDescriptorReadException)
         {
@@ -220,8 +229,8 @@ public sealed partial class Evaluation
         uint CollectedCount() => values != null ? (uint)values.Count : written;
 
         Variables.IndexedInputAssignment StartCallbackAssignment() =>
-            callbackAssignment ??= new Variables.IndexedInputAssignment(variables, resolved, origin.HasValue,
-                resetAttributes: target.Kind == IndexedInputTargetKind.CircularNameref, target.NamerefValue, Memory);
+            callbackAssignment ??= new Variables.IndexedInputAssignment(variables, resolved, origin.HasValue && !target.RecreatesBinding,
+                resetAttributes: target.RecreatesBinding || target.Kind == IndexedInputTargetKind.CircularNameref, target.NamerefValue, Memory);
 
         async ValueTask<EvaluationResult?> AcceptBatchAsync(ReadOnlyMemory<byte> content, IReadOnlyList<int> recordStarts)
         {
@@ -451,11 +460,22 @@ public sealed partial class Evaluation
         return true;
     }
 
-    private enum IndexedInputTargetKind { ExistingOrNew, CircularNameref, UnassignedNameref }
+    private enum IndexedInputTargetKind { ExistingOrNew, CircularNameref, UnassignedNameref, RecreatedBinding }
 
     private readonly record struct IndexedInputTarget(
         BindingName Name, Variables Owner, IndexedInputTargetKind Kind, ShellValue? NamerefValue)
     {
+        public bool RecreatesBinding => Kind == IndexedInputTargetKind.RecreatedBinding;
+
+        public Variables.BindingAttributes AssignmentAttributes =>
+            RecreatesBinding ? global::Lokad.Bash.Evaluation.Variables.BindingAttributes.None : Owner.GetAssignmentAttributes(Name);
+
+        public bool TryPublish(IndexedArray array)
+        {
+            PrepareForPublication();
+            return Owner.TryAssignResolvedIndexedArray(Name, array, RecreatesBinding);
+        }
+
         public void PrepareForPublication()
         {
             if (Kind == IndexedInputTargetKind.CircularNameref)
@@ -475,6 +495,25 @@ public sealed partial class Evaluation
 
         var target = reference.Name;
         var resolvedBinding = scope.Variables.TryResolveBinding(target, selectOwner: null, out var binding);
+        var projected = resolvedBinding && binding.IsArrayNameref;
+        if (projected)
+        {
+            if (!WordExpansion.TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent,
+                WordExpansion.MissingProjectedLiteral.RetainNameref))
+                return await InvalidTargetAsync(target.ToValue()).ConfigureAwait(false);
+            if (binding.IsArrayNameref)
+            {
+                if (!WordExpansion.HasEmptyArrayNamerefProjection(binding))
+                    return await InvalidTargetAsync(WordExpansion.GetArrayNamerefDiagnosticSubject(binding)).ConfigureAwait(false);
+                var owner = scope.Context.GetGlobalBindingOwner(target, scope.Variables);
+                if (owner.IsReadonlyBinding(target))
+                {
+                    await ReportBuiltinDiagnosticAsync(operand, "readonly variable", scope.Context).ConfigureAwait(false);
+                    return (null, 1);
+                }
+                return (new IndexedInputTarget(target, owner, IndexedInputTargetKind.RecreatedBinding, null), 0);
+            }
+        }
         var resolved = resolvedBinding ? binding.Name : target;
         var rawTarget = ShellValue.Empty;
         var invalidNameref = resolvedBinding && binding.TryGetInvalidNameref(out rawTarget);
@@ -482,7 +521,7 @@ public sealed partial class Evaluation
             return await InvalidTargetAsync(rawTarget).ConfigureAwait(false);
         if (resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name)
             return await InvalidTargetAsync(binding.Reference.ToValue(Memory)).ConfigureAwait(false);
-        if (!resolved.IsIdentifier)
+        if (!resolved.IsIdentifier && !(projected && binding.Owner.HasBinding(resolved)))
             return await InvalidTargetAsync(resolved.ToValue()).ConfigureAwait(false);
 
         // A local cycle retries the authored name in the global store without following its nameref.

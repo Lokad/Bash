@@ -862,6 +862,150 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Fact]
+    public async Task EmptyProjectionAppendRecreatesTheAuthoredGlobal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; slot=(outer keep); declare -ai alias=(21 22)
+            f() {
+                local -n slot; local -a slot=([256]=prior); local -n alias=slot
+                alias[i++]+=text
+                declare -p slot alias
+            }
+            f
+            printf '<%s>\n' "$i"
+            declare -p slot alias
+            """);
+
+        Assert.Equal("declare -an slot=([256]=\"prior\")\ndeclare -n alias=\"slot\"\n<1>\ndeclare -a slot=([0]=\"outer\" [1]=\"keep\")\ndeclare -a alias=([0]=\"text\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task EmptyProjectionArithmeticReadsZeroAndRecreatesTheGlobalArray()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; slot=(21 22)
+            f() {
+                local -n slot; local -a slot=([256]=prior)
+                printf '<%s:%s>\n' "$((slot[i++]++))" "$i"
+                declare -p slot
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal("<0:1>\ndeclare -an slot=([256]=\"prior\")\ndeclare -a slot=([0]=\"1\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task EmptyProjectionDefaultWritesTheReselectedElement()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; slot=(21 22)
+            f() {
+                local -n slot; local -a slot=([256]=prior)
+                printf '<%s:%s>\n' "${slot[i++]:=41}" "$i"
+                declare -p slot
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal("<41:2>\ndeclare -an slot=([256]=\"prior\")\ndeclare -a slot=([1]=\"41\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("printf -v 'alias[i++]' %s 41", "41")]
+    [InlineData("read -r 'alias[i++]' <<< '41 42'", "41 42")]
+    public async Task EmptyProjectionBuiltinElementWritesRecreateTheAuthoredGlobal(string command, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; alias=(outer keep)
+            f() {
+                local -n slot; local -a slot=([256]=prior); local -n alias=slot
+                {{command}}
+                declare -p slot alias
+            }
+            f
+            printf '<%s>\n' "$i"
+            declare -p alias
+            """);
+
+        Assert.Equal($"declare -an slot=([256]=\"prior\")\ndeclare -n alias=\"slot\"\n<1>\ndeclare -a alias=([0]=\"{expected}\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("mapfile -t -O 1 slot <<< $'41 42\\n43'", "")]
+    [InlineData("mapfile -t -O 1 -c 1 -C report slot <<< $'41 42\\n43'", "<1:41 42>\n<2:43>\n")]
+    public async Task EmptyProjectionMapfileStartsAtTheOriginInAFreshArray(string command, string callbackOutput)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare -ai slot=(21 22)
+            report() { printf '<%s:%s>\n' "$1" "$2"; }
+            f() {
+                local -n slot; local -a slot=([256]=prior)
+                {{command}}
+                declare -p slot
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal(callbackOutput + "declare -an slot=([256]=\"prior\")\ndeclare -a slot=([1]=\"41 42\" [2]=\"43\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ReadArrayReplacesAProjectedLiteralLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=outer
+            f() {
+                local -n slot; local -a slot=([1563581304]=prior)
+                local -a 'slot[2]=old'
+                read -ra slot <<< '41 42'
+                declare -p slot 'x[2]'
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal("declare -an slot=([1563581304]=\"prior\")\ndeclare -a x[2]=([0]=\"41\" [1]=\"42\")\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("alias")]
+    [InlineData("'alias[i++]'")]
+    public async Task EmptyProjectionUnsetClearsTheAuthoredLocalWithoutSelectingAnElement(string operand)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; alias=(outer keep)
+            f() {
+                local -n slot; local -a slot=([256]=prior); local -n alias=slot
+                unset -v {{operand}}
+                declare -p slot alias
+            }
+            f
+            printf '<%s>\n' "$i"
+            declare -p alias
+            """);
+
+        Assert.Equal("declare -an slot=([256]=\"prior\")\ndeclare -- alias\n<0>\ndeclare -a alias=([0]=\"outer\" [1]=\"keep\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Theory]
     [InlineData(120, "x")]
     [InlineData(1563581304, "x[2]")]

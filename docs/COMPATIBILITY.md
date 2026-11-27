@@ -1416,6 +1416,19 @@ value. A bare arithmetic update through a projected ordinary element
 nameref selects its stored subscript again for the write. A whole-name
 write through a projected unset local nameref can reach a caller binding
 while leaving the local nameref unset.
+
+With an empty indexed projection, direct, arithmetic and default
+element writes and scalar builtin element outputs create a fresh
+indexed array under the authored global name. An enclosing local and
+the marked array retain their bindings. Append starts with an empty
+value, and a reached arithmetic element reads as zero. An authored
+selector runs once per read or write. Whole-name `read -a` and
+`mapfile` also recreate the global array. `mapfile -O` uses the
+requested origin in that fresh array. For an existing projected
+literal local, indexed input writes that binding. An absent projection
+literal reports the complete spelling. Ordinary `unset` through an
+empty projection removes the authored local and skips an element
+selector.
 Valid indexed nameref projections also select bindings for scalar,
 element, aggregate and arithmetic reads, presence tests, length and
 attribute inspection. A literal projection can read the local

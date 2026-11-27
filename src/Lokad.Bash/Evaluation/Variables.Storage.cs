@@ -416,8 +416,9 @@ public sealed partial class Variables
                 staged.Set(default, raw);
             staged.MarkInitialized();
             if (resetAttributes)
-                owner.ClearBinding(name);
-            owner.ReplaceValue(name, new IndexedSlot(staged));
+                owner.StoreRecreatedIndexedArray(name, staged);
+            else
+                owner.ReplaceValue(name, new IndexedSlot(staged));
         }
 
         internal void Commit() => _committed = true;
