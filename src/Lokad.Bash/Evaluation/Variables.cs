@@ -1092,12 +1092,19 @@ public sealed partial class Variables
     /// <summary>Reads a scalar or array element zero for expansion, after nameref resolution.</summary>
     internal bool TryGetExpansionValue(BindingName name, out ShellValue value)
     {
-        if (TryResolveWholeName(name, out var resolved) && !resolved.IsEmpty
-            && TryGetBinding(resolved, detachBorrowed: false, out var slot) && !slot.IsArrayNameref)
+        if (TryResolveWholeName(name, out var resolved))
+            return TryReadResolvedExpansionValue(resolved, out value);
+        value = ShellValue.Empty;
+        return false;
+    }
+
+    internal bool TryReadResolvedExpansionValue(BindingName name, out ShellValue value)
+    {
+        if (!name.IsEmpty && TryGetBinding(name, detachBorrowed: false, out var slot) && !slot.IsArrayNameref)
         {
             switch (slot)
             {
-                case ScalarSlot scalar: return TryReadScalarSlot(resolved, scalar, out value);
+                case ScalarSlot scalar: return TryReadScalarSlot(name, scalar, out value);
                 case IndexedSlot indexed: return indexed.Value.TryGet(default, out value);
                 case AssociativeSlot map: return map.Value.TryGet(AssociativeArrayKey.Zero, out value);
             }

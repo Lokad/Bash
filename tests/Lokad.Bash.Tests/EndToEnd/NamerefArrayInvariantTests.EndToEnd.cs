@@ -660,6 +660,115 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData(120)]
+    [InlineData(1563581304)]
+    public async Task ArrayNamerefReadsProjectedArrayValuesAndKeys(int maximumIndex)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; x=outer
+            f() {
+                local -n slot; local -a slot=([{{maximumIndex}}]=prior)
+                local -a slot=21
+                local -a 'slot[2]=23'
+                printf '<%s:%s:%s:%s>\n' "$slot" "${slot[-1]}" "${#slot[@]}" "${slot@a}"
+                printf '<key:%s>\n' "${!slot[@]}"
+                [[ -v slot[i++] ]]
+                printf '<%s:%s>\n' "$?" "$i"
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal("<21:23:2:a>\n<key:0>\n<key:2>\n<0:1>\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ArrayNamerefReadsFollowSuccessiveProjectionsThroughAnAlias()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x; local -a x=([121]=prior); local -a y=(21 22)
+                local -n alias=slot
+                printf '<%s:%s:%s:%s>\n' "$alias" "${#alias}" "$((alias[i++]))" "${!alias}"
+                printf '<%s>\n' "$i"
+            }
+            f
+            """);
+
+        Assert.Equal("<21:2:21:y>\n<1>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ArrayNamerefProjectionThroughAnOrdinaryElementReferenceRespectsSelectorRoles()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; j=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x='dest[j++]'; local -a dest=(21 22)
+                printf '<%s:%s:%s:%s>\n' "$slot" "${slot[i++]-fallback}" "${#slot[i++]}" "${!slot}"
+                [[ -v slot ]]
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+            }
+            f
+            """);
+
+        Assert.Equal("<21:fallback:0:dest[j++]>\n<1:1:1>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(120, "x")]
+    [InlineData(1563581304, "x[2]")]
+    public async Task DefaultAssignmentSelectsTheProjectedArrayAfterExpansion(int maximumIndex, string destination)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0
+            f() {
+                local -n slot; local -a slot=([{{maximumIndex}}]=prior)
+                printf '<element:%s>\n' "${slot[i++]:=37}"
+                printf '<name:%s>\n' "${slot:=40}"
+                printf '<index:%s>\n' "$i"
+                declare -p slot '{{destination}}'
+            }
+            f
+            """);
+
+        Assert.Equal($"<element:37>\n<name:40>\n<index:2>\ndeclare -an slot=([{maximumIndex}]=\"prior\")\n"
+            + $"declare -a {destination}=([0]=\"40\" [1]=\"37\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DefaultAssignmentWithoutALiteralLocalDistinguishesNameAndSelector()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; x=older
+            f() {
+                local -nr slot; eval 'local -a slot=([1563581304]=prior)'
+                printf '<name:%s>\n' "${slot:=37}"
+                eval 'printf "<element:%s>\n" "${slot[i++]:=42}"'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot x
+            }
+            f
+            """);
+
+        Assert.Equal("<name:older>\n<1:2>\ndeclare -anr slot=([1563581304]=\"prior\")\ndeclare -a x=([0]=\"older\" [2]=\"37\")\n",
+            result.StdOut);
+        Assert.Equal("line 5: eval: `x[2]': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("-a slot=([i++]=value$((j++)))", "anr slot=([0]=\"value0\")")]
     [InlineData("-A slot=([key$((i++))]=value$((j++)))", "Anr slot=([key0]=\"value0\" )")]
     public async Task ReadonlyCompoundNamerefPublishesBeforeTheNestedReaderReturns(

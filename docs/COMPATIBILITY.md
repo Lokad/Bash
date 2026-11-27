@@ -236,14 +236,16 @@ stops there. A valid indexed initializer evaluates its selector once and
 rejects the write using the indexed array's diagnostic spelling. An explicit
 global element initializer can write to the global declaration behind the
 active cycle while leaving the local references in place.
-A braced whole-value read of the resulting array nameref discards the
-current command unit, including when an operator tests or inspects the
-value. An unbraced read expands to empty when the array is uninitialized.
-An unbraced read of an initialized array nameref discards its unit.
-Element reads still use an arithmetic selector. Length reads and element
-removal skip the selector. A direct element write diagnoses the invalid
-target after the RHS and a valid selector have run. A parameter default
-write selects the element again after evaluating its operand.
+A braced whole-value read with an invalid array nameref spelling
+discards the current command unit, including when an operator tests
+or inspects the value. An unbraced read expands to empty when the
+array is uninitialized. A nonempty invalid spelling on an
+initialized array discards the unbraced command unit. Element reads
+through an invalid projection still evaluate their arithmetic
+selector. Length reads and element removal skip the selector in
+that case. A direct element write diagnoses the invalid target after
+the RHS and a valid selector have run. A parameter default write
+selects the element again after evaluating its operand.
 Indexed array namerefs use the pinned Bash byte spelling for the diagnostic
 subject and for indirect expansion. Associative diagnostics use the binding
 name, and associative indirection starts with an empty spelling.
@@ -1358,8 +1360,9 @@ evaluate its selector once before reporting failure and retaining the
 prepared array's nameref attribute. A compound declaration through a
 function-local chain ending at an unset nameref prepares the array under
 the authored local name. The nameref attribute can remain on that array.
-Listings display its cells, while element and aggregate reads treat them
-as absent until the attribute is cleared. When the authored local is
+Listings display its cells. Reads follow a valid projected reference
+and treat the marked cells as absent when the reference is invalid
+or empty. When the authored local is
 readonly, compound preparation still publishes its cells and evaluates
 the reached selectors. The current reader then returns failure without
 a diagnostic. A direct declaration stops the function body. An `eval`
@@ -1400,6 +1403,15 @@ attribute. An authored element selector can run once before the
 indexed projection's diagnostic. With an empty indexed projection,
 the marked local keeps its cells while the initializer writes a
 fresh array in the global namespace.
+Valid indexed nameref projections also select bindings for scalar,
+element, aggregate and arithmetic reads, presence tests, length and
+attribute inspection. A literal projection can read the local
+binding with the complete element spelling. Bare indirect expansion
+returns the last reference's spelling. A parameter default
+assignment selects the destination after expanding the initializer.
+With a missing literal, the bare-name default can assign to the
+element described by the spelling. A default with an authored
+selector diagnoses that missing literal after the selector effects.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 using static Lokad.Bash.Evaluation.ShellPredicates;
 
@@ -533,11 +534,14 @@ internal static partial class WordExpansion
     {
         var variables = scope.Variables;
         if (reference.Kind == VariableReferenceKind.Name)
-            return variables.TryGetExpansionValue(reference.Name, out _);
+            return variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
+                && TryFollowArrayNamerefProjections(ref binding, scope)
+                && binding.Reference.Kind == VariableReferenceKind.Name
+                && binding.Owner.TryReadResolvedExpansionValue(binding.Name, out _);
         if (reference.IsAggregate)
         {
-            var binding = await ResolveReadBindingAsync(reference, ReferenceUse.Read, scope, variables).ConfigureAwait(false);
-            if (binding is not { Reference.Kind: VariableReferenceKind.Name } selected)
+            var aggregate = await ResolveReadBindingAsync(reference, ReferenceUse.Presence, scope, variables).ConfigureAwait(false);
+            if (aggregate is not { Reference.Kind: VariableReferenceKind.Name } selected)
                 return false;
             var array = selected.Owner.GetArrayMetadata(selected.Name);
             if (array is not { Kind: ArrayKind.Associative })
@@ -662,6 +666,8 @@ internal static partial class WordExpansion
                 else
                     return new ResolvedVariableReference.Scalar(BindingName.Empty);
             }
+            if (use == ReferenceUse.ArithmeticRead && !TryFollowArrayNamerefProjections(ref binding, scope))
+                return new ResolvedVariableReference.Scalar(BindingName.Empty);
             if (binding.TryGetInvalidNameref(out var rawTarget) && use != ReferenceUse.BuiltinAssign)
             {
                 if (parameterRead && !rawTarget.IsEmpty)
@@ -726,21 +732,34 @@ internal static partial class WordExpansion
         var reachedArrayNameref = false;
         if (use != ReferenceUse.CompoundAssign)
         {
+            var readsElement = use is ReferenceUse.Read or ReferenceUse.BindingRead or ReferenceUse.DefaultRead
+                or ReferenceUse.Presence or ReferenceUse.ArithmeticRead;
             var reached = targetVariables.TryResolveBinding(name, selectOwner: null, out var initial);
+            var fromArrayNameref = reached && initial.IsArrayNameref;
+            reachedArrayNameref = fromArrayNameref;
+            if (fromArrayNameref && (readsElement || use == ReferenceUse.Length || assignsDefault))
+            {
+                reached = TryFollowArrayNamerefProjections(ref initial, scope, BindingResolution.Referent,
+                    assignsDefault ? MissingProjectedLiteral.RetainNameref : MissingProjectedLiteral.Unassigned);
+                reachedArrayNameref = reached && initial.IsArrayNameref;
+                if (reached && !reachedArrayNameref && initial.Reference.Kind == VariableReferenceKind.Name)
+                {
+                    targetVariables = indexVariables = initial.Owner;
+                    if (initial.Name.IsIdentifier || initial.Owner.HasBinding(initial.Name))
+                        reference = VariableReference.ForElement(initial.Name, reference.Subscript);
+                }
+            }
             var invalidNameref = reached && initial.TryGetInvalidNameref(out _);
             if (invalidNameref && use != ReferenceUse.DirectAssign)
                 return new ResolvedVariableReference.Scalar(BindingName.Empty);
-            reachedArrayNameref = reached && initial.IsArrayNameref;
             // Length lookup has no selector to expand when the array nameref has no referent.
             if (reachedArrayNameref && use == ReferenceUse.Length)
                 return null;
-            var readsElement = use is ReferenceUse.Read or ReferenceUse.BindingRead or ReferenceUse.DefaultRead
-                or ReferenceUse.Presence or ReferenceUse.ArithmeticRead;
             name = reached && initial.Reference.Kind == VariableReferenceKind.Name && !initial.IsUnsetNameref && !invalidNameref
                 && !(reachedArrayNameref && (readsElement || writesElement || assignsDefault))
                 ? initial.Name : BindingName.Empty;
             selectAfterIndex = reached && name.IsEmpty
-                && (writesElement || assignsDefault && reachedArrayNameref
+                && (writesElement || assignsDefault && fromArrayNameref
                     || use is ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign);
         }
         var associative = !reachedArrayNameref && use != ReferenceUse.RejectedNamerefDeclaration
@@ -842,6 +861,10 @@ internal static partial class WordExpansion
                         targetVariables.RecreateDeclarationArray(reference.Name, ArrayKind.Indexed);
                         return new ResolvedVariableReference.Indexed(reference.Name, position) { ReadOwner = targetVariables };
                     }
+                    var projectedDefault = assignsDefault && binding.IsArrayNameref;
+                    if (projectedDefault
+                        && !TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent, MissingProjectedLiteral.RetainNameref))
+                        return null;
                     var stillUnset = binding.IsUnsetNameref;
                     var arrayNameref = (writesElement || assignsDefault) && binding.IsArrayNameref;
                     if (!stillUnset && !binding.IsArrayNameref && binding.Reference.Kind == VariableReferenceKind.Name
@@ -853,7 +876,7 @@ internal static partial class WordExpansion
                             ReadAsUnset = use == ReferenceUse.ArithmeticRead
                         };
                     }
-                    if (writesElement || arrayNameref)
+                    if (writesElement || arrayNameref || projectedDefault)
                     {
                         if (stillUnset || arrayNameref || binding.Reference.Kind != VariableReferenceKind.Name)
                         {
@@ -866,7 +889,7 @@ internal static partial class WordExpansion
                                 await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, spelling, scope).ConfigureAwait(false);
                             else if (assignsDefault)
                                 await scope.Effects.ReportParameterDefaultFailureAsync(
-                                    [ShellValue.FromText("`"), spelling, ShellValue.FromText("'")],
+                                    [ShellValue.FromText(scope.InEvalReader ? "eval: `" : "`"), spelling, ShellValue.FromText("'")],
                                     [ShellValue.FromText("not a valid identifier")], scope).ConfigureAwait(false);
                             else
                                 await scope.Effects.ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
@@ -957,6 +980,69 @@ internal static partial class WordExpansion
     internal static ShellValue GetIndexedArrayNamerefSpelling(long? maximum) =>
         maximum is { } index ? FieldSeparators.ProjectIndex(index, firstOnly: false) : IndexedArrayNamerefSpelling;
 
+    internal static BindingName GetArrayNamerefProjectionName(
+        VariableReference projection, ShellValue spelling, EvaluationMemory memory) =>
+        projection.Kind == VariableReferenceKind.Name ? projection.Name : BindingNameExpansion.FromValue(spelling, memory);
+
+    internal enum MissingProjectedLiteral { Unassigned, RetainNameref, SelectElement }
+
+    private static bool TryFollowArrayNamerefProjections(ref VariableBinding binding, ScopedEvaluation scope) =>
+        TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent, MissingProjectedLiteral.Unassigned);
+
+    /// <summary>Follows recognized indexed spellings and leaves an invalid projection on its marked binding.</summary>
+    internal static bool TryFollowArrayNamerefProjections(
+        ref VariableBinding binding, ScopedEvaluation scope, BindingResolution resolution, MissingProjectedLiteral missingLiteral)
+    {
+        if (!binding.IsArrayNameref)
+            return true;
+
+        MemoryCapacity? visitedMemory = null;
+        HashSet<BindingName>? visited = null;
+        try
+        {
+            var memory = scope.Effects.Memory;
+            while (binding.Owner.GetArrayMetadata(binding.Name) is
+                { Kind: ArrayKind.Indexed, MaxIndex: { } maximum })
+            {
+                scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+                var spelling = GetIndexedArrayNamerefSpelling(maximum);
+                if (spelling.IsEmpty || !VariableReference.TryParseNamerefTarget(spelling, memory, out var projection))
+                    break;
+                var name = GetArrayNamerefProjectionName(projection, spelling, memory);
+                if (missingLiteral != MissingProjectedLiteral.Unassigned
+                    && projection.Kind != VariableReferenceKind.Name && !binding.Owner.HasBinding(name))
+                {
+                    if (missingLiteral == MissingProjectedLiteral.SelectElement)
+                        binding = new VariableBinding(projection, binding.Owner);
+                    return true;
+                }
+                if (!binding.Owner.TryResolveBinding(name, selectOwner: null, resolution, out var next))
+                    return false;
+
+                // A single projection to an ordinary binding needs no cycle-tracking storage.
+                if (!next.IsArrayNameref)
+                {
+                    binding = next;
+                    return true;
+                }
+                if (binding.Name == next.Name)
+                    return false;
+                visitedMemory ??= new MemoryCapacity(memory.Budget, 0);
+                visited ??= [];
+                visitedMemory.PrepareSetCapacity(visited, binding.Name, Variables.BindingNameSetEntryBytes);
+                _ = visited.Add(binding.Name);
+                if (visited.Contains(next.Name))
+                    return false;
+                binding = next;
+            }
+            return true;
+        }
+        finally
+        {
+            visitedMemory?.Dispose();
+        }
+    }
+
     /// <summary>Warns at a reached read, then selects Bash's global fallback for a local cycle.</summary>
     private static async ValueTask<VariableBinding?> ResolveReadBindingAsync(
         VariableReference reference, ReferenceUse use, ScopedEvaluation scope, Variables variables)
@@ -970,6 +1056,11 @@ internal static partial class WordExpansion
                 await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
             if (!found)
                 return null;
+        }
+        if (!TryFollowArrayNamerefProjections(ref binding, scope))
+        {
+            await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
+            return null;
         }
         return reference.IsAggregate && binding.IsArrayNameref ? null : binding;
     }

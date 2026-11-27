@@ -3872,7 +3872,7 @@ public sealed partial class Evaluation : IFileTester
                 if (indexed && (!alias || !clears) && !spelling.IsEmpty
                     && VariableReference.TryParseNamerefTarget(spelling, Memory, out var projected))
                 {
-                    var name = GetArrayNamerefProjectionName(projected, spelling);
+                    var name = WordExpansion.GetArrayNamerefProjectionName(projected, spelling, Memory);
                     if (name == source)
                         return reference;
                     var whole = VariableReference.ForName(name);
@@ -4785,11 +4785,15 @@ public sealed partial class Evaluation : IFileTester
         {
             var variables = scope.Variables;
             var binding = new VariableBinding(VariableReference.ForName(initial), variables);
-            using var visitedMemory = new MemoryCapacity(Memory.Budget, 0);
-            HashSet<BindingName>? visited = null;
-            while (binding.IsArrayNameref && variables.GetArrayMetadata(binding.Name) is { } array)
+            if (!WordExpansion.TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent,
+                    WordExpansion.MissingProjectedLiteral.RetainNameref))
             {
-                CheckCancellation();
+                await ReportCircularNameReferenceAsync(source, scope).ConfigureAwait(false);
+                SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
+                return null;
+            }
+            if (binding.IsArrayNameref && variables.GetArrayMetadata(binding.Name) is { } array)
+            {
                 if (!array.IsInitialized)
                     return await DetachAsync(binding).ConfigureAwait(false) ? (binding, false) : null;
 
@@ -4799,28 +4803,8 @@ public sealed partial class Evaluation : IFileTester
                 if (spelling.IsEmpty)
                     return (new VariableBinding(VariableReference.ForName(source),
                         scope.Context.GetGlobalBindingOwner(source, variables)), true);
-                if (array.Kind == ArrayKind.Associative
-                    || !VariableReference.TryParseNamerefTarget(spelling, Memory, out var projected))
-                {
-                    await ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
-                    return null;
-                }
-                var name = GetArrayNamerefProjectionName(projected, spelling);
-                if (projected.Kind != VariableReferenceKind.Name && !variables.HasBinding(name))
-                {
-                    await ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
-                    return null;
-                }
-                visited ??= [];
-                visitedMemory.PrepareSetCapacity(visited, binding.Name,
-                    global::Lokad.Bash.Evaluation.Variables.BindingNameSetEntryBytes);
-                if (!visited.Add(binding.Name)
-                    || !variables.TryResolveBinding(name, selectOwner: null, out binding))
-                {
-                    await ReportCircularNameReferenceAsync(source, scope).ConfigureAwait(false);
-                    SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
-                    return null;
-                }
+                await ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
+                return null;
             }
 
             if (binding.IsUnsetNameref)
@@ -4846,8 +4830,6 @@ public sealed partial class Evaluation : IFileTester
             }
         }
 
-        BindingName GetArrayNamerefProjectionName(VariableReference projection, ShellValue spelling) =>
-            projection.Kind == VariableReferenceKind.Name ? projection.Name : BindingNameExpansion.FromValue(spelling, Memory);
     }
 
     private EvaluationResult CompleteCommandResult(

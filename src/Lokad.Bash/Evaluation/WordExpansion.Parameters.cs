@@ -239,25 +239,36 @@ internal static partial class WordExpansion
                         return;
                     }
                     var target = parameter.Target;
-                    var elementNameref = parameter.Source is { Kind: VariableReferenceKind.Name } namedReference
-                        && scope.Variables.TryResolveBinding(namedReference.Name, selectOwner: null, out var binding)
-                        && binding.Reference.Kind != VariableReferenceKind.Name;
-                    if (parameter.Source is { } reference && (reference.Kind != VariableReferenceKind.Name || elementNameref))
+                    var assignmentSource = parameter.Source;
+                    var elementNameref = false;
+                    if (assignmentSource is { Kind: VariableReferenceKind.Name } namedReference
+                        && scope.Variables.TryResolveBinding(namedReference.Name, selectOwner: null, out var binding))
+                    {
+                        elementNameref = binding.Reference.Kind != VariableReferenceKind.Name;
+                        if (binding.IsArrayNameref
+                            && TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent, MissingProjectedLiteral.SelectElement)
+                            && !binding.IsArrayNameref)
+                        {
+                            assignmentSource = binding.Reference;
+                            elementNameref = binding.Reference.Kind != VariableReferenceKind.Name;
+                        }
+                    }
+                    if (assignmentSource is { } reference && (reference.Kind != VariableReferenceKind.Name || elementNameref))
                     {
                         // A default write repeats selection after its RHS, for either array kind.
                         target = await ResolveReferenceAsync(reference, ReferenceUse.Assign, scope, arithmeticPurpose).ConfigureAwait(false);
                     }
                     if (!scope.CanExpand)
                         return;
-                    var action = parameter.Source is { Kind: VariableReferenceKind.Name } assignmentSource
-                        ? await PrepareNamerefAssignmentAsync(assignmentSource.Name, expanded, AssignmentOperator.Replace, scope, ExpansionFailureKind.NamerefDefault).ConfigureAwait(false)
+                    var action = assignmentSource is { Kind: VariableReferenceKind.Name } namedSource
+                        ? await PrepareNamerefAssignmentAsync(namedSource.Name, expanded, AssignmentOperator.Replace, scope, ExpansionFailureKind.NamerefDefault).ConfigureAwait(false)
                         : new NamerefAssignmentResult(NamerefAssignmentAction.Assign, expanded);
                     if (action.Action == NamerefAssignmentAction.Fail)
                         return;
                     ShellValue? assigned = action.Value;
                     if (action.Action == NamerefAssignmentAction.Assign)
                     {
-                        if (!elementNameref && parameter.Source is { Kind: VariableReferenceKind.Name } named)
+                        if (!elementNameref && assignmentSource is { Kind: VariableReferenceKind.Name } named)
                         {
                             var resolved = scope.Variables.ResolveNamerefName(named.Name);
                             if (scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
@@ -288,7 +299,10 @@ internal static partial class WordExpansion
                     else if (scope.CanExpand)
                     {
                         var subject = parameter.Source is { Kind: VariableReferenceKind.Element } element
-                            ? element.Name.ToValue() : target?.Name.ToValue() ?? parsed.Name.ToValue();
+                            ? element.Name.ToValue()
+                            : assignmentSource != parameter.Source && assignmentSource is { } projected
+                                ? projected.Name.ToValue()
+                                : target?.Name.ToValue() ?? parsed.Name.ToValue();
                         await scope.Effects.ReportParameterDefaultFailureAsync([subject], [ShellValue.FromText("readonly variable")], scope)
                             .ConfigureAwait(false);
                     }
@@ -584,6 +598,10 @@ internal static partial class WordExpansion
             {
                 var found = scope.Variables.TryResolveBinding(binding.Name, selectOwner: null,
                     BindingResolution.LastExpansionNameref, out var terminal);
+                var projected = found && terminal.IsArrayNameref;
+                if (projected)
+                    found = TryFollowArrayNamerefProjections(ref terminal, scope, BindingResolution.LastExpansionNameref,
+                        MissingProjectedLiteral.Unassigned);
                 var referent = ShellValue.Empty;
                 if (found && terminal.IsArrayNameref)
                 {
@@ -595,8 +613,16 @@ internal static partial class WordExpansion
                             referent = UnquoteIndexedNamerefSpelling(referent);
                     }
                 }
+                else if (found && terminal.Owner.TryGetNameref(terminal.Name, out referent))
+                    found = !referent.IsEmpty;
+                else if (found && projected)
+                {
+                    referent = terminal.Name.ToValue();
+                    if (parsed.Kind == BracedParameterOperatorKind.None)
+                        referent = UnquoteIndexedNamerefSpelling(referent);
+                }
                 else
-                    found = found && terminal.Owner.TryGetNameref(terminal.Name, out referent) && !referent.IsEmpty;
+                    found = false;
                 if (!found)
                 {
                     await ReportParameterTargetFailureAsync([name.ToValue()], "invalid indirect expansion").ConfigureAwait(false);
