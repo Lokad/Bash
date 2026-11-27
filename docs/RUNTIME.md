@@ -441,6 +441,13 @@ same-value writes, with nameref and array-kind rules intact. In-process
 execution consumes only the prepared prefix slots and preserves the original
 slots in the saved store. An installation refusal leaves the caller's bindings
 at their state after operand expansion.
+Whole scalar output through a projected name can write the caller's saved
+receiver. An authored element selector can instead use the temporary
+receiver and its active array kind. `let` uses the active temporary value
+for reads and can reselect a saved projection for writes. A write through
+that saved projection also updates the authored temporary scalar for the
+next operand. An indirect write to a receiver's saved binding leaves its
+temporary prefix available as the read source.
 When a declaration creates the first target of a saved nameref, that slot
 retains the target while subsequent operands can update the temporary scalar.
 The existing deferred publication path restores the saved slot before

@@ -1024,6 +1024,142 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("slot", "<0:0>\ndeclare -a x=([0]=\"41\" [1]=\"22\")\n")]
+    [InlineData("'slot[i++]'", "<0:1>\ndeclare -a x=([0]=\"21\" [1]=\"22\")\n")]
+    public async Task ReadThroughAProjectedReceiverUsesTheSelectedPrefixOwner(string operand, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior); local -a x=(21 22)
+                x=temporary read -r {{operand}} <<< 41
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p x
+            }
+            f
+            """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ReadAtEofStillAssignsTheProjectedElement()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior); local -a x=(21 22)
+                read -r 'slot[i++]' <<'END'
+            END
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p x
+            }
+            f
+            """);
+
+        Assert.Equal("<1:1>\ndeclare -a x=([0]=\"\" [1]=\"22\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedPrintfCountPersistsWhenTheFinalElementTargetIsInvalid()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; j=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x='dest[j++]'; local -a dest=(21 22)
+                printf -v 'slot[i++]' '%n%s' slot text
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p dest
+            }
+            f
+            """);
+
+        Assert.Equal("<1:1:1>\ndeclare -a dest=([0]=\"0\" [1]=\"22\")\n", result.StdOut);
+        Assert.Equal("line 5: printf: `dest[j++]': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ReadonlyProjectedPrintfCountKeepsFormattingAvailable()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot; local -a slot=([120]=prior); local -ar x=(21 22)
+                printf 'abc%n\n' slot
+                printf '<%s>\n' "$?"
+                declare -p x
+            }
+            f
+            """);
+
+        Assert.Equal("abc\n<0>\ndeclare -ar x=([0]=\"21\" [1]=\"22\")\n", result.StdOut);
+        Assert.Equal("line 3: slot: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GetoptsWritesThroughAMissingLiteralProjection()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=outer
+            f() {
+                local -nr slot; eval 'local -a slot=([1563581304]=prior)'
+                getopts :a: slot -a
+                printf '<%s:%s:%s>\n' "$?" "$OPTIND" "$OPTARG"
+                declare -p slot
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal("<0:2:a>\ndeclare -anr slot=([1563581304]=\"prior\")\ndeclare -a x=([0]=\"outer\" [2]=\":\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task LetReselectsTheSavedElementForEachTemporaryScalarWrite()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            j=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x='dest[j++]'; local -a dest=(21 22)
+                slot=temporary let 'slot++' 'slot+=2'
+                printf '<%s:%s>\n' "$?" "$j"
+                declare -p slot dest
+            }
+            f
+            """);
+
+        Assert.Equal("<0:2>\ndeclare -an slot=([120]=\"prior\")\ndeclare -a dest=([0]=\"1\" [1]=\"3\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task IndirectLetOutputKeepsUsingTheActiveReceiverPrefixForReads()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot; local -a slot=([120]=prior); local -a x=(21 22)
+                x=temporary let 'slot++' 'slot+=2'
+                declare -p x
+            }
+            f
+            """);
+
+        Assert.Equal("declare -a x=([0]=\"2\" [1]=\"22\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("slot+=temporary declare -p 'x[2]'", "declare -x x[2]=\"21temporary\"\n", 0)]
     [InlineData("slot=temporary unset -v 'slot[i++]'", "", 1)]
     public async Task ProjectedLiteralPrefixIsVisibleAndRestoresTheCaller(string command, string output, int index)

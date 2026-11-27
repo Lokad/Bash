@@ -470,7 +470,8 @@ public sealed partial class Evaluation
         var exitCode = lastResult is null or 0 ? 1 : 0;
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
 
-        bool AssignOutput(VariableReference reference, WordExpansion.ResolvedVariableReference target, ShellValue value)
+        bool AssignOutput(VariableReference reference, WordExpansion.ResolvedVariableReference target, ShellValue value,
+            bool usesSavedProjection)
         {
             if (target.ReadOwner is { } owner && !ReferenceEquals(owner, commandVars))
                 return target.TryPublishValue(new ScopedEvaluation(this, owner, context), reference.Name, value);
@@ -478,14 +479,21 @@ public sealed partial class Evaluation
             if (reference.Kind == VariableReferenceKind.Name
                 && commandVars.TryResolveBinding(reference.Name, selectOwner: null, out var selected))
             {
+                if (selected.IsArrayNameref || usesSavedProjection)
+                {
+                    if (target.IsWholeBindingRead && bindings?.CanRetainOutput(target.Name) == true)
+                        return bindings.TryApplyOutputAssignment(VariableReference.ForName(target.Name), sourceName, value, Memory, _cancellationToken);
+                    return !commandVars.IsReadonlyBinding(target.Name)
+                        && target.TryPublishValue(new ScopedEvaluation(this, commandVars, context) { SelectorBindings = bindings }, sourceName, value);
+                }
                 if (selected.Reference.Kind == VariableReferenceKind.Name)
                 {
-                    var resolution = SelectBuiltinReference(reference, commandVars, context,
+                    var resolution = SelectBuiltinReference(reference, commandVars, context, selected,
                         context.FunctionContext?.IsLocal(reference.Name) == true, selectElementAfterExpansion: false, out var binding);
                     if (resolution != BuiltinReferenceResolution.Write)
                         return resolution == BuiltinReferenceResolution.NoWrite;
                     return bindings != null && ReferenceEquals(binding.Owner, commandVars)
-                        ? bindings.TryApplyOutputAssignment(binding.Reference, value, Memory, _cancellationToken)
+                        ? bindings.TryApplyOutputAssignment(binding.Reference, sourceName, value, Memory, _cancellationToken)
                         : binding.Owner.TryApplyArithmeticAssignment(binding.Reference, value, Memory);
                 }
                 // Keep an intermediate alias: its prefix-owned write must not reach the caller.
@@ -503,14 +511,14 @@ public sealed partial class Evaluation
 
     /// <summary>Local namerefs select caller bindings; indirect unset chains may create a local shadow.</summary>
     private BuiltinReferenceResolution SelectBuiltinReference(
-        VariableReference reference, Variables variables, EvaluationContext context, bool localName,
+        VariableReference reference, Variables variables, EvaluationContext context, VariableBinding? reached, bool localName,
         bool selectElementAfterExpansion, out VariableBinding selected)
     {
         selected = new VariableBinding(reference, variables);
         if (!localName || !variables.TryGetNameref(reference.Name, out _))
             return BuiltinReferenceResolution.Write;
-        if (!variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
-            && !context.TryResolveCircularBinding(reference.Name, variables, out binding))
+        var binding = reached.GetValueOrDefault();
+        if (!reached.HasValue && !context.TryResolveCircularBinding(reference.Name, variables, out binding))
             return BuiltinReferenceResolution.Invalid;
         if (reference.Kind != VariableReferenceKind.Name
             && (binding.IsUnsetNameref || binding.Reference.Kind != VariableReferenceKind.Name))
@@ -538,22 +546,49 @@ public sealed partial class Evaluation
     {
         var sourceName = reference.Name;
         var sourceKind = reference.Kind;
-        var namedCycle = reference.Kind == VariableReferenceKind.Name
-            && !scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out _);
+        var resolved = scope.Variables.TryResolveBinding(sourceName, selectOwner: null, out var reached);
+        var namedCycle = sourceKind == VariableReferenceKind.Name && !resolved;
         var circular = namedCycle && scope.Context.TryResolveCircularBinding(reference.Name, scope.Variables, out _);
         var activeCycle = circular;
-        var warnsWithoutFallback = kind is BuiltinAssignmentKind.Value or BuiltinAssignmentKind.Read
+        var usesVariableOutput = kind is BuiltinAssignmentKind.Value or BuiltinAssignmentKind.Read
             or BuiltinAssignmentKind.Getopts or BuiltinAssignmentKind.PrintfCount;
         var localName = scope.Context.FunctionContext?.IsLocal(sourceName) == true;
         var selectElementAfterExpansion = kind is BuiltinAssignmentKind.Value or BuiltinAssignmentKind.Read
             && reference.Kind != VariableReferenceKind.Name;
-        var resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, localName, selectElementAfterExpansion,
-            out var binding);
+        var projected = false;
+        var savedProjection = false;
+        if (usesVariableOutput)
+        {
+            projected = resolved && reached.IsArrayNameref;
+            if (!projected && sourceKind == VariableReferenceKind.Name && kind != BuiltinAssignmentKind.Read
+                && persistentOutputs?.TryResolveSavedArrayNameref(sourceName, out var saved) == true)
+            {
+                reached = saved;
+                projected = savedProjection = true;
+            }
+        }
+        VariableBinding binding;
+        BuiltinReferenceResolution resolution;
+        if (projected && sourceKind == VariableReferenceKind.Name)
+        {
+            if (!WordExpansion.TryFollowArrayNamerefProjections(ref reached, scope, BindingResolution.Referent,
+                WordExpansion.MissingProjectedLiteral.SelectElement, savedProjection ? SelectCallerOwner : null))
+                return await RejectCircularOutputAsync(sourceName).ConfigureAwait(false);
+            if (reached.IsUnsetNameref
+                && scope.Context.TryResolveLocalNamerefAssignment(sourceName, scope.Variables, Memory, reached, out var fallback)
+                && fallback is LocalNamerefAssignment.Write write)
+                reached = write.Binding;
+            binding = reached;
+            resolution = BuiltinReferenceResolution.Write;
+        }
+        else
+            resolution = SelectBuiltinReference(reference, scope.Variables, scope.Context, resolved ? reached : null,
+                localName, selectElementAfterExpansion, out binding);
         if (resolution == BuiltinReferenceResolution.NoWrite)
             return BuiltinAssignmentResult.NoWrite;
         if (resolution == BuiltinReferenceResolution.Invalid)
         {
-            if (namedCycle && warnsWithoutFallback)
+            if (namedCycle && usesVariableOutput)
                 return await RejectCircularOutputAsync(reference.Name).ConfigureAwait(false);
             return reference.Kind == VariableReferenceKind.Name
                 ? BuiltinAssignmentResult.Failed : await InvalidElementTargetAsync().ConfigureAwait(false);
@@ -594,7 +629,7 @@ public sealed partial class Evaluation
                 destination = fallback.Owner;
                 reference = fallback.Reference;
             }
-            else if (warnsWithoutFallback)
+            else if (usesVariableOutput)
                 return await RejectCircularOutputAsync(reference.Name).ConfigureAwait(false);
         }
         if (circular)
@@ -650,7 +685,10 @@ public sealed partial class Evaluation
         }
         if (recreatesBinding ? destination.IsReadonlyBinding(target.Name) : destination.IsReadonly(target.Name))
         {
-            await ReportBuiltinDiagnosticAsync(target.Name.ToValue(), "readonly variable", scope.Context).ConfigureAwait(false);
+            var readonlyName = projected && (sourceKind != VariableReferenceKind.Name
+                || kind == BuiltinAssignmentKind.PrintfCount && target is WordExpansion.ResolvedVariableReference.Indexed { IsWholeBindingRead: true })
+                ? sourceName : target.Name;
+            await ReportBuiltinDiagnosticAsync(readonlyName.ToValue(), "readonly variable", scope.Context).ConfigureAwait(false);
             return kind is BuiltinAssignmentKind.Directory or BuiltinAssignmentKind.Getopts
                 ? BuiltinAssignmentResult.Readonly : BuiltinAssignmentResult.Failed;
         }

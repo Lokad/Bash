@@ -166,9 +166,12 @@ internal static partial class WordExpansion
         ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode, ShellValue command) =>
         EvaluateArithmeticAsync(expression, scope, failureMode, null, command);
 
+    internal delegate bool ArithmeticOutputAssignment(VariableReference reference, ResolvedVariableReference target,
+        ShellValue value, bool usesSavedProjection);
+
     internal static Task<long?> EvaluateArithmeticAsync(
         ArithmeticOperand expression, ScopedEvaluation scope, ArithmeticFailureMode failureMode,
-        Func<VariableReference, ResolvedVariableReference, ShellValue, bool>? assignOutput, ShellValue command)
+        ArithmeticOutputAssignment? assignOutput, ShellValue command)
     {
         var context = scope.Arithmetic ?? new ArithmeticContext(0)
         {
@@ -203,7 +206,8 @@ internal static partial class WordExpansion
 
             async ValueTask<ArithmeticBinding<ArithmeticTarget>> BindAsync(ArithmeticReference selected, ArithmeticReferenceUse use)
             {
-                var target = await SelectAsync(selected, use).ConfigureAwait(false);
+                var savedProjection = use == ArithmeticReferenceUse.Assign ? GetSavedOutputProjection(selected.Syntax) : null;
+                var target = await SelectAsync(selected, use, savedProjection).ConfigureAwait(false);
                 if (!scope.CanExpand)
                 {
                     referenceFailureReported = true;
@@ -251,11 +255,14 @@ internal static partial class WordExpansion
             {
                 var reference = selected.Syntax;
                 // A reached read can require a new write selection after the RHS runs.
-                if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read
-                    && (binding.Location == null || reference.Kind == VariableReferenceKind.Name
+                if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read)
+                {
+                    var savedProjection = GetSavedOutputProjection(reference);
+                    if (savedProjection.HasValue || binding.Location == null || reference.Kind == VariableReferenceKind.Name
                         && (!scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var resolved)
-                            || resolved.Reference.Kind != VariableReferenceKind.Name || resolved.IsArrayNameref)))
-                    binding = await SelectAsync(selected, ArithmeticReferenceUse.Assign).ConfigureAwait(false);
+                            || resolved.Reference.Kind != VariableReferenceKind.Name || resolved.IsArrayNameref))
+                        binding = await SelectAsync(selected, ArithmeticReferenceUse.Assign, savedProjection).ConfigureAwait(false);
+                }
                 if (!scope.CanExpand)
                 {
                     referenceFailureReported = true;
@@ -286,8 +293,13 @@ internal static partial class WordExpansion
                     return null;
                 var formatted = ShellValue.FromInteger(value);
                 // Builtin output selects its local fallback before checking that destination's readonly state.
-                if (assignOutput != null && assignOutput(reference, target, formatted))
+                if (assignOutput != null && assignOutput(reference, target, formatted, binding.UsesSavedProjection))
+                {
+                    // The authored temporary scalar remains the read source across let operands.
+                    if (binding.UsesSavedProjection)
+                        scope.Variables.TrySetResolvedScalar(reference.Name, formatted, scope.Effects.Memory);
                     return null;
+                }
                 if (assignOutput == null)
                     target = target.SelectPrefixElementWrite(reference, scope);
                 var activeVariables = scope.Variables;
@@ -360,7 +372,12 @@ internal static partial class WordExpansion
                 }
             }
 
-            async ValueTask<ArithmeticTarget> SelectAsync(ArithmeticReference selected, ArithmeticReferenceUse use)
+            VariableBinding? GetSavedOutputProjection(VariableReference reference) =>
+                assignOutput != null && reference.Kind == VariableReferenceKind.Name
+                    && scope.SelectorBindings?.TryResolveSavedArrayNameref(reference.Name, out var binding) == true ? binding : null;
+
+            async ValueTask<ArithmeticTarget> SelectAsync(ArithmeticReference selected, ArithmeticReferenceUse use,
+                VariableBinding? savedProjection)
             {
                 var reference = selected.Syntax;
                 var cyclic = false;
@@ -374,7 +391,8 @@ internal static partial class WordExpansion
                 }
                 var target = await ResolveReferenceAsync(reference,
                     use == ArithmeticReferenceUse.Read ? ReferenceUse.ArithmeticRead : ReferenceUse.ArithmeticAssign,
-                    scope, ExpansionPurpose.ArithmeticSource, null, scope.Variables, scope.Variables, selected.ExpandedSubscript, command)
+                    scope, ExpansionPurpose.ArithmeticSource, null, scope.Variables, scope.Variables, selected.ExpandedSubscript,
+                    command, authoredName: default, savedProjection)
                     .ConfigureAwait(false);
                 ArithmeticReferenceFallback? fallback = null;
                 if (target is { Name.IsEmpty: true })
@@ -405,7 +423,7 @@ internal static partial class WordExpansion
                     if (fallback != null)
                         target = null;
                 }
-                return new ArithmeticTarget(target, use, fallback);
+                return new ArithmeticTarget(target, use, fallback, savedProjection.HasValue);
             }
 
             async Task ReportCycleAsync(BindingName name, int count)
@@ -457,7 +475,7 @@ internal static partial class WordExpansion
 
     // Missing read locations are selected again for writing unless selection retained a fallback.
     private readonly record struct ArithmeticTarget(
-        ResolvedVariableReference? Location, ArithmeticReferenceUse Use, ArithmeticReferenceFallback? Fallback);
+        ResolvedVariableReference? Location, ArithmeticReferenceUse Use, ArithmeticReferenceFallback? Fallback, bool UsesSavedProjection);
 
     private abstract record ArithmeticReferenceFallback
     {

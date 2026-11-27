@@ -1445,6 +1445,16 @@ With a missing literal, the bare-name default can assign to the
 element described by the spelling. A default with an authored
 selector diagnoses that missing literal after the selector effects.
 
+Scalar builtin outputs follow a valid array nameref projection to its
+receiver. A whole-name output uses an array's key zero or the element
+described by a stored selector. If a projected literal local is absent,
+the whole-name output can assign its base element. An authored element
+selector uses the reached array kind. It reports the stored spelling
+after its own effects when the projection supplies a stored element
+reference or an absent literal. A reached `printf %n` write persists
+when a later `printf -v` destination fails. An element reached by `read`
+at EOF can receive an empty value while `read` returns status 1.
+
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding
 kind. An assignment operand uses the global array declaration path, then

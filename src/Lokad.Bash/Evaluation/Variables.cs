@@ -402,6 +402,14 @@ public sealed partial class Variables
         internal bool RetainsBinding(BindingName name) => _retainedNames.Contains(name);
         internal Variables SavedVariables => _saved;
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
+        internal Variables SelectCallerOwner(BindingName name) => Contains(name) ? _saved : _owner;
+
+        internal bool TryResolveSavedArrayNameref(BindingName name, out VariableBinding binding)
+        {
+            binding = default;
+            return Contains(name) && _saved.TryResolveBinding(name, SelectCallerOwner, out binding) && binding.IsArrayNameref;
+        }
+
         internal long ForkMemoryBytes => checked(384 + _saved.EstimatedMemoryBytes + PrefixSetBytes(_prefixes));
         internal CommandBindings Fork(Variables owner) => new(owner, this);
 
@@ -443,9 +451,9 @@ public sealed partial class Variables
             _retainedNames.Remove(name);
         }
 
-        /// <summary>Direct outputs preserve caller bindings; indirect writes use the command scope.</summary>
+        /// <summary>Publishes an arithmetic output to its selected binding across command prefixes.</summary>
         public bool TryApplyOutputAssignment(
-            VariableReference reference, ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken)
+            VariableReference reference, BindingName authoredName, ShellValue value, EvaluationMemory memory, CancellationToken cancellationToken)
         {
             var element = reference.Kind != VariableReferenceKind.Name
                 || _owner.GetArrayMetadata(reference.Name) is { Kind: ArrayKind.Indexed };
@@ -455,8 +463,8 @@ public sealed partial class Variables
             if (ReferenceEquals(destination, _owner))
                 return true;
 
-            // Scalar arithmetic assignments also update the temporary value read by later expressions.
-            if (!element && !_owner.TryApplyArithmeticAssignment(reference, value, memory))
+            // An authored scalar prefix observes its own output in later arithmetic operands.
+            if (!element && authoredName == reference.Name && !_owner.TryApplyArithmeticAssignment(reference, value, memory))
                 return false;
 
             _retainedNames.Add(reference.Name);

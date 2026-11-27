@@ -626,6 +626,20 @@ internal static partial class WordExpansion
         ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, compound, targetVariables, indexVariables,
             preparedSubscript, command, authoredName: default);
 
+    private static Task<ResolvedVariableReference?> ResolveReferenceAsync(
+        VariableReference reference,
+        ReferenceUse use,
+        ScopedEvaluation scope,
+        ExpansionPurpose arithmeticPurpose,
+        CompoundElement? compound,
+        Variables targetVariables,
+        Variables indexVariables,
+        ExpandedArraySubscript? preparedSubscript,
+        ShellValue command,
+        BindingName authoredName) =>
+        ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, compound, targetVariables, indexVariables,
+            preparedSubscript, command, authoredName, savedProjection: null);
+
     private static async Task<ResolvedVariableReference?> ResolveReferenceAsync(
         VariableReference reference,
         ReferenceUse use,
@@ -636,7 +650,8 @@ internal static partial class WordExpansion
         Variables indexVariables,
         ExpandedArraySubscript? preparedSubscript,
         ShellValue command,
-        BindingName authoredName)
+        BindingName authoredName,
+        VariableBinding? savedProjection)
     {
         if (!scope.CanExpand)
             return null;
@@ -667,6 +682,8 @@ internal static partial class WordExpansion
                 binding = readBinding;
                 targetVariables = binding.Owner;
             }
+            else if (savedProjection is { } saved)
+                binding = saved;
             else if (!targetVariables.TryResolveBinding(reference.Name, selectOwner: null, out binding))
             {
                 if (use is ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign)
@@ -684,7 +701,9 @@ internal static partial class WordExpansion
             if (binding.IsArrayNameref && (use is ReferenceUse.DirectAssign or ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign))
             {
                 var missing = use == ReferenceUse.ArithmeticRead ? MissingProjectedLiteral.Unassigned : MissingProjectedLiteral.SelectElement;
-                if (!TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent, missing))
+                var selectOwner = savedProjection.HasValue && scope.SelectorBindings is { } bindings
+                    ? (Func<BindingName, Variables>)bindings.SelectCallerOwner : null;
+                if (!TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent, missing, selectOwner))
                     return new ResolvedVariableReference.Scalar(BindingName.Empty);
                 if (missing == MissingProjectedLiteral.SelectElement && binding.IsUnsetNameref
                     && scope.Context.TryResolveLocalNamerefAssignment(sourceName, scope.Variables, scope.Effects.Memory, binding, out var fallback)
@@ -756,7 +775,7 @@ internal static partial class WordExpansion
         var writesElement = use == ReferenceUse.DirectAssign || builtinOutput;
         var assignsDefault = use == ReferenceUse.Assign;
         var assignsArithmetic = use == ReferenceUse.ArithmeticAssign;
-        var assignsProjectedElement = assignsDefault || use == ReferenceUse.DirectAssign || assignsArithmetic;
+        var assignsProjectedElement = assignsDefault || writesElement || assignsArithmetic;
         // Compound preparation has already selected the binding.
         var name = reference.Name;
         var selectAfterIndex = false;
@@ -1048,7 +1067,12 @@ internal static partial class WordExpansion
 
     /// <summary>Follows recognized indexed spellings and leaves an invalid projection on its marked binding.</summary>
     internal static bool TryFollowArrayNamerefProjections(
-        ref VariableBinding binding, ScopedEvaluation scope, BindingResolution resolution, MissingProjectedLiteral missingLiteral)
+        ref VariableBinding binding, ScopedEvaluation scope, BindingResolution resolution, MissingProjectedLiteral missingLiteral) =>
+        TryFollowArrayNamerefProjections(ref binding, scope, resolution, missingLiteral, selectOwner: null);
+
+    internal static bool TryFollowArrayNamerefProjections(
+        ref VariableBinding binding, ScopedEvaluation scope, BindingResolution resolution, MissingProjectedLiteral missingLiteral,
+        Func<BindingName, Variables>? selectOwner)
     {
         if (!binding.IsArrayNameref)
             return true;
@@ -1066,14 +1090,15 @@ internal static partial class WordExpansion
                 if (spelling.IsEmpty || !VariableReference.TryParseNamerefTarget(spelling, memory, out var projection))
                     break;
                 var name = GetArrayNamerefProjectionName(projection, spelling, memory);
+                var owner = selectOwner?.Invoke(name) ?? binding.Owner;
                 if (missingLiteral != MissingProjectedLiteral.Unassigned
-                    && projection.Kind != VariableReferenceKind.Name && !binding.Owner.HasBinding(name))
+                    && projection.Kind != VariableReferenceKind.Name && !owner.HasBinding(name))
                 {
                     if (missingLiteral == MissingProjectedLiteral.SelectElement)
-                        binding = new VariableBinding(projection, binding.Owner);
+                        binding = new VariableBinding(projection, selectOwner?.Invoke(projection.Name) ?? binding.Owner);
                     return true;
                 }
-                if (!binding.Owner.TryResolveBinding(name, selectOwner: null, resolution, out var next))
+                if (!owner.TryResolveBinding(name, selectOwner, resolution, out var next))
                     return false;
 
                 // A single projection to an ordinary binding needs no cycle-tracking storage.
