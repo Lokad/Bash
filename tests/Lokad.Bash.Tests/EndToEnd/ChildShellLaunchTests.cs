@@ -31,6 +31,25 @@ public sealed class ChildShellLaunchTests
     }
 
     [Theory]
+    [InlineData("tail\\", "[tail]", "[tail\\]")]
+    [InlineData("\"tail\"\\", "[tail]", "[tail\\]")]
+    [InlineData("tail\\\\", "[tail\\]", "[tail\\]")]
+    [InlineData("ta\\\nil", "[tail]", "[tail]")]
+    public async Task FileAndCommandStringUseTheirOwnContinuationRules(string operand, string fileOutput, string commandOutput)
+    {
+        var source = "printf \"[%s]\" " + operand;
+        await using var host = new TestHost();
+        host.AddFile("/unit", source);
+
+        var result = await host.RunAsync($"bash ./unit; printf '|'; bash -c '{source}'", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(fileOutput + "|" + commandOutput, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("bash ./broken 2>errors", "./broken: line 3: ")]
     [InlineData("bash -c 'printf earlier >effect\nif\n' launcher 2>errors", "launcher: -c: line 3: ")]
     public async Task ChildReportsLateSyntaxThroughItsDescriptorAfterEarlierEffects(string invocation, string diagnosticPrefix)

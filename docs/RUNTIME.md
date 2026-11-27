@@ -652,9 +652,10 @@ exit action sees the value from preceding commands. The binding keeps only
 compact backing and uses the existing command allowance to admit retained
 storage after temporary consumers settle.
 
-`BashScript.RunAsync`, `source`, `eval` and reached EXIT actions parse and execute complete command units
-through the same evaluator. A newline completes a unit only after its compound
-syntax, continuations, quoting and here-documents are complete. Later syntax errors
+`BashScript.RunAsync`, hosted `bash -c`, `source`, `eval` and reached EXIT actions
+parse and execute complete command units through the same evaluator. A newline
+completes a unit only after its compound syntax, continuations, quoting and
+here-documents are complete. Later syntax errors
 retain earlier units' effects. A terminal backslash can advance the command's
 reader line during initial word lookahead. That line supplies `LINENO` and
 launch diagnostics while source offsets continue to refer to physical bytes.

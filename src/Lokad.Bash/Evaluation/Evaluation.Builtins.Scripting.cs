@@ -368,7 +368,8 @@ public sealed partial class Evaluation
         var result = EvaluationResult.FromExitCode(0);
         var scanContext = new ShellScanContext
         {
-            ReadsCommandString = kind != ScriptExecutionKind.Root || diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution,
+            ReadsCommandString = kind != ScriptExecutionKind.Root
+                || diagnosticOrigin is SyntaxDiagnosticOrigin.CommandString or SyntaxDiagnosticOrigin.CommandSubstitution,
             RetainCaptureEofDelimiter = sourceOrEval
         };
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
