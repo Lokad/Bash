@@ -96,7 +96,8 @@ public sealed class TestEvaluationTests
         var parsed = Parse();
         Assert.Empty(parsed.CollectFileTests(out var result));
         Assert.True(result);
-        AllocationAssert.SustainedReuse(() => _ = Parse(), Repetitions, maximumBytes: 224 * Repetitions);
+        Assert.Equal(0, memory.Workspace.Bytes);
+        AllocationAssert.SustainedReuse(() => _ = Parse(), Repetitions, maximumBytes: 160 * Repetitions);
 
         TestEvaluation Parse()
         {
@@ -168,6 +169,7 @@ public sealed class TestEvaluationTests
         long Measure(ShellValue[] arguments)
         {
             Assert.True(ParseAndComplete());
+            Assert.Equal(0, memory.Workspace.Bytes);
             var matched = true;
             var bytes = AllocationAssert.MeasureAllocatedBytes(() => matched &= ParseAndComplete(), Repetitions).Median;
             Assert.True(matched);
@@ -186,19 +188,22 @@ public sealed class TestEvaluationTests
         var memory = new EvaluationMemory(owner);
 
         Assert.False(Parse("-n yes", memory).HasParseError);
-        var singleStepBytes = memory.Workspace.Bytes;
-        Assert.True(singleStepBytes > 0);
+        Assert.Equal(0, memory.Workspace.Bytes);
+
+        Assert.False(Parse("-t 0", memory).HasParseError);
+        var fileBytes = memory.Workspace.Bytes;
+        Assert.Equal(MemoryCapacity.ArrayBackingBytes<UnresolvedFileTest>(4), fileBytes);
         memory.Workspace.Resize(0);
 
         Assert.True(Parse("-t 0 -a -n yes extra", memory).HasParseError);
         var listBytes = memory.Workspace.Bytes;
-        Assert.Equal(singleStepBytes + MemoryCapacity.ArrayBackingBytes<UnresolvedFileTest>(4), listBytes);
+        Assert.Equal(fileBytes + MemoryCapacity.ArrayBackingBytes<(int Kind, int Operand)>(4), listBytes);
         memory.Workspace.Resize(0);
 
         Assert.False(Parse("-t 0 -a -n yes", memory).HasParseError);
         Assert.Equal(listBytes + MemoryCapacity.ArrayBackingBytes<bool>(2), memory.Workspace.Bytes);
 
-        VerifyRefusal("-n yes", singleStepBytes - 1);
+        VerifyRefusal("-t 0", fileBytes - 1);
         VerifyRefusal("-t 0 -a -n yes extra", listBytes - 1);
         VerifyRefusal("-t 0 -a -n yes", listBytes);
 
@@ -222,5 +227,18 @@ public sealed class TestEvaluationTests
             }
             Assert.Equal(0, budget.ReservedBytes);
         }
+    }
+
+    [Fact]
+    public void TestEvaluation_PreservesFileResultOrderWhenPromotedStepsFold()
+    {
+        var parsed = TestEvaluation.Parse(["-f", "first", "-a", "(", "-n", "x", "-a", "-n", "", ")", "-o", "-f", "last"]);
+        var files = parsed.CollectFileTests(out var result);
+
+        Assert.False(parsed.HasParseError);
+        Assert.Null(result);
+        Assert.Equal(["first", "last"], files.Select(test => test.Operand));
+        Assert.False(parsed.CompleteFileTests([true, false]));
+        Assert.True(parsed.CompleteFileTests([false, true]));
     }
 }

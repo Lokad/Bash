@@ -188,9 +188,10 @@ classes within the usual total-capacity rounding.
 Conditional evaluation admits its traversal buffer before growing it, including
 overlap during replacement. Reached predicates reuse the buffer, which stays
 charged through pending operations and is refunded when traversal unwinds.
-`test` and `[` admit their parsed steps and file operands in the command workspace
-before growing their backing lists. They admit reduction scratch before running
-any predicates that require it. Ordered host request and response storage uses
+`test` and `[` store the first two parse steps inline. They admit larger
+step lists and file operands in the command workspace before growing their
+backing. They admit reduction scratch before running any predicates that
+require it. Ordered host request and response storage uses
 the file lookup's own allowance through completion.
 Case selection holds its expanded subject across reached alternatives and any
 body chain that resumes matching. Each alternative keeps its expanded words and

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Helpers;
@@ -18,7 +19,9 @@ public sealed class TestEvaluation
     private readonly bool _errexitEnabled;
     // Standalone parsing has no execution owner; the evaluator supplies its command workspace.
     private readonly EvaluationMemory? _memory;
-    private readonly List<Step> _steps = [];
+    private InlineSteps _inlineSteps;
+    private int _inlineStepCount;
+    private List<Step>? _steps;
     private IReadOnlyList<UnresolvedFileTest> _files = Array.Empty<UnresolvedFileTest>();
     private int _index;
     private int _end;
@@ -44,7 +47,7 @@ public sealed class TestEvaluation
         }
 
         // Admit the completion scratch before any file or variable predicate runs.
-        if (!HasParseError && _steps.Count > 1)
+        if (!HasParseError && Steps.Length > 1)
             _memory?.Charge(MemoryCapacity.ArrayBackingBytes<bool>(_maximumStackDepth));
     }
 
@@ -87,10 +90,11 @@ public sealed class TestEvaluation
         if (HasParseError)
             return false;
 
-        if (_steps.Count == 1)
+        var steps = Steps;
+        if (steps.Length == 1)
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            var step = _steps[0];
+            var step = steps[0];
             return step.Kind switch
             {
                 StepKind.Constant => step.Value != 0,
@@ -101,7 +105,7 @@ public sealed class TestEvaluation
 
         var values = new bool[_maximumStackDepth];
         var count = 0;
-        foreach (var step in _steps)
+        foreach (var step in steps)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             switch (step.Kind)
@@ -123,14 +127,16 @@ public sealed class TestEvaluation
         // A parse error still allows earlier parsed predicates to run. Its partial
         // step sequence can contain operators without all their operands.
         var reduce = !HasParseError;
-        var singleStep = reduce && _steps.Count == 1;
+        var stepCount = Steps.Length;
+        var singleStep = reduce && stepCount == 1;
         var values = reduce && !singleStep ? new bool[_maximumStackDepth] : [];
         var count = 0;
-        foreach (var step in _steps)
+        for (var index = 0; index < stepCount; index++)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (!scope.CanExpand)
                 return false;
+            var step = Steps[index];
             bool value;
             switch (step.Kind)
             {
@@ -429,8 +435,9 @@ public sealed class TestEvaluation
     {
         if (HasParseError)
             return;
-        if (_steps[^1] is { Kind: StepKind.Constant } operand)
-            _steps[^1] = new(StepKind.Constant, operand.Value == 0 ? 1 : 0);
+        var steps = Steps;
+        if (steps[^1] is { Kind: StepKind.Constant } operand)
+            steps[^1] = new(StepKind.Constant, operand.Value == 0 ? 1 : 0);
         else
             AppendStep(StepKind.Not, 0);
     }
@@ -439,11 +446,16 @@ public sealed class TestEvaluation
     {
         if (HasParseError)
             return;
-        if (_steps[^1] is { Kind: StepKind.Constant } right && _steps[^2] is { Kind: StepKind.Constant } left)
+        var steps = Steps;
+        if (steps[^1] is { Kind: StepKind.Constant } right
+            && steps[^2] is { Kind: StepKind.Constant } left)
         {
             var value = Combine(left.Value != 0, right.Value != 0, kind);
-            _steps[^2] = new(StepKind.Constant, value ? 1 : 0);
-            _steps.RemoveAt(_steps.Count - 1);
+            steps[^2] = new(StepKind.Constant, value ? 1 : 0);
+            if (_steps is { } list)
+                list.RemoveAt(steps.Length - 1);
+            else
+                _inlineStepCount--;
         }
         else
             AppendStep(kind, 0);
@@ -452,9 +464,28 @@ public sealed class TestEvaluation
 
     private void AppendStep(StepKind kind, int operand)
     {
-        _memory?.PrepareListCapacity(_steps, 1);
-        _steps.Add(new(kind, operand));
+        if (_steps is { } steps)
+        {
+            _memory?.PrepareListCapacity(steps, 1);
+            steps.Add(new(kind, operand));
+        }
+        else if (_inlineStepCount < InlineStepCapacity)
+        {
+            _inlineSteps[_inlineStepCount++] = new(kind, operand);
+        }
+        else
+        {
+            // Retain the list for the rest of parsing once the inline storage fills.
+            steps = [];
+            _memory?.PrepareListCapacity(steps, _inlineStepCount + 1);
+            foreach (var step in _inlineSteps)
+                steps.Add(step);
+            steps.Add(new(kind, operand));
+            _steps = steps;
+        }
     }
+
+    private Span<Step> Steps => _steps is { } steps ? CollectionsMarshal.AsSpan(steps) : _inlineSteps[.._inlineStepCount];
 
     private void Fail(string message) => Fail(message, ShellValue.Empty, string.Empty);
 
@@ -463,4 +494,12 @@ public sealed class TestEvaluation
     private void Fail(string prefix, ShellValue operand, string suffix) => ParseError ??= (prefix, operand, suffix);
     private enum StepKind { Constant, File, VariableIsSet, NamerefIsSet, Not, And, Or }
     private readonly record struct Step(StepKind Kind, int Value);
+
+    private const int InlineStepCapacity = 2;
+
+    [InlineArray(InlineStepCapacity)]
+    private struct InlineSteps
+    {
+        private Step _element;
+    }
 }
