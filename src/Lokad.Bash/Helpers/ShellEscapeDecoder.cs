@@ -22,7 +22,7 @@ public static class ShellEscapeDecoder
     /// <summary>Retains decoded backing capacities in the supplied parser or expansion owner.</summary>
     internal static ShellValue DecodeAnsiCValue(ReadOnlySpan<byte> source, MemoryCapacity? memory)
     {
-        if (DecodeAnsiCEscapes(source, memory) is { } decoded)
+        if (DecodeAnsiCEscapes(source, memory, out _) is { } decoded)
             return decoded;
 
         if (source.Length >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
@@ -33,10 +33,15 @@ public static class ShellEscapeDecoder
 
     /// <summary>Reuses the input backing when no escape changes the value.</summary>
     internal static ShellValue DecodeAnsiCValue(ShellValue source, MemoryCapacity? memory) =>
-        DecodeAnsiCEscapes(source.Bytes.Span, memory) ?? source;
+        DecodeAnsiCValue(source, memory, out _);
 
-    private static ShellValue? DecodeAnsiCEscapes(ReadOnlySpan<byte> source, MemoryCapacity? memory)
+    /// <summary>Reports whether a decoded NUL ended the returned literal value.</summary>
+    internal static ShellValue DecodeAnsiCValue(ShellValue source, MemoryCapacity? memory, out bool decodedNul) =>
+        DecodeAnsiCEscapes(source.Bytes.Span, memory, out decodedNul) ?? source;
+
+    private static ShellValue? DecodeAnsiCEscapes(ReadOnlySpan<byte> source, MemoryCapacity? memory, out bool decodedNul)
     {
+        decodedNul = false;
         Span<byte> encoded = stackalloc byte[MaximumEscapeBytes];
         for (var scan = 0; scan < source.Length;)
         {
@@ -48,19 +53,20 @@ public static class ShellEscapeDecoder
                 break;
             var escape = Decode(source[(slash + 1)..], ShellEscapeMode.AnsiCQuoted, encoded);
             if (escape.Status != ShellEscapeStatus.Literal)
-                return BuildChangedValue(source, slash, escape, encoded, memory);
+                return BuildChangedValue(source, slash, escape, encoded, memory, out decodedNul);
             scan = slash + 1;
         }
         return null;
 
         static ShellValue BuildChangedValue(ReadOnlySpan<byte> source, int slash, ShellEscapeResult first,
-            Span<byte> encoded, MemoryCapacity? memory)
+            Span<byte> encoded, MemoryCapacity? memory, out bool decodedNul)
         {
             var capacity = Math.Min(source.Length, ByteMemoryBuilder.DefaultCapacity);
             using var output = memory is null ? ByteMemoryBuilder.CreateUnaccounted(capacity)
                 : new ByteMemoryBuilder(capacity, memory);
             output.Append(source[..slash]);
-            var index = AppendEscape(first, encoded, output) ? slash + 1 + first.Consumed : source.Length;
+            decodedNul = !AppendEscape(first, encoded, output);
+            var index = decodedNul ? source.Length : slash + 1 + first.Consumed;
             while (index < source.Length)
             {
                 if (source[index] != (byte)'\\' || index + 1 == source.Length)
@@ -83,7 +89,10 @@ public static class ShellEscapeDecoder
                     continue;
                 }
                 if (!AppendEscape(result, encoded, output))
+                {
+                    decodedNul = true;
                     break;
+                }
             }
             return ShellValue.FromBytes(output.ToCompactMemory(memory));
         }

@@ -126,7 +126,7 @@ internal static class BracedParameterScanner
                 resolveLateSubscripts ? ScanPhase.Operand : ScanPhase.Lexical, quotes, ref edits);
             hasSpellingEdits = edits.HasEdits;
             expandedQuoteSyntax = edits.HasUnprotectedEdits;
-            spelling = new SourceSpelling(payload, edits.Captures);
+            spelling = new SourceSpelling(payload, edits.Captures) { EndsAtDecodedNul = edits.EndsAtDecodedNul };
             return status;
         }
         finally { edits.Dispose(); }
@@ -461,18 +461,21 @@ internal static class BracedParameterScanner
         internal readonly bool HasEdits => _edits != null;
         internal RejectedSelectorCapture RejectedSelector { get; set; }
         internal bool HasUnprotectedEdits { get; private set; }
+        internal bool EndsAtDecodedNul { get; private set; }
         internal readonly IReadOnlyList<SpellingCapture>? Captures => _captures;
 
         internal void AddQuote(ShellScanContext context, int start, int end, ShellSource literal, bool protect)
         {
             // The edit is consumed while the physical backing still belongs to this scan.
-            PrepareEdit(context).Add(new Edit(start, end, ShellEscapeDecoder.DecodeAnsiCValue(literal.ToValue(), _scratch), protect, null));
+            var edits = PrepareEdit(context);
+            var value = ShellEscapeDecoder.DecodeAnsiCValue(literal.ToValue(), _scratch, out var decodedNul);
+            edits.Add(new Edit(start, end, value, protect, null, EndsAtDecodedNul: !protect && decodedNul));
             _hasQuoteEdits = true;
             HasUnprotectedEdits |= !protect;
         }
 
         internal void AddCapture(ShellScanContext context, int start, int end, CommandSubstitutionSyntax capture) =>
-            PrepareEdit(context).Add(new Edit(start, end, default, Protect: false, capture));
+            PrepareEdit(context).Add(new Edit(start, end, default, Protect: false, capture, EndsAtDecodedNul: false));
 
         private List<Edit> PrepareEdit(ShellScanContext context)
         {
@@ -520,7 +523,14 @@ internal static class BracedParameterScanner
                         throw new ByteMemoryBuilder.LimitExceededException();
                 }
                 else
+                {
                     output.Append(edit.Value.Bytes.Span);
+                    if (edit.EndsAtDecodedNul)
+                    {
+                        EndsAtDecodedNul = true;
+                        return ShellSource.FromBytes(output.ToCompactMemory(context.SyntaxMemory));
+                    }
+                }
                 start = edit.End;
             }
             AppendSource(output, context, source.Slice(start, end - start), ref adjustment);
@@ -546,7 +556,8 @@ internal static class BracedParameterScanner
 
         internal readonly void Dispose() => _scratch?.Dispose();
 
-        private readonly record struct Edit(int Start, int End, ShellValue Value, bool Protect, CommandSubstitutionSyntax? Capture);
+        private readonly record struct Edit(int Start, int End, ShellValue Value, bool Protect,
+            CommandSubstitutionSyntax? Capture, bool EndsAtDecodedNul);
     }
 
     private static int ReadSimpleNameEnd(ReadOnlySpan<byte> text, int start)

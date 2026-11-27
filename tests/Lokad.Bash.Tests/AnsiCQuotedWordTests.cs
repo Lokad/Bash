@@ -70,6 +70,43 @@ public sealed class AnsiCQuotedWordTests
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData("v=ready\nprintf '[%s]' \"${v:-$'a\\0hidden'}\"\nprintf '<after:%s>' \"$?\"\n",
+        0, "<after:1>", "line 2: bad substitution: no closing `}' in \"${v:-a\n")]
+    [InlineData("unset v outer\nprintf '[%s]' \"${outer:-${v:-$'a\\x00hidden'}}\"\nprintf '<after:%s>' \"$?\"\n",
+        0, "<after:1>", "line 2: bad substitution: no closing `}' in \"${outer:-${v:-a\n")]
+    [InlineData("unset v; n=0\nprintf '[arg:%s]' \"$((++n))${v:-$'a\\0hidden'}\"\nprintf '[next:%s n:%s]' \"$?\" \"$n\"\n",
+        0, "[next:1 n:0]", "line 2: bad substitution: no closing `}' in \"$((++n))${v:-a\n")]
+    [InlineData("unset v; n=0\nprintf '[arg:%s]' \"$((++n))\" \"${v:-$'a\\0hidden'}\" 2>err\n"
+        + "printf '[next:%s n:%s]' \"$?\" \"$n\"\n",
+        0, "[next:1 n:1]", "line 2: bad substitution: no closing `}' in \"${v:-a\n")]
+    [InlineData("unset v\nprintf '[%s]' \"$(printf seen >&2; printf str)${v:-$'a\\0hidden'}\"\nprintf '<after:%s>' \"$?\"\n",
+        0, "<after:1>", "line 2: bad substitution: no closing `}' in \"$(printf seen 1>&2; printf str)${v:-a\n")]
+    [InlineData("unset v\nprintf '[%s]' \"${v:-$'a}\\0hidden'}\"\nprintf '<after:%s>' \"$?\"\n",
+        0, "[a]<after:0>", "")]
+    [InlineData("unset v\ntrap 'printf \"EXIT:%s\" \"$?\"' EXIT\nset -e\nprintf '%s' \"${v:-$'a\\0hidden'}\"\nprintf bad\n",
+        1, "EXIT:1", "line 4: bad substitution: no closing `}' in \"${v:-a\n")]
+    public async Task DecodedNulEndsAWordWithAnUnprotectedParameterOperand(string script, int status, string stdout, string stderr)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Evaluation.Evaluation(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(status, result.ExitCode);
+            Assert.Equal(stdout, host.StandardOutput.TextContent);
+            Assert.Equal(stderr, host.StandardError.TextContent);
+            Assert.False(await EndToEndHarness.FileExistsAsync(host, "/err"));
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
     [Fact]
     public async Task Invocation_PassesDecodedSeparatorInsteadOfCommandLocalEscapeSpelling()
     {

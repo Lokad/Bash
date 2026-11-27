@@ -294,7 +294,9 @@ internal sealed class ShellSourceCursor
                             resolveLateSubscripts: false, out _, out _) == BracedParameterScanStatus.Found)
                     {
                         cursor.Position = close + 1;
-                        ProjectNested(first, payloadStart, close, cursor.Position, "${"u8, "}"u8, payload, CountLines(payload));
+                        // Replay must retain the literal that ends the normalized word.
+                        if (!payload.EndsAtDecodedNul)
+                            ProjectNested(first, payloadStart, close, cursor.Position, "${"u8, "}"u8, payload, CountLines(payload));
                         continue;
                     }
 

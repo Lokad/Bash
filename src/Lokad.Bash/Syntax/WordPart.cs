@@ -71,6 +71,7 @@ public sealed class SourceWordPart : WordPart
     internal int RenderedLineAdjustment { get; init; }
     internal ParameterSubscriptFailure ParameterSubscriptFailure { get; init; }
     internal bool HasExpandedParameterQuoteSyntax { get; init; }
+    internal bool EndsAtDecodedNul { get; init; }
     internal IReadOnlyList<SpellingCapture>? SpellingCaptures { get; init; }
     internal int SourceOffset { get; }
 
@@ -107,6 +108,7 @@ public sealed class SourceWordPart : WordPart
             RenderedLineAdjustment = RenderedLineAdjustment,
             ParameterSubscriptFailure = ParameterSubscriptFailure,
             HasExpandedParameterQuoteSyntax = HasExpandedParameterQuoteSyntax,
+            EndsAtDecodedNul = EndsAtDecodedNul && start + length == Source.Length,
             SpellingCaptures = SpellingCaptures
         };
     }

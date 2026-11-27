@@ -78,6 +78,9 @@ public readonly struct ShellSource
 /// <summary>Source spelling with selected nested captures rendered on demand.</summary>
 internal readonly record struct SourceSpelling(ShellSource Source, IReadOnlyList<SpellingCapture>? Captures)
 {
+    // The physical delimiters were read, but they do not belong to the normalized word.
+    internal bool EndsAtDecodedNul { get; init; }
+
     internal void CopyCaptures(int offset, ref List<SpellingCapture>? destination, MemoryCapacity? memory)
     {
         if (Captures == null)

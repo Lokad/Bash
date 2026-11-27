@@ -1592,16 +1592,20 @@ internal sealed class Tokenizer
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
         var expandedParameterQuoteSyntax = false;
+        var endsAtDecodedNul = false;
         var quoteBounds = quotedOperand ? new QuotedWordBounds(Position, delimiterStart) : default;
 
         void AddPart(WordPart part)
         {
+            if (endsAtDecodedNul)
+                return;
             if (quotedOperand)
             {
                 part.DoubleQuote = continuesQuote ? DoubleQuoteBoundary.Continuation : DoubleQuoteBoundary.Start;
                 continuesQuote = true;
             }
             parts.Add(part);
+            endsAtDecodedNul = part is SourceWordPart { EndsAtDecodedNul: true };
         }
 
         void FlushUnquoted()
@@ -1622,6 +1626,7 @@ internal sealed class Tokenizer
                 RenderedLineAdjustment = renderedLineAdjustment,
                 ParameterSubscriptFailure = subscriptFailure,
                 HasExpandedParameterQuoteSyntax = expandedParameterQuoteSyntax,
+                EndsAtDecodedNul = part.EndsAtDecodedNul,
                 SpellingCaptures = part.Captures
             });
             renderedLineAdjustment = 0;
@@ -1711,7 +1716,8 @@ internal sealed class Tokenizer
                         RecordError(error);
                         return new Word([]);
                     }
-                    parts.AddRange(operand.Parts);
+                    if (!endsAtDecodedNul)
+                        parts.AddRange(operand.Parts);
                 }
                 else
                     AddPart(WordPart.FromValue(WordPartKind.SingleQuoted, content));
@@ -1728,7 +1734,11 @@ internal sealed class Tokenizer
                     spelling.RecordLocalePrefix(Position, quoteContentStart - 1);
                 Position = quoteContentStart;
                 var quotedParts = ReadDoubleQuotedParts(span, syntax, spelling);
-                parts.AddRange(quotedParts);
+                if (!endsAtDecodedNul)
+                {
+                    parts.AddRange(quotedParts);
+                    endsAtDecodedNul = quotedParts is [.., SourceWordPart { EndsAtDecodedNul: true }];
+                }
                 continuesQuote = false;
                 continue;
             }
@@ -1976,7 +1986,7 @@ internal sealed class Tokenizer
                         _scanContext.SubstitutionFailure = failure;
                 }
             }
-            content.AppendParameter(start, endIndex + 1, payload);
+            content.AppendExpansion(start, endIndex + 1, "${"u8, payload, "}"u8);
             if (hasSpellingEdits)
             {
                 spelling.RecordParameter(start, endIndex + 1, payload);
@@ -2013,12 +2023,16 @@ internal sealed class Tokenizer
         var renderedLineAdjustment = 0;
         var subscriptFailure = ParameterSubscriptFailure.None;
         var expandedParameterQuoteSyntax = false;
+        var endsAtDecodedNul = false;
         var content = new WordPartBuffer(_input, _scanContext);
 
         void AddPart(WordPart part)
         {
+            if (endsAtDecodedNul)
+                return;
             part.DoubleQuote = parts.Count == 0 ? DoubleQuoteBoundary.Start : DoubleQuoteBoundary.Continuation;
             parts.Add(part);
+            endsAtDecodedNul = part is SourceWordPart { EndsAtDecodedNul: true };
         }
 
         void Flush(bool allowEmpty)
@@ -2043,6 +2057,7 @@ internal sealed class Tokenizer
                 RenderedLineAdjustment = renderedLineAdjustment,
                 ParameterSubscriptFailure = subscriptFailure,
                 HasExpandedParameterQuoteSyntax = expandedParameterQuoteSyntax,
+                EndsAtDecodedNul = part.EndsAtDecodedNul,
                 SpellingCaptures = part.Captures
             });
             renderedLineAdjustment = 0;
@@ -2156,11 +2171,14 @@ internal sealed class Tokenizer
         private int _start;
         private int _length;
         private List<SpellingCapture>? _captures;
+        private bool _endsAtDecodedNul;
 
         public readonly int Length => _edited?.Length ?? _length;
 
         public void AppendSource(int start, int length)
         {
+            if (_endsAtDecodedNul)
+                return;
             if (_edited != null)
                 _edited.Append(source.AsSpan(start, length));
             else if (_length == 0)
@@ -2174,27 +2192,27 @@ internal sealed class Tokenizer
                 GetEdited().Append(source.AsSpan(start, length));
         }
 
-        public void AppendExpansion(int start, int end, ReadOnlySpan<byte> opening, ShellSource payload, ReadOnlySpan<byte> closing)
+        public void AppendExpansion(int start, int end, ReadOnlySpan<byte> opening, SourceSpelling payload, ReadOnlySpan<byte> closing)
         {
+            if (_endsAtDecodedNul)
+                return;
+            payload.CopyCaptures(Length + opening.Length, ref _captures, context.SyntaxMemory);
+            if (payload.EndsAtDecodedNul)
+            {
+                GetEdited().Append(opening).Append(payload.Source.Bytes);
+                _endsAtDecodedNul = true;
+                return;
+            }
             // The scanner already recognized the logical delimiters. Their exact
             // widths and the physical payload slice identify an unedited spelling.
-            if (end - start == opening.Length + payload.Length + closing.Length
-                && source.Bytes.Slice(start + opening.Length, payload.Length).Equals(payload.Bytes))
+            if (end - start == opening.Length + payload.Source.Length + closing.Length
+                && source.Bytes.Slice(start + opening.Length, payload.Source.Length).Equals(payload.Source.Bytes))
             {
                 AppendSource(start, end - start);
                 return;
             }
-            GetEdited().Append(opening).Append(payload.Bytes).Append(closing);
+            GetEdited().Append(opening).Append(payload.Source.Bytes).Append(closing);
         }
-
-        public void AppendExpansion(int start, int end, ReadOnlySpan<byte> opening, SourceSpelling payload, ReadOnlySpan<byte> closing)
-        {
-            payload.CopyCaptures(Length + opening.Length, ref _captures, context.SyntaxMemory);
-            AppendExpansion(start, end, opening, payload.Source, closing);
-        }
-
-        public void AppendParameter(int start, int end, SourceSpelling payload) =>
-            AppendExpansion(start, end, "${"u8, payload, "}"u8);
 
         public SourceSpelling TakeSource()
         {
@@ -2210,8 +2228,9 @@ internal sealed class Tokenizer
             }
             _edited = null;
             _length = 0;
-            var part = new SourceSpelling(ShellSource.FromBytes(bytes), _captures);
+            var part = new SourceSpelling(ShellSource.FromBytes(bytes), _captures) { EndsAtDecodedNul = _endsAtDecodedNul };
             _captures = null;
+            _endsAtDecodedNul = false;
             return part;
         }
 

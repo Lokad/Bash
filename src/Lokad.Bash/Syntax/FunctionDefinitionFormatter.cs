@@ -758,6 +758,8 @@ internal static class FunctionDefinitionFormatter
                 if (!success) return false;
                 if (lines != null && part is SourceWordPart { RenderedLineAdjustment: var adjustment })
                     lines.Adjust(adjustment);
+                if (part is SourceWordPart { EndsAtDecodedNul: true })
+                    return true;
             }
             return !doubleQuoted || Append("\"");
         }

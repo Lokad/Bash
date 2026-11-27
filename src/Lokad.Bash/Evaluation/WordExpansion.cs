@@ -272,6 +272,12 @@ internal static partial class WordExpansion
             return;
         if (scope.ExpansionWord == null && word.Parts is not [{ Kind: WordPartKind.HereDocument }])
             scope = scope with { ExpansionWord = word };
+        if (endPart > firstPart && word.Parts[endPart - 1] is SourceWordPart { EndsAtDecodedNul: true } truncated
+            && HasUnclosedParameter(truncated.Source, scope))
+        {
+            await ReportParameterWordSyntaxAsync(word, truncated.Source, missingBrace: true, scope).ConfigureAwait(false);
+            return;
+        }
         if (word.HasIncompleteQuotedParameterSubscript)
         {
             for (var part = firstPart; part < endPart; part++)
@@ -367,6 +373,24 @@ internal static partial class WordExpansion
                 cursor.Advance();
         }
         return ParameterSubscriptFailure.None;
+    }
+
+    private static bool HasUnclosedParameter(ShellSource source, ScopedEvaluation scope)
+    {
+        var cursor = new ShellSourceCursor(source, 0, CreateExpansionScanContext(scope));
+        while (!cursor.IsAtEnd)
+        {
+            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
+            if (cursor.TryConsumeQuoteOrEscape())
+                continue;
+            var parameter = BracedParameterScanner.HasPrefix(source, cursor.Position);
+            if (cursor.SkipNestedExpansion(BracedParameterRecognition.All) is ShellNestedExpansionScan.Complete)
+                continue;
+            if (parameter)
+                return true;
+            cursor.Advance();
+        }
+        return false;
     }
 
     private static Task ReportParameterWordSyntaxAsync(Word? word, ShellSource segment, bool missingBrace,

@@ -1115,8 +1115,12 @@ Braced parameter operands decode authored ANSI-C literals during tokenization.
 Unquoted operands and pattern operators preserve the decoded literal's quoting.
 Double-quoted defaults, alternates, assigning defaults and error operands use
 the decoded bytes as parameter syntax. A decoded delimiter can change the
-reached operand or yield a substitution diagnostic. Only selected operands
-evaluate their expansions. Definition display uses the prepared spelling,
+reached operand or yield a substitution diagnostic. In a directly expanded
+word a decoded NUL in one of these operands ends the normalized word. If its
+prefix still needs a closing brace, the word fails before its expansions run,
+even when the operator would skip the operand. An already complete prefix
+expands normally. Only selected operands evaluate their expansions.
+Definition display uses the prepared spelling,
 including conditional captures nested in ordinary words and other parameters.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
