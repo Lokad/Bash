@@ -254,6 +254,7 @@ exposure needs to retain a subset. Child forks keep their own restoration
 membership and saved bindings.
 
 `read` retains reusable line and logical record buffers within its size limit.
+Zero-count reads skip record buffer creation and use the shared assignment path.
 Custom-delimited record scratch stays charged through dispatch and normalization.
 The field list and decoded fields share an allowance through assignment. Each
 scratch allowance is refunded when its last consumer settles.

@@ -19,6 +19,7 @@ internal sealed class CountingMemoryBudget : IMemoryBudget
 
     public long AdmissionCalls => Interlocked.Read(ref _counter.Calls);
     public long ReservationCalls => Interlocked.Read(ref _counter.Reservations);
+    public long EmptyReservationCalls => Interlocked.Read(ref _counter.EmptyReservations);
 
     /// <summary>Observes successful admission after storage has been charged.</summary>
     public event Action AdmissionSucceeded
@@ -33,6 +34,8 @@ internal sealed class CountingMemoryBudget : IMemoryBudget
     {
         Interlocked.Increment(ref _counter.Calls);
         Interlocked.Increment(ref _counter.Reservations);
+        if (bytes == 0)
+            Interlocked.Increment(ref _counter.EmptyReservations);
         if (!_budget.TryReserve(bytes, out var admitted))
         {
             reservation = null;
@@ -47,6 +50,7 @@ internal sealed class CountingMemoryBudget : IMemoryBudget
     {
         public long Calls;
         public long Reservations;
+        public long EmptyReservations;
         public Action? AdmissionSucceeded;
     }
 

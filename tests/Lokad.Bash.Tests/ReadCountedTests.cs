@@ -1,4 +1,5 @@
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
@@ -47,6 +48,26 @@ public sealed class ReadCountedTests
         Assert.Equal($"<{status}><>", result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, host.ReadCallCount);
+    }
+
+    [Theory]
+    [InlineData("-n0")]
+    [InlineData("-N0")]
+    public async Task ZeroCountSkipsRecordBufferAdmission(string option)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var budget = new CountingMemoryBudget(governor);
+        using var owner = budget.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+
+        var result = await EndToEndHarness.RunScriptAsync($"read {option} value", host, "next\n"u8.ToArray());
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, host.ReadCallCount);
+        Assert.Equal(0, budget.EmptyReservationCalls);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]

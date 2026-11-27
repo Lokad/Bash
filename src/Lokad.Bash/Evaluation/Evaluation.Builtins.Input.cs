@@ -134,12 +134,14 @@ public sealed partial class Evaluation
             return await InvalidTargetAsync(words[argumentIndex]).ConfigureAwait(false);
 
         var inputBinding = selectedInput ?? ResolveInputBinding(inputNumber);
-        var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
-        memory.Content.Truncate(0);
+        var memory = count == 0 ? null : _readWorkspace ??= new ReadWorkspace(Memory.Budget);
         var exitCode = 0;
         try
         {
-            var input = await CollectInputAsync().ConfigureAwait(false);
+            // Zero count uses the selected binding's access mode without a record buffer or borrow.
+            var input = memory != null ? await CollectInputAsync(memory).ConfigureAwait(false)
+                : (ExitCode: inputBinding.CannotRead ? 1 : 0, Content: ReadOnlyMemory<byte>.Empty,
+                    FieldBackslashMode: ReadBackslashMode.Preserve, Failed: false);
             if (input.Failed)
                 return await FinishAsync(input.ExitCode).ConfigureAwait(false);
             exitCode = input.ExitCode;
@@ -214,8 +216,8 @@ public sealed partial class Evaluation
         }
         finally
         {
-            if (memory.Content.Capacity > ReadScratchRetentionBytes
-                || memory.PhysicalLine?.Capacity > ReadScratchRetentionBytes)
+            if (memory != null && (memory.Content.Capacity > ReadScratchRetentionBytes
+                || memory.PhysicalLine?.Capacity > ReadScratchRetentionBytes))
                 ReleaseReadWorkspace();
         }
         return await FinishAsync(exitCode).ConfigureAwait(false);
@@ -260,14 +262,13 @@ public sealed partial class Evaluation
             FinishFailureAsync(WriteInvalidIdentifierDiagnosticAsync(command, name,
                 diagnostics, ClosedStderrHandling.AttemptWrite, GetBuiltinDiagnosticPrefix(scope.Context)), 1);
 
-        async Task<(int ExitCode, ReadOnlyMemory<byte> Content, ReadBackslashMode FieldBackslashMode, bool Failed)> CollectInputAsync()
+        async Task<(int ExitCode, ReadOnlyMemory<byte> Content, ReadBackslashMode FieldBackslashMode, bool Failed)>
+            CollectInputAsync(ReadWorkspace memory)
         {
             var content = memory.Content;
+            content.Truncate(0);
             if (count.HasValue || delimiter != (byte)'\n')
             {
-                // A zero count skips the borrow and uses the known access mode of the selected binding.
-                if (count == 0)
-                    return (inputBinding.CannotRead ? 1 : 0, default, ReadBackslashMode.Preserve, false);
                 var completion = new TaskCompletionSource<ReadInputResult>(TaskCreationOptions.RunContinuationsAsynchronously);
                 PublishOperation(new ReadInputOperation(completion, inputBinding.Handle,
                     ignoreDelimiter ? null : delimiter, count, backslashMode, content));
