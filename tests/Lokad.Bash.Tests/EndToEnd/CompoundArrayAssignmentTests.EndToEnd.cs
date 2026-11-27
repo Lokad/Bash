@@ -390,18 +390,6 @@ public sealed class CompoundArrayAssignmentTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Theory]
-    [InlineData("arr=([1/0]=bad)")]
-    public async Task Evaluation_IndexedAssignment_RejectsInvalidArithmeticSubscript(string assignment)
-    {
-        var script = $@"arr=(keep); {assignment}; status=$?; printf '%s:<%s>:%s\n' ""$status"" ""${{arr[0]}}"" ""${{#arr[@]}}""";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal(string.Empty, result.StdOut);
-        Assert.Equal("line 1: 1/0: division by 0 (error token is \"0\")\n", result.StdErr);
-        Assert.Equal(1, result.ExitCode);
-    }
-
     [Fact]
     public async Task Evaluation_CompoundArrayAssignment_ClearsSparseElements()
     {

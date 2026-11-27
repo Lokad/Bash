@@ -395,6 +395,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
 
     [Theory]
     [InlineData("arr[1/0]=bad")]
+    [InlineData("arr=([1/0]=bad)")]
     public async Task Evaluation_IndexedAssignment_RejectsInvalidArithmeticSubscript(string assignment)
     {
         var script = $@"arr=(keep); {assignment}; status=$?; printf '%s:<%s>:%s\n' ""$status"" ""${{arr[0]}}"" ""${{#arr[@]}}""";
