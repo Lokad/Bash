@@ -4,6 +4,52 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ParameterSubstringTests
 {
+    [Fact]
+    public async Task EmptySubstringOffsetTerminatesATestedCommandWithErrexit()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            v=abc; set -e
+            if printf 'value=<%s>' "${v:}"; then printf branch; fi
+            printf after
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal("line 2: ${v:}: bad substitution\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task EmptySubstringOffsetPublishesFailureBeforeExitAction()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            v=abc; set -e
+            trap 'printf "exit=<%s> pipeline=<%s>" "$?" "$PIPESTATUS"' EXIT
+            printf 'value=<%s>' "${v:}"
+            printf after
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("exit=<1> pipeline=<1>", host.StandardOutput.TextContent);
+        Assert.Equal("line 3: ${v:}: bad substitution\n", host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task EmptySubstringOffsetInASourcedHereDocumentKeepsBodySpellingAndRecovers()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/body", "read value <<EOF\n${v:}\nEOF\nprintf 'inner=<%s>' \"$?\"\n");
+        var result = await host.RunAsync("v=abc; source ./body 2>diagnostic\nprintf 'after=<%s>' \"$?\"\n",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("inner=<1>after=<0>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("./body: line 1: ${v:}\n: bad substitution\n", host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData("set -- dropped '' $'\\377' tail; shift; printf '<%s>' \"${@:1:2}\"", "3C3E3CFF3E")]
     [InlineData("set -- dropped '' tail; shift; IFS=:; printf '<%s>' \"${*: -2:2}\"", "3C3A7461696C3E")]
@@ -125,7 +171,7 @@ public sealed class ParameterSubstringTests
     [InlineData("a=([2]='' [3]=uvwxyz); p='a[i++]'; i=2; printf '<%s>|%s' \"${!p:1:3}\" \"$i\"", "<vwx>|4", "", 0)]
     [InlineData("a=([2]=abcdef [3]=uvwxyz); p='a[i++]'; i=2; printf '<%s>|%s' \"${!p:99:$(printf bad >&2; printf 1)}\" \"$i\"", "<>|4", "", 0)]
     [InlineData("a=(abc def); p='a[$(printf selected >&2; printf 0)]'; printf '<%s>' \"${!p:$(printf offset >&2; printf 1):$(printf length >&2; printf 1)}\"", "<b>", "selectedselectedoffsetlength", 0)]
-    [InlineData("a=(abc def); p='a[i++]'; i=0; eval 'printf \"%s\" \"${!p:}\"'; printf 'after:%s' \"$i\"", "after:1", "${!p:}: bad substitution\n", 0)]
+    [InlineData("a=(abc def); p='a[i++]'; i=0; eval 'printf \"%s\" \"${!p:}\"'; printf 'after:%s' \"$i\"", "after:1", "line 1: ${!p:}: bad substitution\n", 0)]
     [InlineData("a=([2]=abcdef [3]=uvwxyz); i=2; printf '<%s>\\n' \"${a[i++]:i++:2}\" \"$i\"\n", "<de>\n<4>\n", "", 0)]
     [InlineData("a=([2]=abcdef [3]=uvwxyz); i=2; declare -n p='a[i++]'; printf '<%s>|%s' \"${p:1:3}\" \"$i\"", "<bcd>|3", "", 0)]
     [InlineData("a=(abcdef uvwxyz); i=0; declare -n r='a[i++]'; declare -n q=r; p=q; printf '<%s>|%s' \"${!p:1:2}\" \"$i\"", "<bc>|1", "", 0)]
@@ -140,7 +186,7 @@ public sealed class ParameterSubstringTests
     [InlineData("a=([2]=two [5]=five); i=0; printf '<%s>\\n' \"${!a[@]:i++:$(printf bad >&2; printf 2)}\"; printf after\n", "", "line 1: two five: invalid variable name\n", 1)]
     [InlineData("files=([2]=/two [5]='/five words' [9]=/nine); for f in \"${files[@]:3:1}\"; do printf '<%s>\\n' \"$f\"; done", "</five words>\n", "", 0)]
     [InlineData("a=([2]='' [9]=last); for f in \"${a[@]:2:1}\"; do printf '<%s>' \"$f\"; done", "<>", "", 0)]
-    [InlineData("x=abc; eval 'printf \"${x:}\"'; printf 'after:%s' \"$?\"", "after:1", "${x:}: bad substitution\n", 0)]
+    [InlineData("x=abc; eval 'printf \"${x:}\"'; printf 'after:%s' \"$?\"", "after:1", "line 1: ${x:}: bad substitution\n", 0)]
     [InlineData("a=([2]=two [5]=five [9]=nine); printf '<%s>\\n' \"${a[@]:3:1}\" \"${a[@]:3:2}\" \"${a[@]:6}\" \"${a[@]:0:2}\"\n", "<five>\n<five>\n<nine>\n<nine>\n<two>\n<five>\n", "", 0)]
     [InlineData("a=([2]=two [5]=five [9]=nine); printf '<%s>\\n' \"${a[@]: -1}\" \"${a[@]: -5:2}\" \"${a[@]: -11:2}\"\n", "<nine>\n<five>\n<nine>\n", "", 0)]
     [InlineData("a=([2]=two [5]=five); printf '<%s>\\n' \"${a[@]:2:-1}\"; printf after\n", "", "line 1: -1: substring expression < 0\n", 1)]

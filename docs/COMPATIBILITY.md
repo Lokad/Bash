@@ -1574,6 +1574,11 @@ command substitutions. This scan also checks comment-obscured capture closers
 before the length delimiter. Inside an arithmetic group the scan checks
 nested expansions in quoted portions of the group spelling. The length
 operand expands when reached.
+A trailing colon with no offset or length delimiter reports `bad substitution`
+at the reached reader's line. A second colon allows an omitted offset. In an
+expanded here-document, the diagnostic includes the document body spelling.
+With errexit enabled at the root, the malformed offset terminates even a
+tested command and the EXIT action observes status 1.
 A reached negative length rejected by a substring range reports the spelling
 of the length, including whitespace and quotes. It removes line continuations
 and renders parsed command substitutions without running them again.

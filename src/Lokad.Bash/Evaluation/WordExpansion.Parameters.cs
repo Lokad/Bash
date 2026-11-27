@@ -143,7 +143,7 @@ internal static partial class WordExpansion
             case BracedParameterOperatorKind.Substring:
                 if (parsed.Word.IsEmpty)
                 {
-                    await ReportSubstitutionFailureAsync("bad substitution", ExpansionFailureKind.Arithmetic).ConfigureAwait(false);
+                    await ReportBadSubstitutionAsync().ConfigureAwait(false);
                     return;
                 }
                 var nameLength = parsed.Name.Length + (parsed.Modifier == ParameterModifier.Indirect ? 1 : 0);

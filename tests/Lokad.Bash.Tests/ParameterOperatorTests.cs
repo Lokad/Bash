@@ -808,7 +808,7 @@ public sealed class ParameterOperatorTests
     [InlineData("name=ok; printf '<%s>\\n' \"${name:-${bad!}}\"; printf 'after\\n'\n", "<ok>\nafter\n", "", 0)]
     [InlineData("unset name; printf '<%s>\\n' \"${name:-${bad!}}\"; printf 'after\\n'\n", "", "line 1: ${bad!}: bad substitution\n", 1)]
     [InlineData("probe_aa=1; probe_bb=2; printf '<%s>\\n' \"${!probe_*}\"; printf 'after\\n'\n", "<probe_aa probe_bb>\nafter\n", "", 0)]
-    [InlineData("x=abc; printf '<%s>\\n' \"${x:}\" \"${x:1:}\"\n", "", "${x:}: bad substitution\n", 1)]
+    [InlineData("x=abc; printf '<%s>\\n' \"${x:}\" \"${x:1:}\"\n", "", "line 1: ${x:}: bad substitution\n", 1)]
     [InlineData("set -- a b c d e; x=abc; printf '<%s>\\n' \"${##abc}\" \"${#x:-d}\"\n", "", "line 1: ${#x:-d}: bad substitution\n", 1)]
     [InlineData("p=target; target=VALUE; printf '<%s>\\n' \"${!p}\"; p=absent; printf '<%s>\\n' \"${!p:-fallback}\"\n", "<VALUE>\n<fallback>\n", "", 0)]
     [InlineData("p='bad!'; printf '<%s>\\n' \"${!p}\"; printf after\n", "", "line 1: bad!: invalid variable name\n", 1)]
