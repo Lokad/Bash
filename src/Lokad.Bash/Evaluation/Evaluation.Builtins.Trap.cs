@@ -16,36 +16,19 @@ public sealed partial class Evaluation
     {
         var command = words[0];
         var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
-        var index = 1;
         var list = false;
-        if (index < words.Count && words[index].Bytes.Span is [(byte)'-', _, ..])
+        var options = new ShortOptionCursor(words);
+        while (options.TryReadFlag(out var flag))
         {
-            var options = new CommandLineOptionParser(words, allowSingleDashLongOptions: false);
-            options.TryReadRaw(out _);
-            index = words.Count;
-            while (options.TryRead(out var option))
-            {
-                if (option.Kind == CommandLineOptionKind.Argument)
-                {
-                    index = options.NextArgumentIndex - 1;
-                    break;
-                }
-                if (option.Kind == CommandLineOptionKind.ShortOption && option.ShortName == (byte)'p')
-                {
-                    list = true;
-                    continue;
-                }
-                if (option.Kind == CommandLineOptionKind.LongOption && !option.HasValue
-                    && option.LongName.Bytes.Span.SequenceEqual("help"u8))
-                    return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Trap, "trap", negated: false)
-                        .ConfigureAwait(false);
-
-                var invalid = option.Kind == CommandLineOptionKind.ShortOption
-                    ? ShellValue.FromBytes(new byte[] { (byte)'-', option.ShortName }) : ShellValue.FromText("--");
-                return await ReportUsageAsync(invalid).ConfigureAwait(false);
-            }
+            if (flag.Span[0] != (byte)'p')
+                return await ReportUsageAsync(flag).ConfigureAwait(false);
+            list = true;
         }
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Trap, "trap", negated: false)
+                .ConfigureAwait(false);
 
+        var index = options.ArgumentIndex;
         var traps = _state.Traps;
         var status = 0;
         if (list || index == words.Count)
@@ -100,7 +83,7 @@ public sealed partial class Evaluation
         if (index == words.Count)
         {
             if (!ShellTraps.TryParse(action, out _))
-                return await ReportUsageAsync(invalidOption: null).ConfigureAwait(false);
+                return await ReportUsageAsync(invalidFlag: default).ConfigureAwait(false);
             reset = true;
             index--;
         }
@@ -129,13 +112,13 @@ public sealed partial class Evaluation
         }
         return EvaluationResult.FromExitCode(status);
 
-        async Task<EvaluationResult> ReportUsageAsync(ShellValue? invalidOption)
+        async Task<EvaluationResult> ReportUsageAsync(ReadOnlyMemory<byte> invalidFlag)
         {
-            var synopsis = ShellValue.FromText(BuiltinDocumentation.For(BuiltinKind.Trap).Synopsis("trap"));
-            var diagnostic = invalidOption is { } operand
-                ? WriteDiagnosticUnlessStderrClosedAsync([command],
-                    [operand, ShellValue.FromText(": invalid option\ntrap: usage: "), synopsis], scope: null, sourcePrefix)
-                : WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "), synopsis], scope: null);
+            var diagnostic = invalidFlag.IsEmpty
+                ? WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "),
+                    ShellValue.FromText(BuiltinDocumentation.For(BuiltinKind.Trap).Synopsis("trap"))], scope: null)
+                : WriteInvalidShortOptionUnlessStderrClosedAsync(command, ShellValue.FromByte((byte)'-'), invalidFlag,
+                    BuiltinKind.Trap, "trap", sourcePrefix);
             var written = await diagnostic.ConfigureAwait(false);
             return EvaluationResult.FromExitCode(written.IsError ? 1 : 2);
         }

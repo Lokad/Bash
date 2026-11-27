@@ -1162,6 +1162,21 @@ public sealed class TrapCommandUnitTests
     }
 
     [Theory]
+    [InlineData("trap -- --help EXIT", "<0>trap -- '--help' EXIT\n", "")]
+    [InlineData("trap -pp -- --help", "<1>trap -- ':' EXIT\n", "trap: --help: invalid signal specification\n")]
+    [InlineData("trap --help=value", "<2>trap -- ':' EXIT\n",
+        "trap: --: invalid option\ntrap: usage: trap [-p] [--] [action condition ...]\n")]
+    public async Task TrapOnlyRecognizesExactHelpBeforeItsTerminator(string invocation, string output, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync(
+            "trap ':' EXIT; " + invocation + "; printf '<%s>' \"$?\"; trap -p EXIT; trap - EXIT");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("trap -p -- $'\\r+15\\t'", "trap -- 'sample' SIGTERM\n|0|trap -- 'sample' SIGTERM\n", "")]
     [InlineData("trap -p -- -0", "trap -- '' EXIT\n|0|trap -- 'sample' SIGTERM\n", "")]
     [InlineData("trap -- ' +15 '", "|0|", "")]

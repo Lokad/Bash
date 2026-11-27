@@ -17,8 +17,6 @@ public sealed class CommandLineOptionParser
     private int _argumentIndex;
     private ReadOnlyMemory<byte> _shortGroup;
 
-    internal int NextArgumentIndex => _argumentIndex;
-
     /// <summary>Retains the finished argument list; callers must not mutate it.</summary>
     /// <param name="arguments">Already-expanded argument bytes.</param>
     /// <param name="allowSingleDashLongOptions">Treat tokens longer than two bytes, such as <c>-name</c>, as long options.</param>
