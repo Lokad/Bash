@@ -465,22 +465,26 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
-    [InlineData(256)]
-    [InlineData(1563581304)]
-    public async Task DirectCompoundAssignmentWithoutAWholeDestinationStillResolvesItsSelectors(int maximumIndex)
+    [InlineData(256, "([0]=\"last\" [1]=\"tail0\" [2]=\"seed\")", "")]
+    [InlineData(1563581304, "([3]=\"outer\")", "declare -a x[2]=([0]=\"last\" [1]=\"tail0\" [2]=\"seed\")\n")]
+    public async Task DirectCompoundAssignmentThroughAProjectedIndexResolvesItsSelectors(
+        int maximumIndex, string globalCells, string literalListing)
     {
         var result = await EvaluationTestHelper.RunAsync($$"""
-            i=0; j=0; x=outer
+            i=0; j=0; x=outer; slot=([3]=outer)
             f() {
                 local -n slot; local -a slot=([{{maximumIndex}}]=prior)
                 slot=([2]=seed [0]=early [-2]=tail$((j++)) [i++]=last)
                 printf '<%s:%s:%s>\n' "$?" "$i" "$j"
                 declare -p slot x
+                declare -p 'x[2]' 2>/dev/null || :
             }
             f
+            declare -p slot
             """);
 
-        Assert.Equal($"<0:1:1>\ndeclare -an slot=([{maximumIndex}]=\"prior\")\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Equal($"<0:1:1>\ndeclare -an slot=([{maximumIndex}]=\"prior\")\ndeclare -- x=\"outer\"\n"
+            + literalListing + $"declare -a slot={globalCells}\n", result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
@@ -526,6 +530,132 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
 
         Assert.Equal("<1:1>\ndeclare -anr slot=([120]=\"prior\")\ndeclare -ar x=([0]=\"first0\")\n", result.StdOut);
         Assert.Equal("line 6: slot: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task QuotedLocalArrayInitializerUsesTheProjectedWholeBinding()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local x=before
+                local -n slot; local -a slot=([120]=prior)
+                declare -p x
+                local -au 'slot=([0]=fresh)'
+                printf '<%s>\n' "$?"
+                declare -p slot x
+            }
+            f
+            """);
+
+        Assert.Equal("declare -a x=()\n<0>\ndeclare -an slot=([120]=\"prior\")\ndeclare -au x=([0]=\"FRESH\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task LocalArrayNamerefValidatesTheValueBeforeReadonlyOrSelectorEffects()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -ar slot=([2]=prior)
+                local -a 'slot[i++]=has space'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal("<1:0>\ndeclare -anr slot=([2]=\"prior\")\n", result.StdOut);
+        Assert.Equal("line 4: local: `has space': invalid variable name for name reference\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("a", "an alias=()", "FFFFFFFFFFFFFFFF")]
+    [InlineData("A", "An alias=([0]=\"fresh\" )", "")]
+    public async Task TypedLocalArrayInitializerCanPrepareTheAuthoredAlias(
+        string kind, string aliasListing, string diagnosticBytes)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                local -n slot; local -a slot=([2]=prior)
+                local -n alias=slot
+                local -{{kind}} alias=fresh
+                printf '<%s>\n' "$?"
+                declare -p slot alias
+            }
+            f
+            """);
+
+        Assert.Equal($"<0>\ndeclare -an slot=([2]=\"prior\")\ndeclare -{aliasListing}\n", result.StdOut);
+        Assert.Equal<byte>(diagnosticBytes.Length == 0 ? [] : [
+            .. "line 4: local: `"u8, .. Convert.FromHexString(diagnosticBytes), .. "': not a valid identifier\n"u8
+        ], result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task LocalArrayInitializerWithEmptyProjectionWritesBeyondTheCallerLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            slot=([3]=outer); i=0
+            f() {
+                local -n slot; local -a slot=([256]=prior)
+                local -au 'slot[2+i++]=fresh'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot
+            }
+            g() { local slot=middle; f; declare -p slot; }
+            g
+            declare -p slot
+            """);
+
+        Assert.Equal("<0:1>\ndeclare -anu slot=([256]=\"prior\")\ndeclare -- slot=\"middle\"\ndeclare -a slot=([2]=\"fresh\")\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task LocalAssociativeArrayNamerefAppendsAtKeyZeroWithTheRequestedCase()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot; local -A slot=([0]=prior)
+                local -Au slot+=fresh
+                printf '<%s>\n' "$?"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal("<0>\ndeclare -Anu slot=([0]=\"PRIORFRESH\" )\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task LocalArrayNamerefElementProjectionKeepsReadonlyOnTheLiteralLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=outer
+            f() {
+                local -n slot; local -a slot=([1563581304]=prior)
+                local -n alias=slot
+                local -r alias
+                local -a alias=fresh
+                printf '<%s>\n' "$?"
+                declare -p slot alias 'x[2]' x
+            }
+            f
+            declare -p 'x[2]' 2>/dev/null || :
+            """);
+
+        Assert.Equal("<1>\ndeclare -an slot=([1563581304]=\"prior\")\ndeclare -n alias=\"slot\"\ndeclare -ar x[2]\ndeclare -- x=\"outer\"\n",
+            result.StdOut);
+        Assert.Equal("line 6: local: alias: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

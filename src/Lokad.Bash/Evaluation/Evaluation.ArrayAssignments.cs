@@ -355,8 +355,7 @@ public sealed partial class Evaluation
         // Word expansion sees the previous binding. Arithmetic selection and writes see
         // the replacement as it is built; a later arithmetic failure does not roll it back.
         var append = operation == AssignmentOperator.Append;
-        var hasDestination = !name.IsEmpty;
-        if (hasDestination && (!append || !targetVariables.IndexedArrays.ContainsKey(name)))
+        if (!append || !targetVariables.IndexedArrays.ContainsKey(name))
         {
             IReadOnlyList<ShellValue> initial = append && targetVariables.Scalars.TryGetValue(name, out var scalar)
                 ? [scalar]
@@ -365,14 +364,11 @@ public sealed partial class Evaluation
                 return false;
         }
 
-        if (hasDestination)
-            targetVariables.IndexedArrays[name].MarkInitialized();
+        targetVariables.IndexedArrays[name].MarkInitialized();
 
-        var lastIndex = hasDestination && append && targetVariables.IndexedArrays.TryGetValue(name, out var indexed)
+        var lastIndex = append && targetVariables.IndexedArrays.TryGetValue(name, out var indexed)
             ? indexed.MaxIndex ?? -1
             : -1;
-        // With no destination, selectors still see the positions accepted by this initializer.
-        long? discardedMaximum = null;
         var write = initializeReadonly ? WordExpansion.DeclarationWrite.ReadonlyInitializer : WordExpansion.DeclarationWrite.Ordinary;
         foreach (var item in expanded)
         {
@@ -381,7 +377,7 @@ public sealed partial class Evaluation
             {
                 target = await WordExpansion.ResolveCompoundElementAsync(
                     VariableReference.ForElement(name, subscript), item.ExpandedSubscript, item.Value, item.Operator,
-                    scope, targetVariables, retainArrayNameref, discardedMaximum).ConfigureAwait(false);
+                    scope, targetVariables, retainArrayNameref).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return false;
                 if (target == null)
@@ -399,22 +395,15 @@ public sealed partial class Evaluation
                     { InitializesArrayNameref = retainArrayNameref };
             }
 
-            if (hasDestination)
-            {
-                var value = item.Value;
-                // Bash 5.2 prefixes reclassified += items with element zero, including earlier writes.
-                if (item.PrefixWithElementZero && targetVariables.TryGetExpansionValue(name, out var previous))
-                    value = WordExpansion.AppendAssignmentValue(previous, value, scope);
-                if (await target.AssignValueAsync(publicationScope, targetVariables, sourceName, value, item.Operator,
-                        ShellValue.Empty, write, scope).ConfigureAwait(false) is null)
-                    return false;
-            }
+            var value = item.Value;
+            // Bash 5.2 prefixes reclassified += items with element zero, including earlier writes.
+            if (item.PrefixWithElementZero && targetVariables.TryGetExpansionValue(name, out var previous))
+                value = WordExpansion.AppendAssignmentValue(previous, value, scope);
+            if (await target.AssignValueAsync(publicationScope, targetVariables, sourceName, value, item.Operator, ShellValue.Empty, write, scope)
+                    .ConfigureAwait(false) is null)
+                return false;
             if (target is WordExpansion.ResolvedVariableReference.Indexed element)
-            {
                 lastIndex = element.Index.Value;
-                if (!hasDestination)
-                    discardedMaximum = Math.Max(discardedMaximum ?? -1, lastIndex);
-            }
         }
         if (name == FieldSeparators.Name && sourceName == name)
             targetVariables.RefreshIndexedFieldSeparators();

@@ -1384,12 +1384,22 @@ current reader returns failure.
 Direct compound assignment through an uninitialized array nameref
 warns and clears its nameref attribute before checking readonly or
 expanding the initializer. An initialized indexed array nameref uses
-its maximum index's projected spelling to select a whole destination.
-An empty or element spelling evaluates the initializer and selectors
-without publishing cells. An invalid spelling reports its raw bytes
-before either effect. Initialized associative array namerefs report
-the reached binding name because the pins disagree on its diagnostic
-subject bytes.
+its maximum index's projected spelling to select a destination. An
+empty projection creates a new indexed array under the authored name
+in the global namespace. A projected element spelling selects an
+existing literal binding such as `array[2]`. An invalid spelling or a
+missing literal binding reports the projected bytes before operand
+expansion. Initialized associative array namerefs report the reached
+binding name because the pins disagree on the diagnostic subject bytes.
+A local declaration can prepare a literal local for an element
+projection, then write it and apply attributes there. A simple
+initializer validates its spelling as a nameref target when the
+reached array still supplies the declaration binding. A named
+associative initializer writes key zero and can retain the nameref
+attribute. An authored element selector can run once before the
+indexed projection's diagnostic. With an empty indexed projection,
+the marked local keeps its cells while the initializer writes a
+fresh array in the global namespace.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

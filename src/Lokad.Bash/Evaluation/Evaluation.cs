@@ -2504,6 +2504,23 @@ public sealed partial class Evaluation : IFileTester
                     continue;
                 }
                 var local = options.IsLocal(declarationScope, options.Global);
+                BindingName projectedDiagnosticName = default;
+                if (local && functionContext is { } markedFunction
+                    && options.NamerefChange != DeclarationAttributeChange.Set
+                    && markedFunction.Locals.Declares(reference.Name)
+                    && commandVars.TryResolveBinding(reference.Name, selectOwner: null, out var markedBinding)
+                    && markedBinding.IsArrayNameref && commandVars.GetArrayMetadata(markedBinding.Name) is { } markedArray)
+                {
+                    var selected = await SelectLocalArrayNamerefDeclarationAsync(reference, operand, markedBinding, markedArray, markedFunction)
+                        .ConfigureAwait(false);
+                    if (HasPendingExpansionError)
+                        break;
+                    if (selected is not { } selectedReference)
+                        continue;
+                    if (selectedReference.Name != reference.Name)
+                        projectedDiagnosticName = reference.Name;
+                    reference = selectedReference;
+                }
                 if (element && reference.Subscript.IsEmpty)
                 {
                     var clearsArrayKind = options.IndexedChange == DeclarationAttributeChange.Clear
@@ -3589,7 +3606,8 @@ public sealed partial class Evaluation : IFileTester
                         }
                         var writeTarget = activeIndex ?? await AwaitWordExpansionAsync(WordExpansion.ResolveDeclarationReferenceAsync(
                             writeReference, ordinaryElement == null ? writeScope : GetDeclarationElementScope(), selectorOwner,
-                            reference.Kind != VariableReferenceKind.Name || writesNamedElement || ordinaryElement != null ? commandVars : writeVariables))
+                            reference.Kind != VariableReferenceKind.Name || writesNamedElement || ordinaryElement != null ? commandVars : writeVariables,
+                            projectedDiagnosticName))
                             .ConfigureAwait(false);
                         if (writeTarget != null && !ReferenceEquals(selectorOwner, writeVariables))
                         {
@@ -3602,8 +3620,8 @@ public sealed partial class Evaluation : IFileTester
                         var assigned = !HasPendingExpansionError && writeTarget != null
                             && await TryAssignDeclarationValueAsync(writeTarget, writeReference,
                                 writeScope, writeVariables, value, operand.Operator,
-                                declarationWrite, ordinaryElement?.Name
-                                    ?? (local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName),
+                                declarationWrite, ordinaryElement?.Name ?? (!projectedDiagnosticName.IsEmpty ? projectedDiagnosticName
+                                    : local && reference.Kind != VariableReferenceKind.Name ? sourceName : declarationName),
                                 applyAssignmentAttributes: !attributesPrepared, writesNamedElement).ConfigureAwait(false);
                         if (completesLocalNamerefArray)
                         {
@@ -3838,6 +3856,173 @@ public sealed partial class Evaluation : IFileTester
                     promotionMemory.PrepareListCapacity(promotions, 1);
                     promotions.Add((name, value, GetPromotionAttributes(commandVars, name)));
                 }
+            }
+
+            async Task<VariableReference?> SelectLocalArrayNamerefDeclarationAsync(VariableReference reference, PreparedDeclarationOperand operand,
+                VariableBinding binding, Variables.ArrayMetadata array, FunctionContext function)
+            {
+                var source = reference.Name;
+                var alias = source != binding.Name;
+                var clears = options.NamerefChange == DeclarationAttributeChange.Clear;
+                var subscripted = reference.Kind != VariableReferenceKind.Name;
+                var indexed = array.Kind == ArrayKind.Indexed;
+                var requested = options.ArrayKind;
+                var requestedKind = requested == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
+                var spelling = indexed ? WordExpansion.GetIndexedArrayNamerefSpelling(array.MaxIndex) : ShellValue.Empty;
+                if (indexed && (!alias || !clears) && !spelling.IsEmpty
+                    && VariableReference.TryParseNamerefTarget(spelling, Memory, out var projected))
+                {
+                    var name = GetArrayNamerefProjectionName(projected, spelling);
+                    if (name == source)
+                        return reference;
+                    var whole = VariableReference.ForName(name);
+                    if (operand.CompoundApplied)
+                    {
+                        if (clears)
+                            return reference;
+                        if (function.Locals.Declares(name) && commandVars.TryGetNameref(name, out _))
+                            return null;
+                        var declaration = new VariableOperand(VariableOperandKind.Name, whole, ShellValue.Empty);
+                        if (function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration, prefixNames,
+                                requested, isNameref: false, options.Inherit, caseChange: default, elementAttributes: default,
+                                Memory, function.Enclosing))
+                            await ApplyAttributesAsync(name, commandVars, global: false, local: true, options.ExportChange)
+                                .ConfigureAwait(false);
+                        else
+                            await DiagnoseAsync(source, ArrayConversionMessage(requestedKind)).ConfigureAwait(false);
+                        return null;
+                    }
+                    if (operand.Value.HasValue && (commandVars.IsReadonly(name)
+                        || clears && !subscripted && commandVars.IsReadonlyBinding(source)))
+                    {
+                        await DiagnoseReadonlyAsync(source).ConfigureAwait(false);
+                        return null;
+                    }
+                    if (requested != ArrayAssignmentKind.Auto && HasConflictingArrayKind(commandVars, name, requestedKind))
+                    {
+                        await DiagnoseAsync(source, ArrayConversionMessage(requestedKind)).ConfigureAwait(false);
+                        return null;
+                    }
+                    if (RejectsArrayAttributeRemoval(commandVars, source))
+                    {
+                        await DiagnoseAsync(source, "cannot destroy array variables in this way").ConfigureAwait(false);
+                        return null;
+                    }
+                    if (subscripted && reference.Subscript.IsEmpty)
+                    {
+                        await DiagnoseBadArraySubscriptAsync(operand.Name).ConfigureAwait(false);
+                        return null;
+                    }
+                    if (clears && !subscripted)
+                        commandVars.TryRemoveNamerefAttribute(source);
+                    return subscripted ? VariableReference.ForElement(name, reference.Subscript) : whole;
+                }
+                if (operand.CompoundApplied || operand.Value == null
+                    && (clears || options.ReadonlyChange == DeclarationAttributeChange.Clear))
+                    return reference;
+
+                if (alias && requested == ArrayAssignmentKind.Auto && clears)
+                    return reference;
+                var preparesAliasArray = alias && (requested != ArrayAssignmentKind.Auto || subscripted);
+                if (preparesAliasArray)
+                {
+                    // The authored scalar alias becomes a separate marked array.
+                    indexed = requested != ArrayAssignmentKind.Associative;
+                    spelling = indexed ? WordExpansion.IndexedArrayNamerefSpelling : ShellValue.Empty;
+                    function.Locals.PrepareNamerefArray(commandVars, source, indexed ? ArrayKind.Indexed : ArrayKind.Associative, initialized: true,
+                        retainNameref: true, attributes: default, Memory);
+                }
+                if (operand.Value is not { } value)
+                {
+                    if (!alias)
+                        return reference;
+                    await ApplyAttributesAsync(source, commandVars, global: false, local: true, options.ExportChange)
+                        .ConfigureAwait(false);
+                    return null;
+                }
+                if (!clears && !VariableReference.TryParseNamerefTarget(value, Memory, out _))
+                {
+                    await DiagnoseQuotedAsync(value, "invalid variable name for name reference").ConfigureAwait(false);
+                    return null;
+                }
+                if (commandVars.IsReadonlyBinding(source))
+                {
+                    await DiagnoseReadonlyAsync(source).ConfigureAwait(false);
+                    return null;
+                }
+                if (conflictingArrayKinds || requested != ArrayAssignmentKind.Auto
+                    && indexed != (requested == ArrayAssignmentKind.Indexed))
+                {
+                    var conflictingKind = conflictingArrayKinds
+                        ? indexed ? ArrayKind.Associative : ArrayKind.Indexed
+                        : requestedKind;
+                    await DiagnoseAsync(source, ArrayConversionMessage(conflictingKind)).ConfigureAwait(false);
+                    return null;
+                }
+                if (RejectsArrayAttributeRemoval(commandVars, source))
+                {
+                    await DiagnoseAsync(source, "cannot destroy array variables in this way").ConfigureAwait(false);
+                    return null;
+                }
+                if (subscripted && reference.Subscript.IsEmpty)
+                {
+                    await DiagnoseBadArraySubscriptAsync(operand.Name).ConfigureAwait(false);
+                    return null;
+                }
+                if (clears && !subscripted)
+                    commandVars.TryRemoveNamerefAttribute(source);
+
+                if (alias && !preparesAliasArray)
+                {
+                    var target = operand.Operator == AssignmentOperator.Append && commandVars.TryGetNameref(source, out var previous)
+                        ? WordExpansion.AppendAssignmentValue(previous, value, executionScope) : value;
+                    if (!commandVars.TrySetNameref(source, target, Memory))
+                        RecordOperandFailure();
+                    await ApplyAttributesAsync(source, commandVars, global: false, local: true, options.ExportChange)
+                        .ConfigureAwait(false);
+                    return null;
+                }
+                if (!indexed && !subscripted)
+                {
+                    var target = new WordExpansion.ResolvedVariableReference.Associative(source, AssociativeArrayKey.Zero)
+                        { InitializesArrayNameref = true };
+                    if (await TryAssignDeclarationValueAsync(target, reference, executionScope, commandVars, value, operand.Operator,
+                            WordExpansion.DeclarationWrite.Ordinary, source, applyAssignmentAttributes: true, writesNamedElement: false)
+                            .ConfigureAwait(false))
+                        await ApplyAttributesAsync(source, commandVars, global: false, local: true, options.ExportChange).ConfigureAwait(false);
+                    return null;
+                }
+
+                await ApplyAttributesAsync(source, commandVars, global: false, local: true, options.ExportChange).ConfigureAwait(false);
+                IndexedArrayIndex position = default;
+                if (subscripted)
+                {
+                    var target = await AwaitWordExpansionAsync(WordExpansion.ResolveRejectedNamerefSelectorAsync(reference, executionScope))
+                        .ConfigureAwait(false);
+                    if (target is not WordExpansion.ResolvedVariableReference.Indexed element)
+                    {
+                        RecordOperandFailure();
+                        return null;
+                    }
+                    position = element.Index;
+                }
+                if (!indexed || !spelling.IsEmpty)
+                {
+                    if (subscripted)
+                        RecordOperandFailure();
+                    await ReportQuotedDeclarationOperandAsync(indexed ? spelling : source.ToValue(), "not a valid identifier")
+                        .ConfigureAwait(false);
+                    return null;
+                }
+
+                var owner = SelectGlobalOwner(source);
+                if (!owner.TryAssignResolvedArray(source, [], ArrayKind.Indexed, initializeReadonly: false))
+                    await DiagnoseReadonlyAsync(source).ConfigureAwait(false);
+                else
+                    await TryAssignDeclarationValueAsync(new WordExpansion.ResolvedVariableReference.Indexed(source, position),
+                        reference, executionScope, owner, value, AssignmentOperator.Replace, WordExpansion.DeclarationWrite.Ordinary,
+                        source, applyAssignmentAttributes: false, writesNamedElement: false).ConfigureAwait(false);
+                return null;
             }
 
             async Task<bool> TryRejectLocalElementInitializerAsync(VariableReference reference, PreparedDeclarationOperand operand,
@@ -4572,14 +4757,16 @@ public sealed partial class Evaluation : IFileTester
                     .ConfigureAwait(false);
                 return false;
             }
-            if (variables.IsArrayNameref(name))
+            var destination = new VariableBinding(VariableReference.ForName(name), variables);
+            var createsGlobalArray = false;
+            if (destination.IsArrayNameref)
             {
                 var selected = await SelectArrayNamerefDestinationAsync(name, compoundTarget.Name).ConfigureAwait(false);
-                if (selected is not { } destination)
+                if (selected is not { } target)
                     return false;
-                name = destination;
+                (destination, createsGlobalArray) = target;
             }
-            if (variables.IsReadonly(name))
+            if (destination.Owner.IsReadonly(destination.Name))
             {
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope).ConfigureAwait(false);
                 return false;
@@ -4587,13 +4774,14 @@ public sealed partial class Evaluation : IFileTester
             if (!await ValidateCompoundInitializerCapturesAsync(items, scope).ConfigureAwait(false))
                 return false;
 
-            var kind = variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
+            var kind = !createsGlobalArray && destination.Owner.AssociativeArrays.ContainsKey(destination.Name)
+                ? ArrayKind.Associative : ArrayKind.Indexed;
             return await ExpandAndApplyCompoundArrayItemsAsync(
-                new VariableBinding(VariableReference.ForName(name), variables), kind, assignment.Operator, items,
+                destination, kind, createsGlobalArray ? AssignmentOperator.Replace : assignment.Operator, items,
                 AssignmentContext.Direct, scope, scope, compoundTarget.Name, initializeReadonly: false).ConfigureAwait(false);
         }
 
-        async Task<BindingName?> SelectArrayNamerefDestinationAsync(BindingName initial, BindingName source)
+        async Task<(VariableBinding Binding, bool CreatesGlobalArray)?> SelectArrayNamerefDestinationAsync(BindingName initial, BindingName source)
         {
             var variables = scope.Variables;
             var binding = new VariableBinding(VariableReference.ForName(initial), variables);
@@ -4603,27 +4791,31 @@ public sealed partial class Evaluation : IFileTester
             {
                 CheckCancellation();
                 if (!array.IsInitialized)
-                    return await DetachAsync(binding).ConfigureAwait(false);
+                    return await DetachAsync(binding).ConfigureAwait(false) ? (binding, false) : null;
 
                 var spelling = array.Kind == ArrayKind.Indexed
                     ? WordExpansion.GetIndexedArrayNamerefSpelling(array.MaxIndex)
                     : binding.Name.ToValue();
                 if (spelling.IsEmpty)
-                    return BindingName.Empty;
+                    return (new VariableBinding(VariableReference.ForName(source),
+                        scope.Context.GetGlobalBindingOwner(source, variables)), true);
                 if (array.Kind == ArrayKind.Associative
                     || !VariableReference.TryParseNamerefTarget(spelling, Memory, out var projected))
                 {
                     await ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
                     return null;
                 }
-                // A projected element spelling has no whole-array destination.
-                if (projected.Kind != VariableReferenceKind.Name)
-                    return BindingName.Empty;
+                var name = GetArrayNamerefProjectionName(projected, spelling);
+                if (projected.Kind != VariableReferenceKind.Name && !variables.HasBinding(name))
+                {
+                    await ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
+                    return null;
+                }
                 visited ??= [];
                 visitedMemory.PrepareSetCapacity(visited, binding.Name,
                     global::Lokad.Bash.Evaluation.Variables.BindingNameSetEntryBytes);
                 if (!visited.Add(binding.Name)
-                    || !variables.TryResolveBinding(projected.Name, selectOwner: null, out binding))
+                    || !variables.TryResolveBinding(name, selectOwner: null, out binding))
                 {
                     await ReportCircularNameReferenceAsync(source, scope).ConfigureAwait(false);
                     SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
@@ -4632,27 +4824,30 @@ public sealed partial class Evaluation : IFileTester
             }
 
             if (binding.IsUnsetNameref)
-                return await DetachAsync(binding).ConfigureAwait(false);
+                return await DetachAsync(binding).ConfigureAwait(false) ? (binding, false) : null;
             if (binding.TryGetInvalidNameref(out var invalid) || binding.Reference.Kind != VariableReferenceKind.Name)
             {
                 var subject = binding.Reference.Kind == VariableReferenceKind.Name ? invalid : binding.Reference.ToValue(Memory);
                 await ReportInvalidNamerefElementTargetAsync(subject, scope).ConfigureAwait(false);
                 return null;
             }
-            return binding.Name;
-            async Task<BindingName?> DetachAsync(VariableBinding selected)
+            return (binding, false);
+            async Task<bool> DetachAsync(VariableBinding selected)
             {
                 await ReportRemovingNamerefAsync(source, GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                 if (!scope.CanExpand)
-                    return null;
+                    return false;
                 // The unassigned array loses the flag even if readonly rejects the later write.
                 if (selected.IsArrayNameref)
                     variables.UpdateBindingAttributes(selected.Name, BindingAttributes.None, BindingAttributes.ArrayNameref);
                 else
                     variables.TryRemoveNamerefAttribute(selected.Name);
-                return selected.Name;
+                return true;
             }
         }
+
+        BindingName GetArrayNamerefProjectionName(VariableReference projection, ShellValue spelling) =>
+            projection.Kind == VariableReferenceKind.Name ? projection.Name : BindingNameExpansion.FromValue(spelling, Memory);
     }
 
     private EvaluationResult CompleteCommandResult(

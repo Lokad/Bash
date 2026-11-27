@@ -486,13 +486,12 @@ internal static partial class WordExpansion
 
     internal static Task<ResolvedVariableReference?> ResolveCompoundElementAsync(
         VariableReference reference, ShellValue expandedSubscript, ShellValue value, AssignmentOperator operation,
-        ScopedEvaluation scope, Variables targetVariables, bool initializesArrayNameref, long? discardedMaximum) =>
+        ScopedEvaluation scope, Variables targetVariables, bool initializesArrayNameref) =>
         ResolveReferenceAsync(reference, ReferenceUse.CompoundAssign, scope, ExpansionPurpose.ArithmeticSource,
-            new CompoundElement(expandedSubscript, value, operation, initializesArrayNameref, discardedMaximum),
-            targetVariables, targetVariables);
+            new CompoundElement(expandedSubscript, value, operation, initializesArrayNameref), targetVariables, targetVariables);
 
     private readonly record struct CompoundElement(ShellValue Subscript, ShellValue Value, AssignmentOperator Operator,
-        bool InitializesArrayNameref, long? DiscardedMaximum);
+        bool InitializesArrayNameref);
 
     /// <summary>Reads a selected binding through ordinary nameref/array expansion rules.</summary>
     internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
@@ -565,8 +564,12 @@ internal static partial class WordExpansion
     /// <summary>Separates array storage selection from the binding supplying negative-index bounds.</summary>
     internal static Task<ResolvedVariableReference?> ResolveDeclarationReferenceAsync(
         VariableReference reference, ScopedEvaluation scope, Variables targetVariables, Variables indexVariables) =>
+        ResolveDeclarationReferenceAsync(reference, scope, targetVariables, indexVariables, diagnosticName: default);
+
+    internal static Task<ResolvedVariableReference?> ResolveDeclarationReferenceAsync(
+        VariableReference reference, ScopedEvaluation scope, Variables targetVariables, Variables indexVariables, BindingName diagnosticName) =>
         ResolveReferenceAsync(reference, ReferenceUse.DeclarationAssign, scope,
-            ExpansionPurpose.ArithmeticSource, null, targetVariables, indexVariables);
+            ExpansionPurpose.ArithmeticSource, null, targetVariables, indexVariables, null, ShellValue.Empty, diagnosticName);
 
     /// <summary>Checks the arithmetic selector reached by a rejected local nameref declaration.</summary>
     internal static Task<ResolvedVariableReference?> ResolveRejectedNamerefSelectorAsync(
@@ -592,6 +595,19 @@ internal static partial class WordExpansion
         ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, compound, targetVariables, indexVariables,
             null, ShellValue.Empty);
 
+    private static Task<ResolvedVariableReference?> ResolveReferenceAsync(
+        VariableReference reference,
+        ReferenceUse use,
+        ScopedEvaluation scope,
+        ExpansionPurpose arithmeticPurpose,
+        CompoundElement? compound,
+        Variables targetVariables,
+        Variables indexVariables,
+        ExpandedArraySubscript? preparedSubscript,
+        ShellValue command) =>
+        ResolveReferenceAsync(reference, use, scope, arithmeticPurpose, compound, targetVariables, indexVariables,
+            preparedSubscript, command, diagnosticName: default);
+
     private static async Task<ResolvedVariableReference?> ResolveReferenceAsync(
         VariableReference reference,
         ReferenceUse use,
@@ -601,7 +617,8 @@ internal static partial class WordExpansion
         Variables targetVariables,
         Variables indexVariables,
         ExpandedArraySubscript? preparedSubscript,
-        ShellValue command)
+        ShellValue command,
+        BindingName diagnosticName)
     {
         if (!scope.CanExpand)
             return null;
@@ -796,10 +813,11 @@ internal static partial class WordExpansion
 
             if (index < 0)
             {
-                var maximum = compound?.DiscardedMaximum ?? (indexVariables.GetArrayMetadata(name) is { Kind: ArrayKind.Indexed } array
+                var maximum = use == ReferenceUse.RejectedNamerefDeclaration ? null
+                    : indexVariables.GetArrayMetadata(name) is { Kind: ArrayKind.Indexed } array
                     ? array.MaxIndex
                     : use is ReferenceUse.Assign or ReferenceUse.DirectAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign
-                        && indexVariables.Scalars.ContainsKey(name) ? 0L : (long?)null);
+                        && indexVariables.Scalars.ContainsKey(name) ? 0L : (long?)null;
                 // Conversion discards the alias value but retains its scalar index-zero bound.
                 if (convertedNameref && maximum == null)
                     maximum = 0;
@@ -888,7 +906,7 @@ internal static partial class WordExpansion
 
         Task ReportBadSubscriptAsync()
         {
-            var referenceName = reference.Name.ToValue();
+            var referenceName = (diagnosticName.IsEmpty ? reference.Name : diagnosticName).ToValue();
             if (use is ReferenceUse.Read or ReferenceUse.ShortRead or ReferenceUse.BindingRead or ReferenceUse.Presence or ReferenceUse.DefaultRead)
                 return scope.Effects.ReportArrayReadFailureAsync([referenceName], scope, length: false);
             if (use == ReferenceUse.Length)
