@@ -2878,9 +2878,7 @@ public sealed partial class Evaluation : IFileTester
                 var keepLocalNameref = local && clearedNamerefTarget is { IsEmpty: false } localTarget
                     && !targetVars.HasBinding(BindingNameExpansion.FromValue(localTarget, Memory));
                 var localizesTarget = clearsWholeNameref && keepLocalNameref && !rejectsIntegerNamerefRemoval;
-                var localizesElementSpelling = selectedLocalBinding is { Reference.IsAggregate: true }
-                    || selectedLocalBinding is { Reference.Kind: VariableReferenceKind.Element }
-                        && (element || arrayKind == ArrayAssignmentKind.Auto);
+                var localizesElementSpelling = selectedLocalBinding is { Reference.Kind: not VariableReferenceKind.Name };
                 var clearsReadonlyUnsetNameref = clearsUnsetNameref
                     && operand.Value == null && options.ReadonlyChange != DeclarationAttributeChange.Clear
                     && targetVars.IsReadonlyBinding(name);
@@ -2964,15 +2962,18 @@ public sealed partial class Evaluation : IFileTester
                     }
                     else
                     {
-                        if (local && element && operand.Value != null && existingTargetLocal && functionContext is { } function)
-                            function.Locals.PrepareReadonlyElementDeclaration(targetVars, localDeclarationTarget,
+                        if (local && existingTargetLocal && (element || arrayKind != ArrayAssignmentKind.Auto)
+                            && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear)
+                            && functionContext is { } function)
+                            function.Locals.PrepareReadonlyArrayDeclaration(targetVars, localDeclarationTarget,
                                 arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                         if (ordinaryAssignment && directPipelineStage)
                             operandFailureStatus = PipelineAssignmentFailure;
                         var readonlyName = ordinaryAssignmentBinding is { Reference.Kind: VariableReferenceKind.Element } readonlyElement
                             ? readonlyElement.Name : ordinaryAssignment && global && reference.Kind == VariableReferenceKind.Name
                                 ? sourceName : declarationName;
-                        await DiagnoseReadonlyAsync(readonlyName).ConfigureAwait(false);
+                        await DiagnoseReadonlyAsync(followsLocalNameref && options.ReadonlyChange == DeclarationAttributeChange.Clear
+                            ? localDeclarationTarget : readonlyName).ConfigureAwait(false);
                     }
                     continue;
                 }

@@ -708,8 +708,8 @@ public sealed partial class Variables
                 _owner.CopyBindingFrom(command, name);
         }
 
-        /// <summary>Publishes the array declaration reached before a readonly element write fails.</summary>
-        internal void PrepareReadonlyElementDeclaration(Variables command, BindingName name, ArrayKind kind)
+        /// <summary>Publishes the array declaration reached before an initializer fails on a readonly local.</summary>
+        internal void PrepareReadonlyArrayDeclaration(Variables command, BindingName name, ArrayKind kind)
         {
             if (command.TryGetBinding(name, detachBorrowed: false, out var slot)
                 && slot is ScalarSlot or UnassignedSlot

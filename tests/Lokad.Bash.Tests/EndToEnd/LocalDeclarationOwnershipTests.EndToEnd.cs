@@ -363,12 +363,14 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     [InlineData("@", "-a", "-n", "local -A link[2]=fresh", "-A item[@]=([2]=\"fresh\" )")]
     [InlineData("@", "-ar", "-n", "local -a link=fresh", "-a item[@]=([0]=\"fresh\")")]
     [InlineData("*", "-a", "-nr", "local -a link=fresh", "-a item[*]=([0]=\"fresh\")")]
-    public async Task StoredAggregateNamerefDeclaresTheLiteralLocalBinding(string selector, string baseFlags,
+    [InlineData("i++", "-ar", "-n", "local -a link=fresh", "-a item[i++]=([0]=\"fresh\")")]
+    [InlineData("i++", "-a", "-nr", "local -a link=fresh", "-a item[i++]=([0]=\"fresh\")")]
+    public async Task StoredSelectorDeclaresTheLiteralLocalBinding(string selector, string baseFlags,
         string aliasFlags, string declaration, string literalListing)
     {
         var target = $"item[{selector}]";
         var result = await EvaluationTestHelper.RunAsync($$"""
-            declare {{baseFlags}} item=(zero one)
+            i=0; declare {{baseFlags}} item=(zero one)
             f() {
                 local {{aliasFlags}} link='{{target}}'
                 {{declaration}}
@@ -377,12 +379,43 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
             }
             f
             declare -p '{{target}}' 2>/dev/null
-            printf '<removed:%s>\n' "$?"
+            printf '<removed:%s:%s>\n' "$?" "$i"
             """);
 
         Assert.Equal($"<0>\ndeclare {baseFlags} item=([0]=\"zero\" [1]=\"one\")\n"
-            + $"declare {aliasFlags} link=\"{target}\"\ndeclare {literalListing}\n<removed:1>\n", result.StdOut);
+            + $"declare {aliasFlags} link=\"{target}\"\ndeclare {literalListing}\n<removed:1:0>\n", result.StdOut);
         Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -r link", "local -a link=7", "link", "declare -ar link\n", "link")]
+    [InlineData("local -n link=item; local -r item=seed", "local -A link=7", "item link",
+        "declare -Ar item=()\ndeclare -n link=\"item\"\n", "link")]
+    [InlineData("local -n link=item; local -r item", "local +r -a link", "item link",
+        "declare -ar item\ndeclare -n link=\"item\"\n", "item")]
+    [InlineData("local -n link='item[i++]'; local -r link", "local -A link=7", "item link 'item[i++]'",
+        "declare -a item=([0]=\"zero\" [1]=\"one\")\ndeclare -n link=\"item[i++]\"\ndeclare -Ar item[i++]\n", "link")]
+    [InlineData("local -n link='item[@]'; local -r link=seed", "local -a link=7", "item link 'item[@]'",
+        "declare -a item=([0]=\"zero\" [1]=\"one\")\ndeclare -n link=\"item[@]\"\ndeclare -ar item[@]=()\n", "link")]
+    [InlineData("local -n link='item[i++]'; local -r link=seed", "local +r link[1]", "item link 'item[i++]'",
+        "declare -a item=([0]=\"zero\" [1]=\"one\")\ndeclare -n link=\"item[i++]\"\ndeclare -ar item[i++]=()\n", "item[i++]")]
+    public async Task ReadonlyArrayDeclarationPreparesTheSelectedLocalBinding(string setup, string declaration,
+        string inspection, string listing, string errorName)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; item=(zero one)
+            f() {
+                {{setup}}
+                {{declaration}}
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p {{inspection}}
+            }
+            f
+            """);
+
+        Assert.Equal("<1:0>\n" + listing, result.StdOut);
+        Assert.Equal($"line 4: local: {errorName}: readonly variable\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

@@ -195,9 +195,11 @@ spelling occupies element zero unless the input writes that element.
 An ordinary local redeclaration through an existing local nameref can create
 a local for its whole-name referent. A readonly reference can select a writable
 referent. A readonly local in an enclosing function can be shadowed, and `-I`
-copies its readonly attribute into the new local. An element initializer that
-reaches a readonly scalar local declares its array kind before rejecting the
-write. The selector remains unevaluated.
+copies its readonly attribute into the new local. An array initializer or array
+declaration with `+r` that reaches a readonly scalar local declares its array
+kind before reporting the readonly failure. An unassigned scalar becomes an
+uninitialized array. An assigned scalar becomes an initialized empty array.
+The readonly attribute remains set and a deferred selector remains unevaluated.
 For writable local element declarations, integer, case and export changes
 apply to the selected declaration binding before a deferred selector runs.
 A rejected selector leaves those attributes on that binding. Expansions
