@@ -138,6 +138,35 @@ public sealed class HostedFunctionExportTests
     }
 
     [Theory]
+    [InlineData("''", "f", new byte[] { })]
+    [InlineData("$'\\377'", "f", new byte[] { 0xff })]
+    [InlineData("$'\\377'", "eval f", new byte[] { 0xff })]
+    public async Task RecoveredChildUsesTheReaderNameBytes(string argumentZero, string call, byte[] name)
+    {
+        var script = "unset v\nf(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }; export -f f\n"
+            + "bash -c 'printf \"[zero:%s]\" \"$0\"; " + call + "' " + argumentZero + "; printf '[child:%s]' \"$?\"";
+        byte[] stdout = [.. "[zero:"u8, .. name, .. "][child:127]"u8];
+        byte[] stderr = [.. "bash: f: line 0: unexpected EOF while looking for matching `\"'\n"u8,
+            .. "bash: error importing function definition for `f'\n"u8, .. name, .. ": line 1: f: command not found\n"u8];
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(stdout, host.StandardOutput.Content.ToArray());
+            Assert.Equal(stderr, host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(17)]

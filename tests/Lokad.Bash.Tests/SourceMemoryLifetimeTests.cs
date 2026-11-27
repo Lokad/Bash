@@ -245,7 +245,7 @@ public sealed class SourceMemoryLifetimeTests
         Assert.True(write.FileDescriptor == FileDescriptor.StdOut, Encoding.UTF8.GetString(write.Content.Span));
         Assert.Equal(new byte[] { 0xff, 13 }, write.Content.ToArray());
         // The source owns its displayed path after the descriptor closes and while the function runs.
-        Assert.Equal(body.Length + 24L + 2L * "/a".Length, source.OwnBytes);
+        Assert.Equal(body.Length + MemoryCapacity.ArrayBackingBytes<byte>("/a"u8.Length), source.OwnBytes);
         Assert.Equal(0, host.OpenFileCount);
         await ShellOperationDispatcher.DispatchAsync(write, host, token);
         Assert.Null(await state.GetNextStep(token));

@@ -119,7 +119,7 @@ public sealed partial class Evaluation
             ApplyReadFunctionBraceLine(scope.Context.Coordinates.Offset, readDiagnostics.FunctionBraceLine);
             if (readDiagnostics.HereDocumentWarnings is { } warnings)
                 await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset,
-                    scope.Context.DiagnosticPath, useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
+                    scope.Context.DiagnosticName, useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
             if (readDiagnostics.CompoundItems is { } items
                 && await ReportCompoundItemReadDiagnosticsAsync(items, scope, scope.Context.Coordinates.Offset)
                     .ConfigureAwait(false) is { } readFailure)
@@ -218,7 +218,7 @@ public sealed partial class Evaluation
                 if (line == 0)
                     line = coordinates.FunctionBodyLine != 0 ? coordinates.FunctionBodyLine : coordinates.Line;
                 var timing = new ActiveTiming(started, timed.Portable, scope.Variables, scope.Timing,
-                    scope.Context.DiagnosticPath, coordinates.Locations == null ? 0 : line);
+                    scope.Context.DiagnosticName, coordinates.Locations == null ? 0 : line);
                 var result = await EvaluateCommandAsync(timed.Inner, scope with { Timing = timing }, negated).ConfigureAwait(false);
                 // Bash's return unwinds past the timer; the calling function's timer still reports.
                 if (!_state.ExitedThroughExec && result.Flow != FlowControlKind.Return)
@@ -312,13 +312,13 @@ public sealed partial class Evaluation
 
     internal sealed class ActiveTiming(
         ShellTimingSnapshot started, bool portable, Variables variables, ActiveTiming? enclosing,
-        string? diagnosticPath, int diagnosticLine)
+        ShellValue? diagnosticName, int diagnosticLine)
     {
         internal ShellTimingSnapshot Started { get; } = started;
         internal bool Portable { get; } = portable;
         internal Variables Variables { get; } = variables;
         internal ActiveTiming? Enclosing { get; } = enclosing;
-        internal string? DiagnosticPath { get; } = diagnosticPath;
+        internal ShellValue? DiagnosticName { get; } = diagnosticName;
         internal int DiagnosticLine { get; } = diagnosticLine;
         internal bool Settled { get; set; }
     }
@@ -356,7 +356,7 @@ public sealed partial class Evaluation
         {
             var descriptor = GetStdErrDescriptor();
             var prefix = !descriptor.IsClosed && timing.DiagnosticLine > 0
-                ? new SyntaxDiagnosticPrefix(timing.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, timing.DiagnosticLine)
+                ? new SyntaxDiagnosticPrefix(timing.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, timing.DiagnosticLine)
                 : default;
             await WriteSyntaxDiagnosticLineAsync(descriptor, prefix, error).ConfigureAwait(false);
         }

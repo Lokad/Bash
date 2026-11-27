@@ -604,6 +604,9 @@ evaluator-produced exports, an unclosed delimiter caused by decoded NUL in a
 capture is reported and the affected definition is skipped. A replacement
 export list supplied by the host follows strict startup validation. A definition
 supplied explicitly by the host takes precedence over a matching name.
+The recovered child's source owner keeps the reader name as bytes. Independent
+loaded readers that inherit the name own their copy, including when a function
+retains their source after the caller ends.
 New-host startup uses its own
 environment and descriptors. Child commands preserve captured descriptor bindings,
 exported functions and the working directory without taking ownership of borrowed

@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Threading;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
@@ -20,7 +21,7 @@ internal sealed class SourceMemory
         ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
     public IMemoryScope Budget { get; }
     public MemoryCapacity SyntaxMemory { get; }
-    internal string? DiagnosticPath { get; private set; }
+    internal ShellValue? DiagnosticName { get; private set; }
 
     public SourceMemory(IMemoryScope budget) : this(budget, parent: null) { }
 
@@ -29,16 +30,28 @@ internal sealed class SourceMemory
         Budget = budget;
         SyntaxMemory = new MemoryCapacity(budget, 0);
         _parent = parent;
-        DiagnosticPath = parent?.DiagnosticPath;
+        DiagnosticName = parent?.DiagnosticName;
         parent?.Retain();
     }
 
-    /// <summary>Admits the reader path before publication through a root source owner.</summary>
-    internal void OwnDiagnosticPath(string path, bool prefixCurrentDirectory)
+    /// <summary>Encodes and owns the reader's host path before publication.</summary>
+    internal void OwnDiagnosticName(string path, bool prefixCurrentDirectory)
     {
-        var length = path.Length + (prefixCurrentDirectory ? 2L : 0L);
-        SyntaxMemory.Grow(24L + 2L * length);
-        DiagnosticPath = prefixCurrentDirectory ? "./" + path : path;
+        var encoding = Utf8Text.StrictUtf8;
+        var prefix = prefixCurrentDirectory ? "./"u8 : [];
+        var length = checked(prefix.Length + encoding.GetByteCount(path));
+        SyntaxMemory.Grow(MemoryCapacity.ArrayBackingBytes<byte>(length));
+        var bytes = new byte[length];
+        prefix.CopyTo(bytes);
+        encoding.GetBytes(path.AsSpan(), bytes.AsSpan(prefix.Length));
+        DiagnosticName = ShellValue.FromBytes(bytes);
+    }
+
+    /// <summary>Copies a shell reader name for a source whose lifetime is independent of its caller.</summary>
+    internal void OwnDiagnosticName(ShellValue name)
+    {
+        SyntaxMemory.Grow(MemoryCapacity.ArrayBackingBytes<byte>(name.Bytes.Length));
+        DiagnosticName = ShellValue.FromBytes(name.Bytes.ToArray());
     }
 
     /// <summary>The caller must already hold a live reference while acquiring another.</summary>

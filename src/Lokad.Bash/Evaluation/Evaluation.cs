@@ -482,11 +482,11 @@ public sealed partial class Evaluation : IFileTester
                     result = EvaluationResult.FromExitCode(2);
                 else
                 {
-                    if (startup.DiagnosticPath is { } path && scope.Context.DiagnosticPath == null)
+                    if (startup.DiagnosticName is { } path && scope.Context.DiagnosticName == null)
                     {
                         var parent = scope.Context.SourceMemory;
                         startupSource = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent);
-                        startupSource.OwnDiagnosticPath(path, prefixCurrentDirectory: false);
+                        startupSource.OwnDiagnosticName(path);
                         scope = scope with { Context = scope.Context.WithSourceMemory(startupSource) };
                     }
                     result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
@@ -4645,7 +4645,7 @@ public sealed partial class Evaluation : IFileTester
         var coordinates = context.Coordinates;
         var line = coordinates.RedirectionOpenLine ?? coordinates.Line;
         var prefix = path != null && error.Kind != OperationErrorKind.Unknown && coordinates.Locations != null
-            ? new SyntaxDiagnosticPrefix(context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line == 0 ? null : line) : default;
+            ? new SyntaxDiagnosticPrefix(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line == 0 ? null : line) : default;
         return WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, path, error, prefix);
     }
 
@@ -4656,7 +4656,7 @@ public sealed partial class Evaluation : IFileTester
     internal async Task WriteBadDescriptorDiagnosticAsync(FileDescriptor descriptor, LogicalDescriptor? label,
         Word? spelling, bool reportDuplication, EvaluationContext context)
     {
-        var path = context.DiagnosticPath;
+        var path = context.DiagnosticName;
         var error = OperationError.BadFileDescriptor;
         if (reportDuplication)
         {
@@ -5387,7 +5387,7 @@ public sealed partial class Evaluation : IFileTester
         SetFatalExpansionError(new ExpansionFailure(ExpansionFailureKind.CommandSubstitutionSyntax, exitCode));
         _state.LastExitCode = exitCode;
         var line = Math.Max(1, scope.Context.Coordinates.Line) + lines + 1;
-        return ReportUnclosedDelimiterAsync(eof, line, scope.Context.DiagnosticPath,
+        return ReportUnclosedDelimiterAsync(eof, line, scope.Context.DiagnosticName,
             SyntaxDiagnosticOrigin.CommandSubstitution, SyntaxDiagnosticDetail.PrimaryOnly);
     }
 
@@ -5461,7 +5461,7 @@ public sealed partial class Evaluation : IFileTester
                 var line = GetCaptureDiagnosticLine(token, renderedSource, scope.Context.Coordinates.Line);
                 if (prefixFailure)
                     token = TrimCaptureDiagnosticLine(token, renderedSource);
-                var path = scope.Context.DiagnosticPath;
+                var path = scope.Context.DiagnosticName;
                 await ReportUnexpectedSyntaxAsync(token, path, SyntaxDiagnosticOrigin.CommandSubstitution,
                     line, errexit ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
                 if (rejectedSelector.NeedsParameterDiagnostic && !errexit && word != null)
@@ -5541,7 +5541,7 @@ public sealed partial class Evaluation : IFileTester
 
     private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(EvaluationContext context, int line) =>
         context.Coordinates.Locations == null ? default
-            : new SyntaxDiagnosticPrefix(context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line);
+            : new SyntaxDiagnosticPrefix(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line);
 
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
@@ -5668,24 +5668,22 @@ public sealed partial class Evaluation : IFileTester
 
     private readonly struct SyntaxDiagnosticPrefix
     {
-        private readonly string? _path;
-        private readonly int _pathLength;
+        private readonly ShellValue? _readerName;
         private readonly ShellValue _subject;
         private readonly SyntaxDiagnosticOrigin _origin;
         private readonly ReadOnlyMemory<byte> _lineNumber;
 
-        internal SyntaxDiagnosticPrefix(string? path, SyntaxDiagnosticOrigin origin, int? line)
-            : this(path, ShellValue.Empty, origin, line) { }
+        internal SyntaxDiagnosticPrefix(ShellValue? readerName, SyntaxDiagnosticOrigin origin, int? line)
+            : this(readerName, ShellValue.Empty, origin, line) { }
 
-        internal SyntaxDiagnosticPrefix(string? path, ShellValue subject, SyntaxDiagnosticOrigin origin, int? line)
+        internal SyntaxDiagnosticPrefix(ShellValue? readerName, ShellValue subject, SyntaxDiagnosticOrigin origin, int? line)
         {
-            _path = path;
-            _pathLength = path == null ? 0 : Utf8Text.StrictUtf8.GetByteCount(path);
+            _readerName = readerName;
             _subject = subject;
             _origin = origin;
-            var hasPrefix = path != null || !subject.IsEmpty || origin != SyntaxDiagnosticOrigin.Script;
+            var hasPrefix = readerName != null || !subject.IsEmpty || origin != SyntaxDiagnosticOrigin.Script;
             _lineNumber = hasPrefix && line is { } value ? NumberFormatting.FormatNumber(value) : ReadOnlyMemory<byte>.Empty;
-            Length = hasPrefix ? (path == null ? 0 : _pathLength + 2)
+            Length = hasPrefix ? (readerName is { } name ? name.Bytes.Length + 2 : 0)
                 + (subject.IsEmpty ? 0 : subject.Bytes.Length + 2) + GetOrigin().Length
                 + (_lineNumber.IsEmpty ? 0 : "line "u8.Length + _lineNumber.Length + ": "u8.Length) : 0;
         }
@@ -5696,11 +5694,8 @@ public sealed partial class Evaluation : IFileTester
         {
             if (Length == 0)
                 return;
-            if (_path != null)
-            {
-                Utf8Text.StrictUtf8.GetBytes(_path, diagnostic.AppendSpan(_pathLength));
-                diagnostic.Append(": "u8);
-            }
+            if (_readerName is { } name)
+                diagnostic.Append(name.Bytes).Append(": "u8);
             if (!_subject.IsEmpty)
                 diagnostic.Append(_subject.Bytes.Span).Append(": "u8);
             diagnostic.Append(GetOrigin());
@@ -5718,11 +5713,11 @@ public sealed partial class Evaluation : IFileTester
         };
     }
 
-    private Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, SyntaxDiagnosticOrigin origin,
+    private Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, ShellValue? readerName, SyntaxDiagnosticOrigin origin,
         int line, SyntaxDiagnosticDetail detail) =>
-        ReportUnexpectedSyntaxAsync(syntax, path, ShellValue.Empty, origin, line, detail);
+        ReportUnexpectedSyntaxAsync(syntax, readerName, ShellValue.Empty, origin, line, detail);
 
-    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, string? path, ShellValue subject,
+    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, ShellValue? readerName, ShellValue subject,
         SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
@@ -5767,14 +5762,14 @@ public sealed partial class Evaluation : IFileTester
             ? "syntax error near `"u8 : "syntax error near unexpected token `"u8;
         if (!hasNearToken)
             tokenPrefix = "syntax error\n"u8;
-        var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
+        var prefix = new SyntaxDiagnosticPrefix(readerName, subject, origin, line);
         var prefixLength = prefix.Length;
         var length = reportNearToken
             ? (long)prefixLength + tokenPrefix.Length + (hasNearToken ? syntax.Token.Length + 2L : 0)
             : 0;
         var lineOffset = line - (conditional?.ReadLine ?? line);
         var reasonPrefix = reason.IsEmpty || conditional is not { } read || read.ReasonLine == read.ReadLine
-            ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + read.ReasonLine);
+            ? prefix : new SyntaxDiagnosticPrefix(readerName, subject, origin, lineOffset + read.ReasonLine);
         if (groupCount != 0)
         {
             // Reserve for any 32-bit line number without formatting each prefix twice.
@@ -5802,7 +5797,7 @@ public sealed partial class Evaluation : IFileTester
             for (var index = 0; index < groupCount; index++)
             {
                 var groupLine = lineOffset + groups[index];
-                var groupPrefix = groupLine == line ? prefix : new SyntaxDiagnosticPrefix(path, subject, origin, groupLine);
+                var groupPrefix = groupLine == line ? prefix : new SyntaxDiagnosticPrefix(readerName, subject, origin, groupLine);
                 groupPrefix.AppendTo(diagnostic);
                 diagnostic.Append(MissingConditionalGroup);
             }
@@ -5835,7 +5830,7 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private async Task ReportArithmeticForHeaderAsync(ArithmeticForHeaderError header, string? path,
+    private async Task ReportArithmeticForHeaderAsync(ArithmeticForHeaderError header, ShellValue? readerName,
         SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
@@ -5843,7 +5838,7 @@ public sealed partial class Evaluation : IFileTester
         if (descriptor.IsClosed)
             return;
 
-        var prefix = new SyntaxDiagnosticPrefix(path,
+        var prefix = new SyntaxDiagnosticPrefix(readerName,
             origin == SyntaxDiagnosticOrigin.Script ? SyntaxDiagnosticOrigin.ScriptLine : origin, line);
         var reason = header.HasExtraSeparator ? "syntax error: `;' unexpected\n"u8
             : "syntax error: arithmetic expression required\n"u8;
@@ -5893,7 +5888,7 @@ public sealed partial class Evaluation : IFileTester
     private static readonly byte[] MissingConditionalClose = "unexpected EOF while looking for `]]'\n"u8.ToArray();
     private static readonly byte[] MissingConditionalTermAtEnd = "unexpected token `EOF' in conditional command\n"u8.ToArray();
 
-    private async Task ReportConditionalEndOfInputAsync(ConditionalEndOfInput failure, string? path,
+    private async Task ReportConditionalEndOfInputAsync(ConditionalEndOfInput failure, ShellValue? readerName,
         SyntaxDiagnosticOrigin origin, int lineOffset, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
@@ -5920,7 +5915,7 @@ public sealed partial class Evaluation : IFileTester
         if (!failure.DoubleQuoted.HasValue)
             await WriteSyntaxDiagnosticLineAsync(descriptor, Prefix(failure.EndLine), UnexpectedSyntaxEndOfInput).ConfigureAwait(false);
 
-        SyntaxDiagnosticPrefix Prefix(int line) => new(path, origin, lineOffset + line);
+        SyntaxDiagnosticPrefix Prefix(int line) => new(readerName, origin, lineOffset + line);
     }
 
     private static ReadOnlyMemory<byte> GetConditionalEndOfInputMessage(ConditionalReaderError error, bool followsUnclosedDelimiter) => error switch
@@ -5946,20 +5941,20 @@ public sealed partial class Evaluation : IFileTester
                 ? SyntaxDiagnosticOrigin.CommandSubstitution
                 : scope.InEvalReader ? SyntaxDiagnosticOrigin.Eval : SyntaxDiagnosticOrigin.ScriptLine;
             await ReportUnclosedDelimiterAsync(endOfInput, HereDocumentExpansionLine(scope) + endOfInput.PayloadLine,
-                scope.Context.DiagnosticPath, origin, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
+                scope.Context.DiagnosticName, origin, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
         }
         else if (failure is { Kind: ParserFailureKind.SubstitutionGrammar, UnexpectedToken: { } token })
         {
             var line = GetCaptureDiagnosticLine(token, source.Bytes, HereDocumentExpansionLine(scope));
             var detail = ReaderErrexitEnabled(scope) ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete;
-            await ReportUnexpectedSyntaxAsync(TrimCaptureDiagnosticLine(token, source.Bytes), scope.Context.DiagnosticPath,
+            await ReportUnexpectedSyntaxAsync(TrimCaptureDiagnosticLine(token, source.Bytes), scope.Context.DiagnosticName,
                 SyntaxDiagnosticOrigin.CommandSubstitution, line, detail).ConfigureAwait(false);
         }
         else if (failure?.ArithmeticForHeader is { CaptureLine: > 0 } header)
         {
             var line = HereDocumentExpansionLine(scope) + header.CaptureLine;
             var detail = ReaderErrexitEnabled(scope) ? SyntaxDiagnosticDetail.PrimaryOnly : SyntaxDiagnosticDetail.Complete;
-            await ReportArithmeticForHeaderAsync(header, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.CommandSubstitution,
+            await ReportArithmeticForHeaderAsync(header, scope.Context.DiagnosticName, SyntaxDiagnosticOrigin.CommandSubstitution,
                 line, detail).ConfigureAwait(false);
         }
         else
@@ -5982,7 +5977,7 @@ public sealed partial class Evaluation : IFileTester
     }
 
     internal Task ReportHereDocumentCaptureWarningsAsync(IReadOnlyList<HereDocumentWarning> warnings, ScopedEvaluation scope) =>
-        ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.DiagnosticPath,
+        ReportHereDocumentWarningsAsync(warnings, HereDocumentExpansionLine(scope), scope.Context.DiagnosticName,
             useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope));
 
     private static SyntaxDiagnosticPrefix GetHereDocumentParameterDiagnosticPrefix(ScopedEvaluation scope) =>
@@ -5992,7 +5987,7 @@ public sealed partial class Evaluation : IFileTester
     {
         var line = scope.Context.Coordinates.HereDocumentWarningLine;
         return line != 0
-            ? new SyntaxDiagnosticPrefix(scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ScriptLine, line)
+            ? new SyntaxDiagnosticPrefix(scope.Context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line)
             : null;
     }
 
@@ -6008,18 +6003,18 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private Task ReportUnclosedDelimiterAsync(
-        UnclosedDelimiter endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail) =>
-        ReportUnclosedDelimiterAsync(endOfInput, line, path, ShellValue.Empty, origin, detail);
+        UnclosedDelimiter endOfInput, int line, ShellValue? readerName, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail) =>
+        ReportUnclosedDelimiterAsync(endOfInput, line, readerName, ShellValue.Empty, origin, detail);
 
     private async Task ReportUnclosedDelimiterAsync(
-        UnclosedDelimiter endOfInput, int line, string? path, ShellValue subject, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
+        UnclosedDelimiter endOfInput, int line, ShellValue? readerName, ShellValue subject, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
         if (origin == SyntaxDiagnosticOrigin.Script && (endOfInput.AtOpeningDelimiter || endOfInput.IncludeScriptLine))
             origin = SyntaxDiagnosticOrigin.ScriptLine;
-        var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
+        var prefix = new SyntaxDiagnosticPrefix(readerName, subject, origin, line);
         var message = endOfInput.Delimiter switch
         {
             ')' => MissingCommandSubstitutionClose,
@@ -6032,20 +6027,20 @@ public sealed partial class Evaluation : IFileTester
         if (endOfInput.Conditional is { } conditional && detail != SyntaxDiagnosticDetail.PrimaryOnly)
         {
             var lineOffset = line - conditional.ReadLine;
-            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + conditional.ReasonLine),
+            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(readerName, subject, origin, lineOffset + conditional.ReasonLine),
                 GetConditionalEndOfInputMessage(conditional.Error, followsUnclosedDelimiter: true)).ConfigureAwait(false);
             if (conditional.UnclosedGroupLines is { } groups)
                 foreach (var groupLine in groups)
-                    await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + groupLine),
+                    await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(readerName, subject, origin, lineOffset + groupLine),
                         MissingConditionalGroup).ConfigureAwait(false);
         }
     }
 
-    private async Task ReportReaderGrammarEndOfInputAsync(string? path, SyntaxDiagnosticOrigin origin, int line)
+    private async Task ReportReaderGrammarEndOfInputAsync(ShellValue? readerName, SyntaxDiagnosticOrigin origin, int line)
     {
         var descriptor = GetStdErrDescriptor();
         if (!descriptor.IsClosed)
-            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, line),
+            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(readerName, origin, line),
                 UnexpectedSyntaxEndOfInput).ConfigureAwait(false);
     }
 
@@ -6067,13 +6062,13 @@ public sealed partial class Evaluation : IFileTester
         await ExecuteWriteAsync(descriptor, diagnostic.ToMemory()).ConfigureAwait(false);
     }
 
-    private Task ReportCaptureHereDocumentWarningsAsync(CaptureHereDocumentWarnings captured, string? path, int offset, int line) =>
-        ReportHereDocumentWarningsAsync(captured.Warnings, offset + captured.LineOffset, path, useDocumentLine: false,
-            fixedPrefix: new SyntaxDiagnosticPrefix(path,
+    private Task ReportCaptureHereDocumentWarningsAsync(CaptureHereDocumentWarnings captured, ShellValue? readerName, int offset, int line) =>
+        ReportHereDocumentWarningsAsync(captured.Warnings, offset + captured.LineOffset, readerName, useDocumentLine: false,
+            fixedPrefix: new SyntaxDiagnosticPrefix(readerName,
                 line > 0 ? SyntaxDiagnosticOrigin.ScriptLine : SyntaxDiagnosticOrigin.Script, Math.Max(1, line)));
 
     private async Task ReportHereDocumentWarningsAsync(
-        IReadOnlyList<HereDocumentWarning> warnings, int offset, string? path, bool useDocumentLine, SyntaxDiagnosticPrefix? fixedPrefix)
+        IReadOnlyList<HereDocumentWarning> warnings, int offset, ShellValue? readerName, bool useDocumentLine, SyntaxDiagnosticPrefix? fixedPrefix)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
@@ -6085,7 +6080,7 @@ public sealed partial class Evaluation : IFileTester
             var warningLine = warning.Line + offset;
             var readerLine = useDocumentLine && warning.PendingCaptureDocuments == 0 ? warning.Line : warning.ReaderLine;
             var reachedPrefix = fixedPrefix ?? (readerLine == 0 ? default
-                : new SyntaxDiagnosticPrefix(path, SyntaxDiagnosticOrigin.ScriptLine, readerLine + offset));
+                : new SyntaxDiagnosticPrefix(readerName, SyntaxDiagnosticOrigin.ScriptLine, readerLine + offset));
             if (warning.PendingCaptureDocuments != 0)
             {
                 await WriteDiagnosticAsync(descriptor, [HereDocumentWarningName],
@@ -6401,7 +6396,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             // The source can outlive this invocation through its function definitions.
-            sourceMemory.OwnDiagnosticPath(openedPath, currentSearchEntry);
+            sourceMemory.OwnDiagnosticName(openedPath, currentSearchEntry);
             lookupMemory?.Dispose();
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
@@ -7076,7 +7071,7 @@ public sealed partial class Evaluation : IFileTester
         internal CommandCoordinates Coordinates { get; init; }
 
         /// <summary>The source that supplies the reached command's syntax and coordinates.</summary>
-        internal string? DiagnosticPath => SourceMemory?.DiagnosticPath;
+        internal ShellValue? DiagnosticName => SourceMemory?.DiagnosticName;
 
         public EvaluationContext WithErrexitIgnored() => this with { ErrexitIgnored = true };
 

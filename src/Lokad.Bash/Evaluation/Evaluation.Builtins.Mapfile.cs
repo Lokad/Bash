@@ -390,8 +390,8 @@ public sealed partial class Evaluation
         var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
         try
         {
-            if (scope.Context.DiagnosticPath is { } path)
-                sourceMemory.OwnDiagnosticPath(path, prefixCurrentDirectory: false);
+            if (scope.Context.DiagnosticName is { } path)
+                sourceMemory.OwnDiagnosticName(path);
             using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
             builder.Append(action.Bytes).Append((byte)' ').Append(indexText[..digits]).Append((byte)' ');
             if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(builder, record.Bytes.Span, quotedLength))

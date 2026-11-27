@@ -262,7 +262,7 @@ public sealed partial class Evaluation
         });
         _state.LastExitCode = status;
         if (failure.UnexpectedToken is { } token)
-            await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.ArrayAssignment,
+            await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticName, SyntaxDiagnosticOrigin.ArrayAssignment,
                 line, ReaderErrexitEnabled(scope) ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete)
                 .ConfigureAwait(false);
         else
@@ -321,7 +321,7 @@ public sealed partial class Evaluation
             var token = Tokenizer.ReadUnexpectedWordToken(source, new ShellScanContext { SyntaxMemory = workspace });
             if (token == null)
                 return false;
-            await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticPath, SyntaxDiagnosticOrigin.CommandSubstitution,
+            await ReportUnexpectedSyntaxAsync(token, scope.Context.DiagnosticName, SyntaxDiagnosticOrigin.CommandSubstitution,
                 GetCaptureDiagnosticLine(token, source.Bytes, lineOffset + line),
                 errexit ? SyntaxDiagnosticDetail.WithoutSourceLine : SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
             return true;

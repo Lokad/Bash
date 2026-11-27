@@ -276,8 +276,8 @@ public sealed partial class Evaluation
         var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
         try
         {
-            if (scope.Context.DiagnosticPath is { } diagnosticPath)
-                sourceMemory.OwnDiagnosticPath(diagnosticPath, prefixCurrentDirectory: false);
+            if (scope.Context.DiagnosticName is { } diagnosticPath)
+                sourceMemory.OwnDiagnosticName(diagnosticPath);
             ShellSource source;
             if (words.Count - start == 1 && words[start].TryGetCompactArrayCapacity(out var capacity) && capacity == length)
             {
@@ -391,7 +391,7 @@ public sealed partial class Evaluation
                 if (!commands.MoveNext())
                     break;
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
-                var path = unitMemory.DiagnosticPath;
+                var path = unitMemory.DiagnosticName;
                 var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
                 var readDiagnostics = commands.Current.ReadDiagnostics;
                 var unitCoordinates = BeginCommandUnit(

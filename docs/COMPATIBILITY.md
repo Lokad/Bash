@@ -1133,6 +1133,9 @@ the delimiter at the loaded reader's line. If a decoded NUL leaves an
 evaluator-produced function export with an unclosed delimiter, the same-host
 child reports the rejected import, publishes the other validated functions,
 and runs its script.
+The import diagnostic uses the invocation name. After that recovery,
+the child reader's diagnostic prefix preserves the bytes of its `$0`,
+including an empty name. A named `source` reader displays its own path.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split

@@ -45,7 +45,7 @@ public sealed partial class Evaluation
                 damagedExports != null && ReferenceEquals(damagedExports.Functions, functions) ? damagedExports.Names : null);
     }
 
-    private async Task<(bool Ready, string? DiagnosticPath)> TryImportInheritedFunctionsAsync(ScopedEvaluation scope)
+    private async Task<(bool Ready, ShellValue? DiagnosticName)> TryImportInheritedFunctionsAsync(ScopedEvaluation scope)
     {
         if (_inheritedFunctions is not { } inherited)
             return (true, null);
@@ -104,9 +104,7 @@ public sealed partial class Evaluation
 
             foreach (var binding in bindings)
                 _state.SetFunctionBinding(binding);
-            if (!skippedExport)
-                return (true, null);
-            return (true, _vars.ArgumentZero.TryGetUtf8Text(out var scriptName) ? scriptName : inherited.CommandName);
+            return (true, skippedExport ? _vars.ArgumentZero : null);
         }
         finally
         {
@@ -121,9 +119,10 @@ public sealed partial class Evaluation
                 return;
             // The function import reader begins on line zero.
             var line = source.Span[..delimiter.ReadPosition].Count((byte)'\n') + delimiter.LineAdvance;
-            await ReportUnclosedDelimiterAsync(delimiter, line, inherited.CommandName, name.Value,
+            var invocationName = ShellValue.FromText(inherited.CommandName);
+            await ReportUnclosedDelimiterAsync(delimiter, line, invocationName, name.Value,
                 SyntaxDiagnosticOrigin.Script, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
-            await WriteDiagnosticAsync(descriptor, [ShellValue.FromText(inherited.CommandName)],
+            await WriteDiagnosticAsync(descriptor, [invocationName],
                 [ShellValue.FromText("error importing function definition for `"), name.Value, ShellValue.FromText("'")], scope: null)
                 .ConfigureAwait(false);
         }
@@ -142,7 +141,7 @@ public sealed partial class Evaluation
             {
                 // Bash imports before setting the script reader's initial line to one.
                 var line = source.ToMemory().Span[..token.ReadPosition].Count((byte)'\n') + token.LineAdvance;
-                await ReportUnexpectedSyntaxAsync(token, inherited.CommandName, definition.Name.Value,
+                await ReportUnexpectedSyntaxAsync(token, ShellValue.FromText(inherited.CommandName), definition.Name.Value,
                     SyntaxDiagnosticOrigin.Script, line, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
             }
             else
