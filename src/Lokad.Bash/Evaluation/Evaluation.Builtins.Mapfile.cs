@@ -7,6 +7,7 @@ using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using BindingAttributes = Lokad.Bash.Evaluation.Variables.BindingAttributes;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -87,8 +88,8 @@ public sealed partial class Evaluation
         var variables = target.Owner;
 
         var attributes = target.AssignmentAttributes;
-        var integer = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Integer) != 0;
-        var convertCase = (attributes & global::Lokad.Bash.Evaluation.Variables.BindingAttributes.Case) != 0;
+        var integer = (attributes & BindingAttributes.Integer) != 0;
+        var convertCase = (attributes & BindingAttributes.Case) != 0;
         // Arithmetic consumes borrowed records after input settles. Ordinary records can
         // outlive their batch independently after publication.
         using var integerInputMemory = integer && callback == null ? Memory.Budget.CreateScope() : null;
@@ -467,8 +468,7 @@ public sealed partial class Evaluation
     {
         public bool RecreatesBinding => Kind == IndexedInputTargetKind.RecreatedBinding;
 
-        public Variables.BindingAttributes AssignmentAttributes =>
-            RecreatesBinding ? global::Lokad.Bash.Evaluation.Variables.BindingAttributes.None : Owner.GetAssignmentAttributes(Name);
+        public BindingAttributes AssignmentAttributes => RecreatesBinding ? BindingAttributes.None : Owner.GetAssignmentAttributes(Name);
 
         public bool TryPublish(IndexedArray array)
         {
@@ -501,7 +501,14 @@ public sealed partial class Evaluation
             if (!WordExpansion.TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent,
                 WordExpansion.MissingProjectedLiteral.RetainNameref))
                 return await InvalidTargetAsync(target.ToValue()).ConfigureAwait(false);
-            if (binding.IsArrayNameref)
+            if (binding.IsArrayNameref && binding.Owner.GetArrayMetadata(binding.Name) is { IsInitialized: false })
+            {
+                await ReportRemovingNamerefAsync(target, GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
+                if (!scope.CanExpand || !BuiltinDiagnosticsOpen)
+                    return (null, 0);
+                binding.Owner.UpdateBindingAttributes(binding.Name, BindingAttributes.None, BindingAttributes.ArrayNameref);
+            }
+            else if (binding.IsArrayNameref)
             {
                 if (!WordExpansion.HasEmptyArrayNamerefProjection(binding))
                     return await InvalidTargetAsync(WordExpansion.GetArrayNamerefDiagnosticSubject(binding)).ConfigureAwait(false);

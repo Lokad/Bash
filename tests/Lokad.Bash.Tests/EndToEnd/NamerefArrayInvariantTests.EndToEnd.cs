@@ -985,6 +985,45 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("read -ra alias <<< '41 42'", "[0]=\"41\" [1]=\"42\"")]
+    [InlineData("mapfile -t -O 1 alias <<< $'41 42\\n43'", "[1]=\"41 42\" [2]=\"43\"")]
+    public async Task IndexedInputClearsAnUninitializedTerminalNameref(string command, string elements)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot=(outer keep)
+            f() {
+                local -n slot; local -a slot; local -n alias=slot
+                {{command}}
+                declare -p slot alias
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal($"declare -a slot=({elements})\ndeclare -n alias=\"slot\"\ndeclare -a slot=([0]=\"outer\" [1]=\"keep\")\n", result.StdOut);
+        Assert.Equal("line 4: warning: alias: removing nameref attribute\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task IndexedInputClearsAnUninitializedAssociativeMarkBeforeRejectingTheKind()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot; local -A slot; local -n alias=slot
+                mapfile -t alias <<< '41'
+                printf '<%s>\n' "$?"
+                declare -p slot alias
+            }
+            f
+            """);
+
+        Assert.Equal("<1>\ndeclare -A slot\ndeclare -n alias=\"slot\"\n", result.StdOut);
+        Assert.Equal("line 3: warning: alias: removing nameref attribute\nline 3: mapfile: alias: not an indexed array\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("alias")]
     [InlineData("'alias[i++]'")]
     public async Task EmptyProjectionUnsetClearsTheAuthoredLocalWithoutSelectingAnElement(string operand)

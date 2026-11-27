@@ -1429,6 +1429,12 @@ literal local, indexed input writes that binding. An absent projection
 literal reports the complete spelling. Ordinary `unset` through an
 empty projection removes the authored local and skips an element
 selector.
+
+Indexed input removes the nameref attribute from an uninitialized
+terminal array and warns using the authored name. An associative
+terminal then reports that indexed input requires an indexed array.
+An initialized indexed array with no stored keys instead retains
+its nameref attribute and reports the projected spelling.
 Valid indexed nameref projections also select bindings for scalar,
 element, aggregate and arithmetic reads, presence tests, length and
 attribute inspection. A literal projection can read the local
