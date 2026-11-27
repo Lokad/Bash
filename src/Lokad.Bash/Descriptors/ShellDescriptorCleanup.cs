@@ -1,6 +1,9 @@
 using System;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
+using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash;
 
@@ -10,6 +13,28 @@ namespace Lokad.Bash;
 /// </remarks>
 public static class ShellDescriptorCleanup
 {
+    /// <summary>Reports an expected close failure after evaluator operations have ended.</summary>
+    internal static async ValueTask WriteErrorAsync(IBashHost host, FileDescriptor descriptor, OperationError error,
+        IMemoryBudget budget, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var encoding = Utf8Text.StrictUtf8;
+        var prefix = "shell: "u8;
+        var detailBytes = encoding.GetByteCount(error.Message.AsSpan());
+        var length = (long)prefix.Length + detailBytes;
+        if (!ShellDiagnostic.TryReserve(budget, length, out var reservation))
+        {
+            await host.WriteAsync(descriptor, ShellDiagnostic.MemoryRefusal, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        using var memory = reservation;
+        var buffer = new byte[(int)length];
+        prefix.CopyTo(buffer);
+        encoding.GetBytes(error.Message.AsSpan(), buffer.AsSpan(prefix.Length));
+        await host.WriteAsync(descriptor, buffer, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Completes an owned handle's cleanup, capturing its failure without retrying.</summary>
     public static ValueTask<DescriptorCloseResult> TryCloseOwnedAsync(
         IBashHost host,

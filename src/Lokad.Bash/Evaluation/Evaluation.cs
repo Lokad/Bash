@@ -4667,7 +4667,7 @@ public sealed partial class Evaluation : IFileTester
         if (result == null)
         {
             // The operation already failed. Keep the bounded message on its status and cleanup path.
-            await ExecuteWriteAsync(descriptor, ShellMemoryRefusalDiagnostic).ConfigureAwait(false);
+            await ExecuteWriteAsync(descriptor, ShellDiagnostic.MemoryRefusal).ConfigureAwait(false);
         }
         return result;
     }
@@ -5466,7 +5466,6 @@ public sealed partial class Evaluation : IFileTester
             && token.CapturePayloadStart <= start + token.Line.Length
             ? token with { Line = token.Line.Slice(token.CapturePayloadStart - start) } : token;
 
-    private const int SmallDiagnosticBytes = ByteMemoryBuilder.DefaultCapacity;
     private const int DiagnosticPunctuationBytes = 3; // Colon, space and LF.
 
     private ShellValue GetDiagnosticName(BindingName name)
@@ -5593,15 +5592,8 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private bool TryReserveDiagnostic(long length, out IMemoryReservation? reservation)
-    {
-        if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
-            throw new ByteMemoryBuilder.LimitExceededException();
-
-        // Small diagnostics, including refusal messages, fit within caller headroom.
-        reservation = null;
-        return length <= SmallDiagnosticBytes || Memory.Budget.TryReserve(length, out reservation);
-    }
+    private bool TryReserveDiagnostic(long length, out IMemoryReservation? reservation) =>
+        ShellDiagnostic.TryReserve(Memory.Budget, length, out reservation);
 
     internal bool HasPendingExpansionError => _state.HasPendingExpansionError;
 

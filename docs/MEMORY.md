@@ -106,6 +106,9 @@ than 256 bytes through stderr write completion. Short messages fit in caller
 headroom. Expansion and builtin invocation errors can supply borrowed name
 and message fragments. The formatter copies them directly into the admitted
 record and returns the write result to callers that select their status from it.
+Expected close failures reported after evaluator completion use the same
+admission and refusal record. The terminal Engine and pipeline endpoint
+writers hold the diagnostic reservation through the awaited host write.
 Shell `printf` admits the list of pending diagnostic fragments and reuses its
 capacity between conversions. An emitted record stays charged through the
 stderr write. Standalone formatting that returns diagnostics owns their

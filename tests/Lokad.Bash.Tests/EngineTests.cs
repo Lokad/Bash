@@ -983,6 +983,98 @@ public class EngineTests
         Assert.Equal([7, 3, 0], await result.Task);
     }
 
+    [Theory]
+    [InlineData(false, 124, false, false)]
+    [InlineData(true, 125, false, false)]
+    [InlineData(false, 8192, false, false)]
+    [InlineData(true, 8192, false, false)]
+    [InlineData(false, 8192, true, false)]
+    [InlineData(true, 8192, true, false)]
+    [InlineData(true, 8192, false, true)]
+    public async Task TerminalCloseDiagnosticOwnsItsBufferUntilTheWriteSettles(
+        bool pipeline, int detailCharacters, bool exhaustBudget, bool cancelWrite)
+    {
+        var descriptor = new FileDescriptor(10);
+        var detail = new OperationError(new string('λ', detailCharacters) + "\n");
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        using var other = exhaustBudget ? governor.CreateScope() : null;
+        using var cancellation = new CancellationTokenSource();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var written = new TaskCompletionSource<(FileDescriptor Descriptor, byte[] Bytes, long Reserved)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<DescriptorWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var visitor = new TestOperationVisitor([]) { MemoryBudget = owner };
+        visitor.BeforeDescriptorClose = _ =>
+        {
+            if (other != null)
+                other.Reserve(governor.LimitBytes - governor.ReservedBytes);
+        };
+        visitor.BeforeAppend = (destination, bytes) =>
+            written.TrySetResult((destination, bytes.ToArray(), governor.ReservedBytes));
+        visitor.EnqueueCloseDescriptorResult(detail);
+        visitor.EnqueueAppendTask(completion.Task);
+        var state = new Eval(Parser.Parse(":"));
+        state.Memory.Budget = owner;
+
+        var run = pipeline ? RunStageAsync() : RunEngineAsync();
+        (FileDescriptor Descriptor, byte[] Bytes, long Reserved) pending;
+        try
+        {
+            var next = await Task.WhenAny(written.Task, run).WaitAsync(deadline.Token);
+            if (next == run)
+                Assert.Fail($"Evaluation completed with status {await run} before writing the diagnostic.");
+            pending = await written.Task;
+            Assert.False(run.IsCompleted);
+            Assert.Equal(descriptor, Assert.Single(visitor.ClosedDescriptors));
+        }
+        finally
+        {
+            if (cancelWrite)
+            {
+                cancellation.Cancel();
+                completion.TrySetCanceled(cancellation.Token);
+            }
+            else
+                completion.TrySetResult(DescriptorWriteResult.Open);
+        }
+
+        if (cancelWrite)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        else
+            Assert.Equal(1, await run);
+        var expected = Utf8Text.Encode(exhaustBudget ? "shell: shared memory budget exhausted\n" : "shell: " + detail.Message);
+        Assert.Equal(FileDescriptor.StdErr, pending.Descriptor);
+        Assert.Equal(expected.ToArray(), pending.Bytes);
+        Assert.Equal(expected.Length > ByteMemoryBuilder.DefaultCapacity ? expected.Length : 0,
+            pending.Reserved - governor.ReservedBytes);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        other?.Dispose();
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        async Task<int> RunStageAsync()
+        {
+            var result = new TaskCompletionSource<IReadOnlyList<int>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var operation = new RunPipelineEvaluations(result,
+            [
+                new PipelineEvaluationStage(state, [descriptor]),
+                new PipelineEvaluationStage(new Eval(Parser.Parse("exit 7")), [])
+            ]);
+            await ShellOperationDispatcher.DispatchAsync(operation, visitor, cancellation.Token);
+            var statuses = await result.Task;
+            Assert.Equal(7, statuses[1]);
+            return statuses[0];
+        }
+
+        async Task<int> RunEngineAsync()
+        {
+            state.TrackOwnedDescriptor(descriptor);
+            var result = await new Engine().RunAsync(state, visitor, cancellation.Token);
+            return result.ExitCode;
+        }
+    }
+
     [Fact]
     public async Task RunPipelineEvaluations_PreservesStageFailureWhenCloseFails()
     {

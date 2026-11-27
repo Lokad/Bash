@@ -326,9 +326,8 @@ internal static class ShellOperationDispatcher
                 closeFailure.Exception?.Throw();
                 if (closeFailure.Error is { } error)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await host.WriteAsync(stage.Evaluation.GetStdErrDescriptor(), Utf8Text.Encode($"shell: {error.Message}"),
-                        cancellationToken).ConfigureAwait(false);
+                    await ShellDescriptorCleanup.WriteErrorAsync(host, stage.Evaluation.GetStdErrDescriptor(), error,
+                        stage.Evaluation.Memory.Budget, cancellationToken).ConfigureAwait(false);
                     return 1;
                 }
             }

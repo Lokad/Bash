@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Evaluation;
-using Lokad.Bash.Helpers;
 
 namespace Lokad.Bash;
 
@@ -154,8 +153,8 @@ public sealed class Engine
         cleanupFailure.Exception?.Throw();
         if (cleanupFailure.Error is { } error)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await actualVisitor.WriteAsync(state.GetStdErrDescriptor(), Utf8Text.Encode($"shell: {error.Message}"), cancellationToken).ConfigureAwait(false);
+            await ShellDescriptorCleanup.WriteErrorAsync(actualVisitor, state.GetStdErrDescriptor(),
+                error, evaluationMemory, cancellationToken).ConfigureAwait(false);
             return new RunResult(1, state.CurrentDirectory);
         }
 
