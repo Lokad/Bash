@@ -121,7 +121,8 @@ output precision is absent, and alignment or operand length rules out
 leading padding. The writer rolls back an incomplete quote at the output
 limit. Conversions that stage their bytes carry their logical lengths into
 field padding and precision.
-Their output scratch retains a prefix while those bytes can reach the
+An escape-free `%b` operand goes directly through the text field writer.
+Staged conversions retain a prefix while those bytes can reach the
 assignment. `%b` and `%q` cap that scratch prefix at output field precision
 for both stdout and assignment. Decoding and quoting still count the full
 conversion. The buffer is reused between conversions and discarded before

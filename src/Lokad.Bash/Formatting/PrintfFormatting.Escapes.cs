@@ -7,12 +7,13 @@ public static partial class PrintfFormatting
 {
     private sealed partial class Formatter
     {
+        private const int MaximumLiteralChunkLength = 64 * 1024;
+
         // Keep cancellation checks between spans and preserve the prefix at the output limit.
         private int AppendLiteralRun(OutputBuffer output, ReadOnlySpan<byte> source, bool formatText)
         {
-            const int MaximumChunkLength = 64 * 1024;
             cancellationToken.ThrowIfCancellationRequested();
-            var chunk = source[..Math.Min(source.Length, MaximumChunkLength)];
+            var chunk = source[..Math.Min(source.Length, MaximumLiteralChunkLength)];
             var boundary = formatText ? chunk.IndexOfAny((byte)'\\', (byte)'%') : chunk.IndexOf((byte)'\\');
             if (boundary >= 0)
                 chunk = chunk[..boundary];

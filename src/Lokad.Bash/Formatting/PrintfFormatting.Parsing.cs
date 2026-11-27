@@ -443,8 +443,37 @@ public static partial class PrintfFormatting
                 void AppendEscapedString(FormatSpecification escapedSpecification)
                 {
                     var argument = GetValueArgument().Bytes;
-                    var bytes = GetTemporaryOutput(argument.Length, _output.RemainingLength, escapedSpecification.Precision);
-                    for (var index = 0; index < argument.Length;)
+                    var remaining = _output.RemainingLength;
+                    // A literal prefix that exceeds the conversion limit cannot be shortened by a later escape.
+                    var scanEnd = Math.Min(argument.Length, remaining + 1);
+                    var literalEnd = 0;
+                    while (literalEnd < scanEnd)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var chunk = argument.Span.Slice(literalEnd, Math.Min(scanEnd - literalEnd, MaximumLiteralChunkLength));
+                        var escape = chunk.IndexOf((byte)'\\');
+                        if (escape >= 0)
+                        {
+                            literalEnd += escape;
+                            break;
+                        }
+                        literalEnd += chunk.Length;
+                    }
+                    if (literalEnd > remaining)
+                    {
+                        FailOutputLimit();
+                        return;
+                    }
+                    if (literalEnd == argument.Length)
+                    {
+                        ApplyText(escapedSpecification, argument.Span, ignorePrecision: false);
+                        return;
+                    }
+
+                    var bytes = GetTemporaryOutput(argument.Length, remaining, escapedSpecification.Precision);
+                    if (literalEnd != 0 && !TryAppendBytes(bytes, argument.Span[..literalEnd]))
+                        return;
+                    for (var index = literalEnd; index < argument.Length;)
                     {
                         if (argument.Span[index] != (byte)'\\')
                         {

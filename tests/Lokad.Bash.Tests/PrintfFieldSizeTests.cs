@@ -435,6 +435,55 @@ public sealed class PrintfFieldSizeTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LiteralPercentBNeedsOnlyTheOutputAllowance(bool assignOutput)
+    {
+        const int Length = 128 * 1024;
+        var input = new byte[Length];
+        input.AsSpan().Fill((byte)'x');
+        input[0] = (byte)'%';
+        input[^1] = 0xff;
+        var memory = new MemoryGovernor(Length);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText("%b%n"),
+            [ShellValue.FromBytes(input), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch, assignOutput, owner,
+            assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(input, result.Output.ToArray());
+        Assert.False(result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("count", Length), Assert.Single(counts));
+        Assert.Equal(Length, memory.PeakBytes);
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(2, "<    ab>", false)]
+    [InlineData(3, "<   ab", true)]
+    public async Task LiteralPercentBAssignmentAppliesPrecisionBeforeSelectingTheNulBoundary(
+        int precision, string expected, bool discardedSuffix)
+    {
+        var memory = new MemoryGovernor(4096);
+        using var owner = memory.CreateScope();
+        var counts = new List<PrintfVariableAssignment>();
+        var result = await PrintfFormatting.EvaluateAsync(ShellValue.FromText($"<%6.{precision}b>%n"),
+            [ShellValue.FromBytes("ab\0tail"u8.ToArray()), ShellValue.FromText("count")], DateTimeOffset.UnixEpoch,
+            assignOutput: true, owner, assignment => { counts.Add(assignment); return ValueTask.FromResult(true); },
+            reportDiagnostic: null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(ShellValue.FromText(expected), ShellValue.FromBytes(result.Output));
+        Assert.Equal(discardedSuffix, result.DiscardedSuffix);
+        Assert.Equal(new PrintfVariableAssignment("count", 8), Assert.Single(counts));
+        owner.Dispose();
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(65535)]
     [InlineData(65536)]
     [InlineData(65537)]
