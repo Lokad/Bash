@@ -996,6 +996,13 @@ At script scope this also applies through an element nameref. The stored
 element spelling is reported as an invalid identifier and its selector stays
 unevaluated.
 
+Inside a function, a parsed `declare -g` compound operand through an element
+nameref prepares the global binding and can write to the literal selector
+spelling without evaluating the selector. An existing visible literal can
+receive that write. A new literal belongs to the global scope. Preparation
+applies source attributes to the reached global binding. Builtin dispatch
+applies the expanded options to the binding it subsequently resolves.
+
 `type -p` prints the host's reported path when the selected name resolves to an
 external command. Builtins, keywords and functions resolve successfully in this
 mode and produce no output. `type -f` skips functions during lookup and combines

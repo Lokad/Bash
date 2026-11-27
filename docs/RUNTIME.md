@@ -470,6 +470,10 @@ from the active binding used by a simple element-zero write. Expanded
 compound initializers publish into their selected array while their expansion
 scope forwards direct effects to the caller. With installed command
 bindings that forwarding targets only names in the saved prefix store.
+A parsed global compound declaration in a function can prepare the
+global base and write a separate literal binding. An existing local with
+that spelling stays in its owning frame and follows that frame's restoration
+rules.
 An element write inside a declaration selector uses the visible prefix to
 select the position. A direct element or element nameref writes to an
 existing caller binding, including an unassigned declaration. When the

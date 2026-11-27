@@ -7,6 +7,32 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class GlobalDeclarationOwnershipTestsEndToEnd
 {
     [Theory]
+    [InlineData("i=0; item=old; declare -n link='item[i++]'\nf(){ local -a item=(inside); declare -gA link=([3]=$(printf rhs >&2; printf fresh)); declare -p item 'item[i++]'; }; f\nprintf '<%s>' \"$i\"; declare -p item 'item[i++]'",
+        "declare -a item=([0]=\"inside\")\ndeclare -A item[i++]=([3]=\"fresh\" )\n<0>declare -A item=([0]=\"old\" )\ndeclare -A item[i++]=([3]=\"fresh\" )\n", "rhs")]
+    [InlineData("declare -A item=([k]=old); declare -n link='item[k]'\nf(){ local -n own='item[k]'; local -A own=([k]=inside); declare -gAi link=([k]=fresh); declare -p item 'item[k]'; }; f\ndeclare -p item; declare -p 'item[k]' 2>/dev/null; printf '<%s>' \"$?\"",
+        "declare -Ai item=([k]=\"old\" )\ndeclare -A item[k]=([k]=\"fresh\" )\ndeclare -Ai item=([k]=\"old\" )\n<1>", "")]
+    [InlineData("declare -A item=([k]=old); declare -n link='item[k]'\nf(){ declare -gAi link=([k]=4+2); declare -p 'item[k]'; declare -gAi link=([k]=4+2); }; f\ndeclare -p item 'item[k]'",
+        "declare -Ai item[k]=([k]=\"4+2\" )\ndeclare -Ai item=([k]=\"old\" )\ndeclare -Ai item[k]=([k]=\"6\" )\n", "")]
+    [InlineData("declare -A item=([k]=old); declare -n link='item[k]'\nf(){\ndeclare -gA link=([k]=first)\ndeclare -gr link\ndeclare -gA link=([k]=next)\nprintf skipped\n}; f\nprintf '<%s>' \"$?\"; declare -p 'item[k]'",
+        "<1>declare -Ar item[k]=([k]=\"first\" )\n", "line 5: link: readonly variable\n")]
+    [InlineData("declare -A item=([k]=old); declare -n link='item[k]'\nf(){ declare -g link=([3]=fresh); }; f\ndeclare -p item 'item[k]'",
+        "declare -A item=([k]=\"old\" )\ndeclare -a item[k]=([3]=\"fresh\")\n", "")]
+    [InlineData("declare -A item=([k]=old); declare -n inner='item[k]' link=inner\nf(){ local -n inner='item[inside]'; declare -gA link=([k]=fresh); }; f\ndeclare -p item 'item[k]'",
+        "declare -A item=([k]=\"old\" )\ndeclare -A item[k]=([k]=\"fresh\" )\n", "")]
+    [InlineData("declare -A item=([k]=old); declare -n link='item[k]'\nf(){ declare -gA link=([k]=global); }; f\ng(){ local -n own='item[k]'; local -A own=([k]=inside); declare -gA link=([k]=fresh); declare -p 'item[k]'; }; g\ndeclare -p 'item[k]'",
+        "declare -A item[k]=([k]=\"fresh\" )\ndeclare -A item[k]=([k]=\"global\" )\n", "")]
+    [InlineData("declare -Ar item=([k]=old); declare -n link='item[k]'\nf(){ eval 'declare -gAx link=([k]=fresh)'; }; f\ndeclare -p item 'item[k]'",
+        "declare -Ar item=([k]=\"old\" )\ndeclare -Ax item[k]=([k]=\"fresh\" )\n", "")]
+    public async Task GlobalCompoundDeclarationSeparatesPreparationFromLiteralWrite(string script, string output, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(error, result.StdErr);
+    }
+
+    [Theory]
     [InlineData("x=old", "x=prefix declare -g x", "declare -- x=\"old\"")]
     [InlineData("declare x", "x=prefix declare -gr x", "declare -r x")]
     [InlineData(":", "x=prefix declare -g x+=edit", "declare -- x=\"edit\"")]

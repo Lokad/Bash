@@ -51,12 +51,14 @@ public sealed partial class Evaluation
                     var declaredName = declaredReference.Name;
                     var declaredValue = declaredSource.ToValue();
                     var local = options.IsLocal(scope, compoundGlobal);
+                    var globalInFunction = compoundGlobal && scope.Context.FunctionContext != null;
                     var setCompoundTransforms = compoundAttributeSign != (byte)'+'
                         || compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto;
                     var inherit = compoundInherit && setCompoundTransforms;
                     var existingLocal = scope.Context.FunctionContext?.Locals.Declares(declaredName) == true;
                     VariableReference? literalTarget = null;
                     BindingName literalName = default;
+                    VariableBinding? globalDeclaration = null;
                     var resolved = SelectTarget(out var name, out var targetVariables, out var targetLocal, out var targetReference);
                     var kind = SelectKind();
                     using var itemMemory = items.Count == 0 ? null : new MemoryCapacity(Memory.Budget, 0);
@@ -84,6 +86,7 @@ public sealed partial class Evaluation
 
                     if (!resolved)
                     {
+                        globalDeclaration = null;
                         // Compound RHS expansion precedes both lookup warnings and fallback creation.
                         var warningPrefix = GetCommandDiagnosticPrefix(scope);
                         await ReportCircularNameReferenceAsync(declaredName, warningPrefix).ConfigureAwait(false);
@@ -102,24 +105,27 @@ public sealed partial class Evaluation
                     // Declaration operands expand before readonly/type rejection, unlike direct assignments.
                     var referencedElement = bracket < 0 && targetReference.Kind != VariableReferenceKind.Name;
                     var literalLocal = local && existingLocal && !name.IsIdentifier;
-                    var globalInFunction = compoundGlobal && scope.Context.FunctionContext != null;
-                    var memberAssignment = bracket >= 0 || !literalLocal && !name.IsIdentifier || (compoundGlobal
+                    var writesLiteralGlobal = globalInFunction && bracket < 0 && globalDeclaration is { } globalTarget
+                        && (globalTarget.Reference.Kind != VariableReferenceKind.Name || !globalTarget.Name.IsIdentifier);
+                    var memberAssignment = bracket >= 0 || !writesLiteralGlobal && !literalLocal && !name.IsIdentifier
+                        || !writesLiteralGlobal && (compoundGlobal
                         ? targetVariables.TryResolveBinding(declaredName, selectOwner: null, out var selected)
                             && selected.Reference.Kind != VariableReferenceKind.Name
                         : !local && referencedElement);
                     if (!memberAssignment && !local && !referencedElement && compoundArrayKind != ArrayAssignmentKind.Auto
                         && targetVariables.TryGetNameref(name, out _))
                         targetVariables.RecreateDeclarationArray(name, kind);
-                    var declarationBinding = compoundGlobal
-                        && scope.Context.TryResolveGlobalBinding(declaredName, scope.Variables, out var globalBinding)
-                        ? globalBinding : new VariableBinding(VariableReference.ForName(name), targetVariables);
+                    var declarationBinding = globalDeclaration
+                        ?? (compoundGlobal && scope.Context.TryResolveGlobalBinding(declaredName, scope.Variables, out var globalBinding)
+                            ? globalBinding : new VariableBinding(VariableReference.ForName(name), targetVariables));
                     var explicitNonlocalArray = !local && compoundArrayKind != ArrayAssignmentKind.Auto;
                     var conflictingKind = !local && (!compoundGlobal || explicitNonlocalArray)
                         && HasConflictingArrayKind(declarationBinding.Owner, declarationBinding.Name, kind);
-                    var rejectsTarget = memberAssignment || (!local || targetLocal) && targetVariables.IsReadonly(name);
+                    var rejectsTarget = memberAssignment || !writesLiteralGlobal && (!local || targetLocal) && targetVariables.IsReadonly(name);
                     if (conflictingKind && (explicitNonlocalArray || !rejectsTarget))
                     {
-                        var subject = (referencedElement ? declarationBinding.Name
+                        var namesElement = compoundGlobal ? declarationBinding.Reference.Kind != VariableReferenceKind.Name : referencedElement;
+                        var subject = (namesElement ? declarationBinding.Name
                             : compoundArrayKind == ArrayAssignmentKind.Auto ? name : declaredName).ToValue();
                         var diagnosticName = _state.PreparationDiagnosticName;
                         ReadOnlySpan<ShellValue> diagnosticSubject = diagnosticName.IsEmpty
@@ -135,7 +141,6 @@ public sealed partial class Evaluation
                             GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }
-                    // A compatible -g initializer through an element in a function has its own binding rules.
                     var rejectsElementReference = !local && referencedElement && !globalInFunction;
                     if (rejectsTarget || rejectsElementReference)
                     {
@@ -208,7 +213,29 @@ public sealed partial class Evaluation
                             await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
                         targetVariables.TryRemoveNamerefAttribute(name);
                     }
-                    ApplyCompoundAttributes(targetVariables, name, setCompoundTransforms);
+                    if (writesLiteralGlobal)
+                    {
+                        // Prepare the global declaration first. A new literal binding gets its own
+                        // attributes at dispatch, after the initializer has written its cells.
+                        var owner = declarationBinding.Owner;
+                        var baseName = declarationBinding.Name;
+                        var declarationKind = compoundArrayKind == ArrayAssignmentKind.Auto
+                            ? owner.GetArrayMetadata(baseName)?.Kind ?? ArrayKind.Indexed : kind;
+                        if (!owner.TryDeclareResolvedArray(baseName, declarationKind, ScalarArrayPromotion.RetainValue))
+                        {
+                            await ReportAssignmentTargetFailureAsync(declaredValue, ArrayConversionMessage(declarationKind), scope)
+                                .ConfigureAwait(false);
+                            break;
+                        }
+                        ApplyCompoundAttributes(owner, baseName, setCompoundTransforms);
+                        if (targetVariables.IsReadonlyBinding(name))
+                        {
+                            await ReportAssignmentTargetFailureAsync(declaredValue, "readonly variable", scope).ConfigureAwait(false);
+                            break;
+                        }
+                    }
+                    else
+                        ApplyCompoundAttributes(targetVariables, name, setCompoundTransforms);
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, scope, targetVariables, declaredName,
                             initializeReadonly: false)).ConfigureAwait(false))
@@ -226,32 +253,51 @@ public sealed partial class Evaluation
                     bool SelectTarget(out BindingName targetName, out Variables variables, out bool isLocal,
                         out VariableReference targetReference)
                     {
+                        var declaredOwner = compoundGlobal ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables) : null;
+                        globalDeclaration = globalInFunction && bracket < 0 && declaredOwner?.TryGetNameref(declaredName, out _) == true
+                            && scope.Context.TryResolveGlobalBinding(declaredName, scope.Variables, out var declaration)
+                            ? declaration : null;
+                        if (globalDeclaration is { } literal && (literal.Reference.Kind != VariableReferenceKind.Name || !literal.Name.IsIdentifier))
+                        {
+                            targetName = literal.Reference.Kind == VariableReferenceKind.Name
+                                ? literal.Name : GetLiteralName(literal.Reference);
+                            // An existing visible literal can receive the write even when preparation
+                            // selected a hidden global with the same spelling.
+                            variables = scope.Variables.HasBindingOrAttributes(targetName) ? scope.Variables
+                                : literal.Reference.Kind == VariableReferenceKind.Name ? literal.Owner
+                                : scope.Context.GetGlobalBindingOwner(targetName, scope.Variables);
+                            targetReference = literal.Reference;
+                            isLocal = false;
+                            return true;
+                        }
                         // -g selects the declaration's initial binding globally. Compound writes
                         // through a nameref then follow its referent in the active scope.
-                        var found = compoundGlobal
-                            ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
-                                .TryResolveBinding(declaredName, _ => scope.Variables, out var binding)
+                        var found = declaredOwner != null
+                            ? declaredOwner.TryResolveBinding(declaredName, _ => scope.Variables, out var binding)
                             : scope.Variables.TryResolveBinding(declaredName, selectOwner: null, out binding);
                         if (found && !local && compoundArrayKind != ArrayAssignmentKind.Auto)
-                            binding = (compoundGlobal ? scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables) : scope.Variables)
-                                .SelectArrayDeclarationBinding(declaredName, binding);
+                            binding = (declaredOwner ?? scope.Variables).SelectArrayDeclarationBinding(declaredName, binding);
                         targetName = !found || local && !existingLocal ? declaredName : binding.Name;
                         if (found && local && existingLocal && bracket < 0 && binding.Reference.Kind != VariableReferenceKind.Name)
                         {
                             // Use the complete target spelling for the local declaration and its initializer.
-                            // Reuse it if RHS expansion leaves the selector unchanged.
-                            if (literalTarget != binding.Reference)
-                            {
-                                literalTarget = binding.Reference;
-                                literalName = BindingNameExpansion.FromValue(binding.Reference.ToValue(Memory), Memory);
-                            }
-                            targetName = literalName;
+                            targetName = GetLiteralName(binding.Reference);
                         }
-                        variables = !compoundGlobal ? scope.Variables : found ? binding.Owner
-                            : scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables);
+                        variables = declaredOwner == null ? scope.Variables : found ? binding.Owner : declaredOwner;
                         isLocal = local && scope.Context.FunctionContext?.Locals.Declares(targetName) == true;
                         targetReference = found ? binding.Reference : VariableReference.ForName(declaredName);
                         return found;
+                    }
+
+                    BindingName GetLiteralName(VariableReference reference)
+                    {
+                        // Reuse the admitted spelling if RHS expansion leaves the selector unchanged.
+                        if (literalTarget != reference)
+                        {
+                            literalTarget = reference;
+                            literalName = BindingNameExpansion.FromValue(reference.ToValue(Memory), Memory);
+                        }
+                        return literalName;
                     }
 
                     ArrayKind SelectKind() => compoundArrayKind switch
@@ -259,7 +305,7 @@ public sealed partial class Evaluation
                         ArrayAssignmentKind.Associative => ArrayKind.Associative,
                         ArrayAssignmentKind.Indexed => ArrayKind.Indexed,
                         // In a function, -g checks the declared name's own array attribute before following a nameref.
-                        _ when compoundGlobal && scope.Context.FunctionContext != null => scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
+                        _ when globalInFunction => scope.Context.GetGlobalBindingOwner(declaredName, scope.Variables)
                             .AssociativeArrays.ContainsKey(declaredName) ? ArrayKind.Associative : ArrayKind.Indexed,
                         _ => (!local || targetLocal || inherit) && targetVariables.AssociativeArrays.ContainsKey(name)
                             ? ArrayKind.Associative : ArrayKind.Indexed,

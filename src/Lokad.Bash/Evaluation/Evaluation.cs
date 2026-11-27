@@ -3536,6 +3536,7 @@ public sealed partial class Evaluation : IFileTester
                         }
                     }
                     else if (!local && !(options.Builtin == BuiltinKind.Export && options.ExportChange == DeclarationAttributeChange.Clear)
+                        && !(global && !element && !name.IsIdentifier && targetVars.HasBinding(name))
                         && !targetVars.TryDeclareName(resolvedName.IsEmpty ? name : resolvedName))
                     {
                         RecordOperandFailure();
@@ -7238,11 +7239,11 @@ public sealed partial class Evaluation : IFileTester
             ref List<Variables.CommandBindings>? exposedPrefixes) =>
             GetBindingOwner(name, active, DeclarationBindingScope.Visible, memory, ref exposedPrefixes, outerBoundary: null, commandBindings: null);
 
-        private Variables GetBindingOwner(BindingName name, Variables active, DeclarationBindingScope lookup,
+        private Variables GetBindingOwner(BindingName bindingName, Variables active, DeclarationBindingScope lookup,
             EvaluationMemory? prefixMemory, ref List<Variables.CommandBindings>? exposedPrefixes,
             FunctionContext? outerBoundary, Variables.CommandBindings? commandBindings)
         {
-            var bindingName = StripArraySubscript(name);
+            // Parsed selectors supply a base name. A literal binding keeps its full spelling.
             // The reached command's prefixes are the innermost restoration scope.
             var owner = commandBindings?.Contains(bindingName) == true ? commandBindings.SavedVariables : active;
             var prefix = GlobalPrefixes;
@@ -7400,7 +7401,7 @@ public sealed partial class Evaluation : IFileTester
 
             Variables SelectGlobalOwner(BindingName current) => context.GetGlobalBindingOwner(current, persistent, commandBindings);
 
-            Variables SelectActiveOwner(BindingName current) => prefixes?.Contains(StripArraySubscript(current)) == true
+            Variables SelectActiveOwner(BindingName current) => prefixes?.Contains(current) == true
                 ? active : persistent;
         }
 
