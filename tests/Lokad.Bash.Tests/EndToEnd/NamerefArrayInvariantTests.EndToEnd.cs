@@ -1024,6 +1024,171 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("slot+=temporary declare -p 'x[2]'", "declare -x x[2]=\"21temporary\"\n", 0)]
+    [InlineData("slot=temporary unset -v 'slot[i++]'", "", 1)]
+    public async Task ProjectedLiteralPrefixIsVisibleAndRestoresTheCaller(string command, string output, int index)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0
+            f() {
+                local -n slot; local -a slot=([1563581304]=prior); local -a slot=21; local -a 'slot[2]=23'
+                {{command}}
+                printf '<%s>\n' "$i"
+                declare -p 'x[2]'
+            }
+            f
+            """);
+
+        Assert.Equal(output + $"<{index}>\ndeclare -a x[2]=([0]=\"21\" [2]=\"23\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedElementPrefixAppendUsesTheStoredSpellingWithoutEvaluatingIt()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            j=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x='dest[j++]'; local -a dest=(21 22)
+                slot+=temporary declare -p slot
+                printf '<%s>\n' "$j"
+                declare -p slot dest
+            }
+            f
+            """);
+
+        Assert.Equal("declare -x slot=\"dest[j++]temporary\"\n<0>\ndeclare -an slot=([120]=\"prior\")\ndeclare -a dest=([0]=\"21\" [1]=\"22\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("unset 'slot[i++]'", "<0:1:0>\ndeclare -- slot\ndeclare -a dest=([0]=\"21\" [1]=\"22\")\n")]
+    [InlineData("unset -v 'slot[i++]'", "<0:0:1>\ndeclare -an slot=([120]=\"prior\")\ndeclare -a dest=([1]=\"22\")\n")]
+    public async Task ProjectedUnsetChoosesItsSelectorAfterCheckingTheFunctionNamespace(string command, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; j=0
+            slot() { :; }
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x='dest[j++]'; local -a dest=(21 22)
+                {{command}}
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot dest
+            }
+            f
+            declare -F slot
+            """);
+
+        Assert.Equal(expected + "slot\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(120, "<function>\ndeclare -an slot=([120]=\"prior\")\ndeclare -- x\n")]
+    [InlineData(256, "<>\ndeclare -an slot=([256]=\"prior\")\ndeclare -a x=([0]=\"21\" [1]=\"22\")\n")]
+    public async Task WholeProjectedUnsetGivesAReachedVariablePrecedenceOverAFunction(int maximumIndex, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot() { :; }
+            f() {
+                local -n slot; local -a slot=([{{maximumIndex}}]=prior); local -a x=(21 22)
+                unset slot
+                printf '<%s>\n' "$(type -t slot)"
+                declare -p slot x
+            }
+            f
+            """);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task WholeProjectedUnsetKeepsTheLiteralLocalUnassigned()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=outer
+            f() {
+                local -n slot; local -a slot=([1563581304]=prior); local -a slot=21
+                unset -v slot
+                declare -p slot 'x[2]' x
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal("declare -an slot=([1563581304]=\"prior\")\ndeclare -- x[2]\ndeclare -- x=\"outer\"\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedElementUnsetChecksTheReachedReadonlyBindingBeforeTheSelector()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior); local -ar x=(21 22)
+                unset -v 'slot[i++]'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p x
+            }
+            f
+            """);
+
+        Assert.Equal("<1:0>\ndeclare -ar x=([0]=\"21\" [1]=\"22\")\n", result.StdOut);
+        Assert.Equal("line 4: unset: x: cannot unset: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedUnsetPreservesTheUninitializedTerminalReference()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior); unset x; local -n x
+                unset -v 'slot[i++]'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot x
+            }
+            f
+            """);
+
+        Assert.Equal("<0:0>\ndeclare -- slot\ndeclare -n x\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedUnsetKeepsAReadonlyReferenceSelectedByItsOwnName()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            slot() { :; }
+            f() {
+                local -nr slot; eval 'local -a slot=([1563581304]=prior)'
+                unset -v 'slot[i++]'
+                printf '<%s:%s>\n' "$?" "$i"
+                unset 'slot[i++]'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal("<0:0>\n<1:0>\ndeclare -anr slot=([1563581304]=\"prior\")\n", result.StdOut);
+        Assert.Equal("line 7: unset: slot: cannot unset: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("alias")]
     [InlineData("'alias[i++]'")]
     public async Task EmptyProjectionUnsetClearsTheAuthoredLocalWithoutSelectingAnElement(string operand)

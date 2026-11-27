@@ -1974,8 +1974,13 @@ public sealed partial class Evaluation : IFileTester
                 var circularPrefix = !resolvedPrefix;
                 if (circularPrefix)
                     await ReportCircularNameReferenceAsync(target, assignmentScope).ConfigureAwait(false);
+                var projectedPrefix = resolvedPrefix && prefixBinding.IsArrayNameref;
+                var unresolvedProjection = projectedPrefix
+                    && (!WordExpansion.TryFollowArrayNamerefProjections(ref prefixBinding, assignmentScope,
+                        BindingResolution.Referent, WordExpansion.MissingProjectedLiteral.RetainNameref) || prefixBinding.IsArrayNameref);
                 var elementNameref = resolvedPrefix && prefixBinding.Reference.Kind != VariableReferenceKind.Name;
-                var shadowNameref = resolvedPrefix && (prefixBinding.IsUnsetNameref || prefixBinding.TryGetInvalidNameref(out _));
+                var shadowNameref = resolvedPrefix
+                    && (unresolvedProjection || prefixBinding.IsUnsetNameref || prefixBinding.TryGetInvalidNameref(out _));
                 BindingName selectedName = resolvedPrefix ? prefixBinding.Name : target;
                 if (elementNameref && commandVars.TryResolveBinding(target, selectOwner: null,
                         BindingResolution.LastNameref, out var elementAlias))
@@ -2031,7 +2036,10 @@ public sealed partial class Evaluation : IFileTester
                             value = WordExpansion.AppendAssignmentValue(previous, value, assignmentScope);
                     }
 
-                    if (!commandVars.TrySetScalar(name, value, Memory, assignment.Operator))
+                    var assigned = projectedPrefix && !name.IsIdentifier
+                        ? commandVars.TrySetResolvedPrefixScalar(name, value, Memory, assignment.Operator)
+                        : commandVars.TrySetScalar(name, value, Memory, assignment.Operator);
+                    if (!assigned)
                     {
                         if (commandVars.IsReadonly(name))
                             await ReportCommandDiagnosticAsync([assignment.Target.ToValue()],

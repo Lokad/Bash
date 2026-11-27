@@ -1426,8 +1426,8 @@ selector runs once per read or write. Whole-name `read -a` and
 `mapfile` also recreate the global array. `mapfile -O` uses the
 requested origin in that fresh array. For an existing projected
 literal local, indexed input writes that binding. An absent projection
-literal reports the complete spelling. Ordinary `unset` through an
-empty projection removes the authored local and skips an element
+literal reports the complete spelling. Variable-only `unset -v` through
+an empty projection removes the authored local and skips an element
 selector.
 
 Indexed input removes the nameref attribute from an uninitialized
@@ -1911,6 +1911,13 @@ removal selects the originally named reference and preserves the terminal
 declaration. Function fallback still applies before that removal.
 `unset -n` selects the named reference for removal. A readonly last reference
 with an assigned target blocks removal and supplies the diagnostic name.
+For a projected array nameref, whole-variable removal selects the reached
+binding, including a literal local. Element removal uses the reached array
+kind or a stored element selector. Plain `unset` can fall back to a
+same-named function when the projection has no whole binding. With a
+subscripted operand in that case, it uses the authored name as a scalar
+and leaves the function in place. Readonly protection also applies to
+that scalar selection.
 Readonly variable and function diagnostics use the reached builtin's source
 line and include the filename for a named sourced file.
 Lokad.Bash also preserves a readonly reference when the command would

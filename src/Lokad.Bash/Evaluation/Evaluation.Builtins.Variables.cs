@@ -69,17 +69,23 @@ public sealed partial class Evaluation
             var directSelector = canSelectElement && !literalBinding && nameValue.Bytes.Span.Contains((byte)'[')
                 && VariableReference.TryParse(ShellSource.FromBytes(nameValue.Bytes), Memory, out directReference)
                 && directReference.Kind != VariableReferenceKind.Name && !directReference.Subscript.IsEmpty;
-            var mayFallBackToFunction = !variables && (!namerefs || !isIdentifier) && !directSelector;
+            var unsetName = directSelector ? directReference.Name : name;
+            var mayFallBackToFunction = !variables && (!namerefs || !isIdentifier);
             var binding = default(VariableBinding);
             var resolvedBinding = (!namerefs || mayFallBackToFunction)
-                && commandVars.TryResolveBinding(directSelector ? directReference.Name : name, selectOwner: null, out binding);
-            // Explicit selectors never fall back to functions; element namerefs still can.
-            // Whole-name lookup follows namerefs and retains unset locals' namespace protection.
-            var hidesFunction = mayFallBackToFunction && resolvedBinding && binding.Reference.Kind == VariableReferenceKind.Name
-                && !binding.IsUnsetNameref && (binding.Owner.HasBinding(binding.Name)
+                && commandVars.TryResolveBinding(unsetName, selectOwner: null, out binding);
+            var projected = !namerefs && resolvedBinding && binding.IsArrayNameref;
+            if (projected)
+                resolvedBinding = WordExpansion.TryFollowArrayNamerefProjections(ref binding, scope, BindingResolution.Referent,
+                    WordExpansion.MissingProjectedLiteral.RetainNameref);
+            var checksFunction = mayFallBackToFunction && (!directSelector || projected);
+            var hidesFunction = checksFunction && resolvedBinding && binding.Reference.Kind == VariableReferenceKind.Name
+                && !binding.IsUnsetNameref && (!projected || !binding.IsArrayNameref) && (binding.Owner.HasBinding(binding.Name)
                     || context.FunctionContext?.IsLocal(binding.Name) == true);
             // -n is a no-op for valid non-nameref names; other spellings can still select a function.
-            if (mayFallBackToFunction && !hidesFunction && _state.TryGetFunction(nameValue, out _))
+            var sameNameFunction = checksFunction && !hidesFunction
+                && _state.TryGetFunction(directSelector ? unsetName.ToValue() : nameValue, out _);
+            if (sameNameFunction && !directSelector)
             {
                 await UnsetFunctionAsync(nameValue).ConfigureAwait(false);
                 continue;
@@ -98,16 +104,27 @@ public sealed partial class Evaluation
                 commandVars.ReselectGetoptsIndex(name);
                 continue;
             }
-            var unsetName = directSelector ? directReference.Name : name;
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;
-            var removesEmptyProjection = !namerefs && resolvedBinding && WordExpansion.HasEmptyArrayNamerefProjection(binding);
-            if (removesEmptyProjection)
+            var authoredScalar = directSelector && sameNameFunction;
+            var removesProjectedReference = authoredScalar || projected && resolvedBinding
+                && (binding.IsUnsetNameref || WordExpansion.HasEmptyArrayNamerefProjection(binding));
+            if (removesProjectedReference && !authoredScalar)
                 name = unsetName;
+            else if (projected && !authoredScalar && (!resolvedBinding || binding.IsArrayNameref))
+            {
+                commandVars.ReselectGetoptsIndex(unsetName);
+                continue;
+            }
             else if (!namerefs && (directSelector || resolvedBinding && binding.Reference.Kind != VariableReferenceKind.Name))
             {
-                var elementResult = await WordExpansion.UnsetElementAsync(directSelector ? directReference : binding.Reference,
-                        directSelector ? WordExpansion.UnsetReferenceKind.Direct : WordExpansion.UnsetReferenceKind.Nameref,
-                        scope with { Variables = commandVars, ExpansionWriteTarget = null }).ConfigureAwait(false);
+                // A projected element nameref uses its stored selector. An authored function without
+                // a whole projected binding instead routes this subscript to the original scalar name.
+                var useStoredSelector = !directSelector || projected && !authoredScalar && binding.Reference.Kind != VariableReferenceKind.Name;
+                var kind = authoredScalar ? WordExpansion.UnsetReferenceKind.AuthoredScalar
+                    : useStoredSelector ? WordExpansion.UnsetReferenceKind.Nameref : WordExpansion.UnsetReferenceKind.Direct;
+                VariableBinding? selected = projected && !authoredScalar && !useStoredSelector ? binding : null;
+                var elementResult = await WordExpansion.UnsetElementAsync(useStoredSelector ? binding.Reference : directReference,
+                    kind, scope with { Variables = commandVars, ExpansionWriteTarget = null }, selected).ConfigureAwait(false);
                 if (!elementResult.Succeeded)
                     exitCode = 1;
                 if (HasPendingExpansionError) break;
@@ -120,12 +137,13 @@ public sealed partial class Evaluation
                 }
                 // A scalar's zero selector removes the whole binding, including a kind change during evaluation.
                 name = elementResult.BindingToUnset;
-                resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out binding);
+                if (!removesProjectedReference)
+                    resolvedBinding = commandVars.TryResolveBinding(name, selectOwner: null, out binding);
             }
             // An uninitialized terminal has no referent. After namespace fallback,
             // ordinary unset can remove the named reference without touching the terminal.
             var target = commandVars.SelectUnsetTarget(name,
-                !namerefs && resolvedBinding && !removesEmptyProjection ? binding : null, checkUninitializedTerminal: false);
+                !namerefs && resolvedBinding && !removesProjectedReference ? binding : null, checkUninitializedTerminal: false);
             // -n removes the named reference. A readonly terminal with a target blocks that removal.
             if (namerefs && commandVars.TryResolveBinding(name, selectOwner: null, BindingResolution.LastNameref, out var terminal)
                 && !terminal.IsUnsetNameref && terminal.Owner.IsReadonlyBinding(terminal.Name))
@@ -133,11 +151,11 @@ public sealed partial class Evaluation
             var removedName = target.Name;
             if (removedName.IsEmpty)
                 continue;
-            if (!namerefs && !removesEmptyProjection && target.ReadonlyName.IsEmpty && commandVars.IsArrayNameref(removedName))
+            if (!namerefs && !removesProjectedReference && target.ReadonlyName.IsEmpty && commandVars.IsArrayNameref(removedName))
                 continue;
             var keepExport = commandVars.IsExported(removedName)
                 && context.FunctionContext?.Locals.IsDeclaredPrefix(removedName) == true;
-            if (!commandVars.TryUnsetSelected(target, unsetFlags, removesEmptyProjection))
+            if (!commandVars.TryUnsetSelected(target, unsetFlags, removesProjectedReference))
             {
                 exitCode = 1;
                 if (!target.ReadonlyName.IsEmpty)
@@ -153,7 +171,7 @@ public sealed partial class Evaluation
                 if (ExposeUnsetPrefix(removedName))
                     continue;
                 if (context.FunctionContext?.IsLocal(removedName) == true)
-                    commandVars.TryDeclareName(removedName);
+                    commandVars.DeclareUnassigned(removedName);
                 // A declared prefix keeps its current export flag, including an earlier +x/export -n.
                 if (keepExport) commandVars.SetExported(removedName, true);
                 context.FunctionContext?.Locals.RecordUnset(removedName);

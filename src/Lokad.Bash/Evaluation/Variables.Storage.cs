@@ -241,7 +241,8 @@ public sealed partial class Variables
         }
     }
 
-    private void DeclareUnassigned(BindingName name)
+    /// <summary>Keeps an unassigned slot for a validated binding name, including a literal local.</summary>
+    internal void DeclareUnassigned(BindingName name)
     {
         if (!HasBinding(name))
             ReplaceValue(name, new UnassignedSlot());

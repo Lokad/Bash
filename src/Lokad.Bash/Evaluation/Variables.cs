@@ -1246,6 +1246,15 @@ public sealed partial class Variables
         SetResolvedScalar(name, value);
     }
 
+    /// <summary>Sets a temporary prefix in an already selected literal local.</summary>
+    internal bool TrySetResolvedPrefixScalar(BindingName name, ShellValue value, EvaluationMemory memory, AssignmentOperator operation)
+    {
+        if (IsReadonlyBinding(name))
+            return false;
+        SetAssignedScalar(name, value, memory, operation);
+        return true;
+    }
+
     /// <summary>Replaces a resolved binding; callers own name and readonly validation.</summary>
     private void SetResolvedScalar(BindingName resolved, ShellValue value)
     {

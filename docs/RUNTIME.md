@@ -430,6 +430,12 @@ scalar prefix, or through a nameref to that element, use the caller's
 binding and its assignment attributes. Later prefixes and the command
 still see the prepared scalar. A subscript applied to a whole-name
 nameref follows the prepared binding.
+Prefix preparation follows a valid array nameref projection to its whole
+receiver, including a literal local. Append uses the receiver's prior
+scalar or element-zero value. A projected stored element instead leaves
+a temporary scalar under the authored name, and append uses the stored
+reference spelling without evaluating the selector. An unavailable
+projection can also leave a temporary scalar under the authored name.
 The existing expansion write target forwards actual RHS effects, including
 same-value writes, with nameref and array-kind rules intact. In-process
 execution consumes only the prepared prefix slots and preserves the original

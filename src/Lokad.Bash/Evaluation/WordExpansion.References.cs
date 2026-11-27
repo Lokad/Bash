@@ -236,31 +236,33 @@ internal static partial class WordExpansion
         return scope.CanExpand ? evaluated : null;
     }
 
-    internal enum UnsetReferenceKind { Direct, Nameref }
+    internal enum UnsetReferenceKind { Direct, Nameref, AuthoredScalar }
 
     /// <summary>A nonempty BindingToUnset defers whole-binding removal to the caller's scope cleanup.</summary>
     internal readonly record struct ElementUnsetResult(bool Succeeded, BindingName BindingToUnset);
 
     /// <summary>Removes array elements; scalar removal is returned to the builtin that owns local/prefix cleanup.</summary>
     internal static async Task<ElementUnsetResult> UnsetElementAsync(
-        VariableReference reference, UnsetReferenceKind kind, ScopedEvaluation scope)
+        VariableReference reference, UnsetReferenceKind kind, ScopedEvaluation scope, VariableBinding? projected)
     {
         var variables = scope.Variables;
         var name = reference.Name;
         // Deliberately stronger than Bash: an element nameref cannot bypass readonly
         // protection, and a rejected unset does not evaluate its selector.
-        if (variables.IsReadonly(name))
+        if (projected is { } selected ? selected.Owner.IsReadonlyBinding(selected.Name) : variables.IsReadonly(name))
         {
-            await scope.Effects.ReportReadonlyUnsetAsync(name.ToValue(), function: false, scope.Context).ConfigureAwait(false);
+            await scope.Effects.ReportReadonlyUnsetAsync((projected?.Name ?? name).ToValue(), function: false, scope.Context).ConfigureAwait(false);
             return new(false, BindingName.Empty);
         }
-        var resolvedName = variables.ResolveNamerefName(name);
+        var resolvedName = kind == UnsetReferenceKind.AuthoredScalar ? name : projected?.Name ?? variables.ResolveNamerefName(name);
+        if (kind == UnsetReferenceKind.AuthoredScalar)
+            return await UnsetScalarElementAsync().ConfigureAwait(false);
         if (resolvedName.IsEmpty && kind == UnsetReferenceKind.Direct
             && variables.TryResolveBinding(name, selectOwner: null, out var binding))
         {
             // An element nameref supplies its own selector even when the operand has one.
             if (binding.Reference.Kind != VariableReferenceKind.Name)
-                return await UnsetElementAsync(binding.Reference, UnsetReferenceKind.Nameref, scope).ConfigureAwait(false);
+                return await UnsetElementAsync(binding.Reference, UnsetReferenceKind.Nameref, scope, projected: null).ConfigureAwait(false);
             if (binding.TryGetInvalidNameref(out var rawTarget))
                 return new(true, rawTarget.IsEmpty ? name : BindingName.Empty);
         }
@@ -275,7 +277,8 @@ internal static partial class WordExpansion
             return new(aggregate.Count == 0
                 || variables.TryAssignResolvedArray(resolvedName, [], ArrayKind.Indexed, initializeReadonly: false), BindingName.Empty);
 
-        var target = await ResolveReferenceAsync(reference, ReferenceUse.Unset, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
+        var selector = projected.HasValue ? VariableReference.ForElement(resolvedName, reference.Subscript) : reference;
+        var target = await ResolveReferenceAsync(selector, ReferenceUse.Unset, scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
         // A nameref unset ignores an element-removal failure, while expansion failures still reach the reader.
         if (!scope.CanExpand || target == null)
             return new(kind == UnsetReferenceKind.Nameref && !scope.Effects.HasPendingExpansionError, BindingName.Empty);
@@ -322,7 +325,7 @@ internal static partial class WordExpansion
 
             if (kind == UnsetReferenceKind.Nameref)
                 return new(true, BindingName.Empty);
-            if (variables.GetArrayMetadata(resolvedName) != null)
+            if (kind != UnsetReferenceKind.AuthoredScalar && variables.GetArrayMetadata(resolvedName) != null)
                 return new(false, BindingName.Empty);
             return await NotAnArrayAsync().ConfigureAwait(false);
         }
