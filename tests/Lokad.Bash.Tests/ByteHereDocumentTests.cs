@@ -48,6 +48,33 @@ public sealed class ByteHereDocumentTests
         }
     }
 
+    [Theory]
+    [InlineData("bash -c 'cat <<END\n\\' label", "5CFF0A", "label: " + EofWarning)]
+    [InlineData("eval 'cat <<END\n\\'", "5CFF0A",
+        "line 3: warning: here-document at line 2 delimited by end-of-file (wanted `END')\n")]
+    [InlineData("source ./script", "5CFF0A", "./script: " + EofWarning)]
+    [InlineData("bash ./script", "", "./script: " + EofWarning)]
+    [InlineData("bash -c 'cat <<-END\n\talpha\\\\\\' label", "616C7068615C5CFF0A", "label: " + EofWarning)]
+    [InlineData("bash -c 'cat <<END\n\\\n' label", "", "label: " + EofWarning)]
+    [InlineData("bash -c 'cat <<\"END\"\n\\' label", "5C0A", "label: " + EofWarning)]
+    [InlineData("bash -c 'cat <<END\n\\\\' label", "5C0A", "label: " + EofWarning)]
+    public async Task TerminalHereDocumentEscapeUsesTheActiveReader(string source, string outputHex, string error)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.AddFile("/script", "cat <<END\n\\");
+
+        var result = await host.RunAsync(source + "\nprintf '[%s]' \"$?\"\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Convert.FromHexString(outputHex + "5B305D"), host.StandardOutput.Content.ToArray());
+        Assert.Equal(error, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task EofWarningPreservesLiteralDelimiterBytes()
     {

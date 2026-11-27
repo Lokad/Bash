@@ -709,8 +709,11 @@ only resembles one inside continued data does not end the body. The `<<-` mode
 removes leading tabs from logical lines rather than from every physical fragment.
 At script EOF, a pending here-document uses the collected body and warns before
 its command unit executes. A final partial logical body line receives LF. A
-continuation with no remaining line contributes no bytes. A missing outer
-compound closer still reports its syntax error.
+continuation with no remaining line contributes no bytes. In `bash -c`, `eval`
+and `source`, an unpaired backslash at the end of an unquoted body is followed
+by byte `0xff` before the final LF, matching the Bash string reader. A Bash
+script launched by filename treats that backslash and the final LF as a
+continuation. A missing outer compound closer still reports its syntax error.
 Structured spellings such as `$(...)`, backticks, arithmetic and braced
 parameters provide literal delimiter text. Quoting any part of the delimiter word
 applies quote removal to the whole word and disables expansion of the body.

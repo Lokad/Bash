@@ -1289,10 +1289,17 @@ internal sealed class Tokenizer
             var lineStart = content?.Length ?? 0;
             var runStart = physicalLineStart;
             var hasContinuedBytes = false;
+            var escapedStringEof = false;
             while (Position < span.Length && span[Position] != (byte)'\n')
             {
-                if (joinContinuations && span[Position] == (byte)'\\' && Position + 1 < span.Length)
+                if (joinContinuations && span[Position] == (byte)'\\')
                 {
+                    if (Position + 1 == span.Length)
+                    {
+                        escapedStringEof = AllowEofHereDocuments && _scanContext.ReadsCommandString;
+                        Position++;
+                        break;
+                    }
                     if (span[Position + 1] == (byte)'\n')
                     {
                         content ??= StartContent();
@@ -1317,9 +1324,14 @@ internal sealed class Tokenizer
                 && runStart != physicalLineStart && !hasContinuedBytes)
                 break;
             var line = run;
+            if (escapedStringEof)
+                content ??= StartContent();
             if (content != null)
             {
                 AppendRun(content, run);
+                // Bash's string reader supplies the byte from pushing EOF back after the escape.
+                if (escapedStringEof)
+                    content.Append((byte)0xff);
                 line = content.ToMemory().Span[lineStart..];
             }
             else if (stripTabs)
