@@ -311,6 +311,112 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("a", "")]
+    [InlineData("A", " ")]
+    public async Task CompoundRedeclarationAppendsAndReplacesArrayNamerefCells(string kind, string cellSeparator)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                local -n slot; local -{{kind}} slot=([2]=prior)
+                local -{{kind}} slot+=([2]=fresh$((i++)))
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot
+                local -{{kind}} slot=()
+                declare -p slot
+            }
+            i=0; f
+            """);
+
+        Assert.Equal($"<0:1>\ndeclare -{kind}n slot=([2]=\"fresh0\"{cellSeparator})\ndeclare -{kind}n slot=()\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("+n", 0, "a", "")]
+    [InlineData("-n", 1, "an", "line 4: local: slot: reference variable cannot be an array\n")]
+    public async Task CompoundAppendWritesCellsBeforeNamerefFlagDispatch(string flag, int status, string attributes, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0
+            f() {
+                local -n slot; local -a slot=([2]=prior)
+                local {{flag}} -a slot+=([i+=2]=fresh)
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal($"<{status}:2>\ndeclare -{attributes} slot=([2]=\"fresh\")\n", result.StdOut);
+        Assert.Equal(error, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("a", "[i+=2]", 2, "")]
+    [InlineData("A", "[2]", 0, " ")]
+    public async Task ReadonlyArrayNamerefAppendPublishesBeforeEvalReturns(
+        string kind, string selector, int indexEffect, string cellSeparator)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; j=0
+            f() {
+                local -n slot; local -{{kind}}r slot=([2]=prior)
+                eval 'local -{{kind}} slot+=({{selector}}=fresh$((j++)))'
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal($"<1:{indexEffect}:1>\ndeclare -{kind}nr slot=([2]=\"fresh0\"{cellSeparator})\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("", "cannot convert indexed to associative array")]
+    [InlineData("+n", "readonly variable")]
+    [InlineData("-n", "reference variable cannot be an array")]
+    public async Task ConflictingCompoundArrayKindReportsPreparationThenBuiltinFailure(string flag, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                local -n slot; local -ar slot=([2]=prior)
+                local {{flag}} -A slot=([2]=fresh)
+                printf '<%s>\n' "$?"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal("<1>\ndeclare -anr slot=([2]=\"prior\")\n", result.StdOut);
+        Assert.Equal($"line 3: slot: cannot convert indexed to associative array\nline 3: local: slot: {error}\n",
+            result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ClearingReadonlyTakesPrecedenceOverChangingTheArrayNamerefKind()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -n slot; local -ar slot=([2]=prior)
+                local +r -A slot
+                printf '<%s>\n' "$?"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal("<1>\ndeclare -anr slot=([2]=\"prior\")\n", result.StdOut);
+        Assert.Equal("line 3: local: slot: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("-a slot=([i++]=value$((j++)))", "anr slot=([0]=\"value0\")")]
     [InlineData("-A slot=([key$((i++))]=value$((j++)))", "Anr slot=([key0]=\"value0\" )")]
     public async Task ReadonlyCompoundNamerefPublishesBeforeTheNestedReaderReturns(

@@ -123,6 +123,8 @@ public sealed partial class Evaluation
                         && HasConflictingArrayKind(declarationBinding.Owner, declarationBinding.Name, kind);
                     var initializesLocalNameref = targetLocal && !memberAssignment && targetReference.Kind == VariableReferenceKind.Name
                         && targetVariables.IsUnsetNameref(targetReference.Name);
+                    var redeclaresArrayNameref = targetLocal && !memberAssignment && targetVariables.IsArrayNameref(name);
+                    var retainsArrayNameref = redeclaresArrayNameref && !HasConflictingArrayKind(targetVariables, name, kind);
                     var rejectsTarget = memberAssignment || !writesLiteralGlobal && (!local || targetLocal)
                         && (initializesLocalNameref ? targetVariables.IsReadonlyBinding(name) : targetVariables.IsReadonly(name));
                     if (conflictingKind && (explicitNonlocalArray || !rejectsTarget))
@@ -145,8 +147,8 @@ public sealed partial class Evaluation
                         break;
                     }
                     var rejectsElementReference = !local && referencedElement && !globalInFunction;
-                    var initializesReadonlyNameref = initializesLocalNameref && rejectsTarget;
-                    if ((rejectsTarget || rejectsElementReference) && !initializesReadonlyNameref)
+                    var initializesReadonlyNameref = (initializesLocalNameref || retainsArrayNameref) && rejectsTarget;
+                    if ((rejectsTarget && !redeclaresArrayNameref || rejectsElementReference) && !initializesReadonlyNameref)
                     {
                         var owner = declarationBinding.Owner;
                         var arrayName = declarationBinding.Name;
@@ -180,7 +182,7 @@ public sealed partial class Evaluation
                         }
                         break;
                     }
-                    if (initializesReadonlyNameref)
+                    if (initializesLocalNameref && initializesReadonlyNameref)
                         targetVariables.DetachNamerefToUnassigned(name);
                     else if (local && scope.Context.FunctionContext is { } function)
                     {
@@ -198,7 +200,8 @@ public sealed partial class Evaluation
                             var diagnosticName = _state.PreparationDiagnosticName;
                             ReadOnlySpan<ShellValue> diagnosticSubject = diagnosticName.IsEmpty
                                 ? [subject] : [diagnosticName, ShellValue.FromText(": "), subject];
-                            var message = targetVariables.IsReadonly(name) ? "readonly variable" : ArrayConversionMessage(kind);
+                            var message = !redeclaresArrayNameref && targetVariables.IsReadonly(name)
+                                ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportCommandDiagnosticAsync(diagnosticSubject, [ShellValue.FromText(message)], scope).ConfigureAwait(false);
                             // Dispatch still visits this name and later operands; a shadowing function can also run.
                             AddAssignment(new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false));
@@ -242,7 +245,7 @@ public sealed partial class Evaluation
                         ApplyCompoundAttributes(targetVariables, name, setCompoundTransforms);
                     var appliedItems = await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, scope, targetVariables, declaredName,
-                            initializeReadonly: initializesReadonlyNameref)).ConfigureAwait(false);
+                            initializeReadonly: initializesReadonlyNameref, retainArrayNameref: retainsArrayNameref)).ConfigureAwait(false);
                     if (initializesLocalNameref && targetVariables.GetArrayMetadata(name) != null)
                     {
                         // The array keeps its cells and carries the nameref attribute on the same slot.

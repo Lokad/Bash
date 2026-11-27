@@ -1443,14 +1443,18 @@ public sealed partial class Variables
     /// <summary>Replaces an already selected array binding without following its nameref again.</summary>
     /// <remarks>The declaring initializer can populate a binding it just marked readonly.</remarks>
     internal bool TryAssignResolvedArray(BindingName resolved, IReadOnlyList<ShellValue> values, ArrayKind kind,
-        bool initializeReadonly)
+        bool initializeReadonly) =>
+        TryAssignResolvedArray(resolved, values, kind, initializeReadonly, retainArrayNameref: false);
+
+    internal bool TryAssignResolvedArray(BindingName resolved, IReadOnlyList<ShellValue> values, ArrayKind kind,
+        bool initializeReadonly, bool retainArrayNameref)
     {
         if (resolved.IsEmpty || !initializeReadonly && IsReadonly(resolved))
             return false;
 
         if (kind == ArrayKind.Indexed)
         {
-            ReplaceValue(resolved, new IndexedSlot(IndexedArray.FromSequential(values)));
+            ReplaceValue(resolved, new IndexedSlot(IndexedArray.FromSequential(values)), retainArrayNameref);
             return true;
         }
 
@@ -1464,7 +1468,7 @@ public sealed partial class Variables
             array.Set(key, value);
         }
 
-        ReplaceValue(resolved, new AssociativeSlot(array));
+        ReplaceValue(resolved, new AssociativeSlot(array), retainArrayNameref);
         return true;
     }
 
@@ -1485,11 +1489,12 @@ public sealed partial class Variables
     }
 
     /// <summary>Publishes an admitted associative replacement without copying its entries.</summary>
-    internal bool TryAssignResolvedAssociativeArray(BindingName resolved, AssociativeArray array, bool initializeReadonly)
+    internal bool TryAssignResolvedAssociativeArray(BindingName resolved, AssociativeArray array, bool initializeReadonly,
+        bool retainArrayNameref)
     {
         if (resolved.IsEmpty || !initializeReadonly && IsReadonly(resolved))
             return false;
-        ReplaceValue(resolved, new AssociativeSlot(array));
+        ReplaceValue(resolved, new AssociativeSlot(array), retainArrayNameref);
         return true;
     }
 
@@ -1573,21 +1578,25 @@ public sealed partial class Variables
 
     internal bool TrySetResolvedArrayElement(
         BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes) =>
-        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes, savedInputBytes: null, replaceAssociative: false);
+        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes, savedInputBytes: null,
+            replaceAssociative: false, initializesArrayNameref: false);
 
     internal bool TrySetResolvedArrayElement(
-        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, bool replaceAssociative) =>
-        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes: 0, savedInputBytes: null, replaceAssociative);
+        BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, bool replaceAssociative,
+        bool initializesArrayNameref) =>
+        TrySetResolvedArrayElement(resolved, index, value, memory, prepaidBytes: 0, savedInputBytes: null, replaceAssociative,
+            initializesArrayNameref);
 
     private bool TrySetResolvedArrayElement(
         BindingName resolved, IndexedArrayIndex index, ShellValue? value, EvaluationMemory? memory, long prepaidBytes,
-        long? savedInputBytes, bool replaceAssociative)
+        long? savedInputBytes, bool replaceAssociative, bool initializesArrayNameref)
     {
         if (resolved.IsEmpty)
             return false;
 
         TryGetBinding(resolved, out var slot);
-        if (slot is AssociativeSlot && !replaceAssociative || slot?.IsArrayNameref == true)
+        if (slot is AssociativeSlot && !replaceAssociative
+            || slot?.IsArrayNameref == true && !(initializesArrayNameref && slot is IndexedSlot))
             return false;
         if (value is { } assigned)
         {
@@ -1653,13 +1662,17 @@ public sealed partial class Variables
         return TryResolveWritableName(name, out var resolved) && TrySetResolvedArrayElement(resolved, key, value, memory: null);
     }
 
-    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory)
+    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory) =>
+        TrySetResolvedArrayElement(resolved, key, value, memory, initializesArrayNameref: false);
+
+    internal bool TrySetResolvedArrayElement(BindingName resolved, AssociativeArrayKey key, ShellValue? value, EvaluationMemory? memory,
+        bool initializesArrayNameref)
     {
         if (resolved.IsEmpty)
             return false;
 
         TryGetBinding(resolved, out var slot);
-        if (slot is IndexedSlot || slot?.IsArrayNameref == true)
+        if (slot is IndexedSlot || slot?.IsArrayNameref == true && !initializesArrayNameref)
             return false;
         if (value is { } assigned)
             value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);

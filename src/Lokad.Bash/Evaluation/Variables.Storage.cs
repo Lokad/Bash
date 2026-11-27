@@ -132,13 +132,17 @@ public sealed partial class Variables
     }
 
     /// <summary>Replaces the value while borrowing its declaration attributes.</summary>
-    private void ReplaceValue(BindingName name, VariableSlot replacement)
+    private void ReplaceValue(BindingName name, VariableSlot replacement) =>
+        ReplaceValue(name, replacement, retainArrayNameref: false);
+
+    private void ReplaceValue(BindingName name, VariableSlot replacement, bool retainArrayNameref)
     {
         if (TryGetBinding(name, detachBorrowed: false, out var previous))
         {
             if (previous is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
                 return;
-            replacement.Attributes |= previous.Attributes & ~BindingAttributes.ArrayNameref;
+            replacement.Attributes |= retainArrayNameref
+                ? previous.Attributes : previous.Attributes & ~BindingAttributes.ArrayNameref;
         }
         StoreBinding(name, replacement);
         ResetGetoptsPosition(name);
@@ -421,7 +425,7 @@ public sealed partial class Variables
         /// <summary>Promotes a borrowed record without retaining the source batch.</summary>
         internal bool TryStoreBorrowedRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory) =>
             _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes: 0,
-                savedInputBytes: SavedBytes, replaceAssociative: false);
+                savedInputBytes: SavedBytes, replaceAssociative: false, initializesArrayNameref: false);
 
         public void Dispose()
         {

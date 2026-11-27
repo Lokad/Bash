@@ -16,7 +16,7 @@ public sealed partial class Evaluation
     {
         if (kind == ArrayKind.Associative)
             return await ApplyAssociativeInitializerAsync(target, operation, scope, publicationScope, sourceName,
-                initializeReadonly, accept => VisitAssociativeInitializerAsync(target.Name, items, context, scope,
+                initializeReadonly, retainArrayNameref: false, accept => VisitAssociativeInitializerAsync(target.Name, items, context, scope,
                     prepareDeclaration: false, accept)).ConfigureAwait(false);
 
         using var itemMemory = items.Count == 0 ? null : new MemoryCapacity(Memory.Budget, 0);
@@ -24,7 +24,7 @@ public sealed partial class Evaluation
             : await ExpandCompoundArrayItemsAsync(target.Name, items, kind, operation, context, scope, itemMemory)
                 .ConfigureAwait(false);
         return expanded != null && await ApplyCompoundArrayItemsAsync(target.Name, operation, kind, expanded,
-            scope, publicationScope, target.Owner, sourceName, initializeReadonly).ConfigureAwait(false);
+            scope, publicationScope, target.Owner, sourceName, initializeReadonly, retainArrayNameref: false).ConfigureAwait(false);
     }
 
     /// <summary>Expands compound operands against the old binding, before replacement starts.</summary>
@@ -342,13 +342,14 @@ public sealed partial class Evaluation
     /// <summary>Applies expanded items in order; selector effects observe earlier writes.</summary>
     private async Task<bool> ApplyCompoundArrayItemsAsync(
         BindingName name, AssignmentOperator operation, ArrayKind kind, IReadOnlyList<ExpandedArrayItem> expanded,
-        ScopedEvaluation scope, ScopedEvaluation publicationScope, Variables targetVariables, BindingName sourceName, bool initializeReadonly)
+        ScopedEvaluation scope, ScopedEvaluation publicationScope, Variables targetVariables, BindingName sourceName,
+        bool initializeReadonly, bool retainArrayNameref)
     {
         if (kind == ArrayKind.Associative)
         {
             var target = new VariableBinding(VariableReference.ForName(name), targetVariables);
             return await ApplyAssociativeInitializerAsync(target, operation, scope, publicationScope, sourceName,
-                initializeReadonly, VisitPreparedItemsAsync).ConfigureAwait(false);
+                initializeReadonly, retainArrayNameref, VisitPreparedItemsAsync).ConfigureAwait(false);
         }
 
         // Word expansion sees the previous binding. Arithmetic selection and writes see
@@ -359,7 +360,7 @@ public sealed partial class Evaluation
             IReadOnlyList<ShellValue> initial = append && targetVariables.Scalars.TryGetValue(name, out var scalar)
                 ? [scalar]
                 : [];
-            if (!targetVariables.TryAssignResolvedArray(name, initial, kind, initializeReadonly))
+            if (!targetVariables.TryAssignResolvedArray(name, initial, kind, initializeReadonly, retainArrayNameref))
                 return false;
         }
 
@@ -376,7 +377,7 @@ public sealed partial class Evaluation
             {
                 target = await WordExpansion.ResolveCompoundElementAsync(
                     VariableReference.ForElement(name, subscript), item.ExpandedSubscript, item.Value, item.Operator,
-                    scope, targetVariables).ConfigureAwait(false);
+                    scope, targetVariables, retainArrayNameref).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                     return false;
                 if (target == null)
@@ -390,7 +391,8 @@ public sealed partial class Evaluation
                     await ReportFatalExpansionAsync(name.ToValue(), ShellValue.FromText("array index overflow"), ExpansionFailureKind.Assignment).ConfigureAwait(false);
                     return false;
                 }
-                target = new WordExpansion.ResolvedVariableReference.Indexed(name, position);
+                target = new WordExpansion.ResolvedVariableReference.Indexed(name, position)
+                    { InitializesArrayNameref = retainArrayNameref };
             }
 
             var value = item.Value;
@@ -422,7 +424,7 @@ public sealed partial class Evaluation
     /// <summary>Applies each associative element to the live append target or to a private replacement.</summary>
     private async Task<bool> ApplyAssociativeInitializerAsync(
         VariableBinding target, AssignmentOperator operation, ScopedEvaluation scope, ScopedEvaluation publicationScope, BindingName sourceName,
-        bool initializeReadonly, Func<Func<ExpandedArrayItem, ValueTask<bool>>, Task<bool>> visit)
+        bool initializeReadonly, bool retainArrayNameref, Func<Func<ExpandedArrayItem, ValueTask<bool>>, Task<bool>> visit)
     {
         var name = target.Name;
         var owner = target.Owner;
@@ -438,7 +440,7 @@ public sealed partial class Evaluation
             replacement = owner.CreateAssociativeReplacement(name, Memory);
 
         return await visit(AcceptAsync).ConfigureAwait(false)
-            && (replacement == null || owner.TryAssignResolvedAssociativeArray(name, replacement, initializeReadonly));
+            && (replacement == null || owner.TryAssignResolvedAssociativeArray(name, replacement, initializeReadonly, retainArrayNameref));
 
         async ValueTask<bool> AcceptAsync(ExpandedArrayItem item)
         {
@@ -450,7 +452,8 @@ public sealed partial class Evaluation
 
             if (replacement == null)
             {
-                var location = new WordExpansion.ResolvedVariableReference.Associative(name, key);
+                var location = new WordExpansion.ResolvedVariableReference.Associative(name, key)
+                    { InitializesArrayNameref = retainArrayNameref };
                 return await location.AssignValueAsync(publicationScope, owner, sourceName, item.Value, item.Operator, ShellValue.Empty, write, scope)
                     .ConfigureAwait(false) != null;
             }

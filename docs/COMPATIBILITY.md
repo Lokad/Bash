@@ -1375,6 +1375,12 @@ write. A named indexed initializer can report an invalid identifier
 with status zero, while a valid named associative initializer can
 populate key zero. With a missing target, explicit `-n` and an array
 flag prepare the target before rejecting the nameref flag.
+A parsed compound redeclaration of an existing local array nameref can
+replace or append cells while retaining the attribute. With `+n` the
+builtin clears the attribute after a successful compound write. With
+`-n` it can reject the flag after the write. A same-kind compound
+initializer on a readonly array nameref publishes its cells before the
+current reader returns failure.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

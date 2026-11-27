@@ -22,6 +22,7 @@ internal static partial class WordExpansion
         internal Variables? ReadOwner { get; init; }
         internal bool IsWholeBindingRead { get; init; }
         internal bool IsIgnoredArrayNamerefWrite { get; init; }
+        internal bool InitializesArrayNameref { get; init; }
         internal sealed record Scalar(BindingName VariableName) : ResolvedVariableReference(VariableName);
         internal sealed record Indexed(BindingName VariableName, IndexedArrayIndex Index) : ResolvedVariableReference(VariableName)
         {
@@ -92,7 +93,8 @@ internal static partial class WordExpansion
             this switch
             {
                 Scalar => variables.TrySetResolvedUnassigned(Name),
-                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null, memory, indexed.ReplaceAssociative),
+                Indexed indexed => variables.TrySetResolvedArrayElement(Name, indexed.Index, null, memory,
+                    indexed.ReplaceAssociative, initializesArrayNameref: false),
                 Associative associative => variables.TrySetResolvedArrayElement(Name, associative.Key, null, memory),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
@@ -198,8 +200,10 @@ internal static partial class WordExpansion
             {
                 Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory,
                     initializeReadonly: declarationWrite == DeclarationWrite.ReadonlyInitializer),
-                Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory, indexed.ReplaceAssociative),
-                Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory),
+                Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory,
+                    indexed.ReplaceAssociative, InitializesArrayNameref),
+                Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory,
+                    InitializesArrayNameref),
                 _ => throw new InvalidOperationException("Unknown variable reference."),
             };
         }
@@ -482,11 +486,12 @@ internal static partial class WordExpansion
 
     internal static Task<ResolvedVariableReference?> ResolveCompoundElementAsync(
         VariableReference reference, ShellValue expandedSubscript, ShellValue value, AssignmentOperator operation,
-        ScopedEvaluation scope, Variables targetVariables) =>
+        ScopedEvaluation scope, Variables targetVariables, bool initializesArrayNameref) =>
         ResolveReferenceAsync(reference, ReferenceUse.CompoundAssign, scope, ExpansionPurpose.ArithmeticSource,
-            new CompoundElement(expandedSubscript, value, operation), targetVariables, targetVariables);
+            new CompoundElement(expandedSubscript, value, operation, initializesArrayNameref), targetVariables, targetVariables);
 
-    private readonly record struct CompoundElement(ShellValue Subscript, ShellValue Value, AssignmentOperator Operator);
+    private readonly record struct CompoundElement(ShellValue Subscript, ShellValue Value, AssignmentOperator Operator,
+        bool InitializesArrayNameref);
 
     /// <summary>Reads a selected binding through ordinary nameref/array expansion rules.</summary>
     internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
@@ -850,7 +855,8 @@ internal static partial class WordExpansion
                         return null;
                     }
                 }
-                return new ResolvedVariableReference.Indexed(name, position) { ReadOwner = targetVariables };
+                return new ResolvedVariableReference.Indexed(name, position)
+                    { ReadOwner = targetVariables, InitializesArrayNameref = compound is { InitializesArrayNameref: true } };
             }
             if (compound is { } item)
             {

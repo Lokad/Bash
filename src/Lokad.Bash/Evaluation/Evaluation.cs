@@ -2995,6 +2995,12 @@ public sealed partial class Evaluation : IFileTester
                 var declarationName = resolution == BindingResolution.LastNameref || followsLocalNameref && existingTargetLocal
                     ? sourceName : selectedLocalBinding?.Name ?? name;
                 var redeclaresLocalArray = followsLocalNameref && existingTargetLocal && element && operand.Value == null;
+                if (local && existingLocal && !element && arrayKind != ArrayAssignmentKind.Auto && setsNameref
+                    && targetVars.GetArrayMetadata(name) != null)
+                {
+                    await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
+                    continue;
+                }
                 if (convertsLocalNamerefToArray && (readonlyBinding || conflictingArrayKinds)
                     && functionContext is { } localOwner)
                 {
@@ -3217,7 +3223,10 @@ public sealed partial class Evaluation : IFileTester
                             localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, localCaseChange,
                             elementAttributes, Memory, localFunction.Enclosing))
                     {
-                        if (!redeclaresLocalArray && (followsLocalNameref ? readonlyBinding : targetVars.IsReadonly(name)))
+                        var rejectsArrayNamerefKind = operand.Value == null && arrayKind != ArrayAssignmentKind.Auto
+                            && targetVars.IsArrayNameref(name);
+                        if (!redeclaresLocalArray && !rejectsArrayNamerefKind
+                            && (followsLocalNameref ? readonlyBinding : targetVars.IsReadonly(name)))
                             await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                         else
                         {
