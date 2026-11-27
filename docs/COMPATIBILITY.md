@@ -974,10 +974,14 @@ the declaration builtin's name and the reached stderr mapping.
 
 An explicit array kind conflict through a whole-name nameref reports the
 declaration operand. Through an element nameref, a name-only declaration or
-compound preparation reports the reached array. At script scope, a compatible
-explicit compound declaration prepares that array before reporting the
-stored element spelling as an invalid identifier. The initializer's
-expansions have already run, and the stored selector stays unevaluated.
+compound preparation reports the reached array. An explicit nonlocal compound
+declaration expands the initializer before checking the array kind. A kind
+conflict rejects the declaration before it changes any attributes. A compatible
+declaration can apply source integer and case attributes even when the
+initializer then rejects a readonly variable or a subscripted operand.
+At script scope this also applies through an element nameref. The stored
+element spelling is reported as an invalid identifier and its selector stays
+unevaluated.
 
 `type -p` prints the host's reported path when the selected name resolves to an
 external command. Builtins, keywords and functions resolve successfully in this

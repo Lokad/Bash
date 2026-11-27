@@ -110,19 +110,11 @@ public sealed partial class Evaluation
                     var declarationBinding = compoundGlobal
                         && scope.Context.TryResolveGlobalBinding(declaredName, scope.Variables, out var globalBinding)
                         ? globalBinding : new VariableBinding(VariableReference.ForName(name), targetVariables);
-                    var conflictingKind = !local && (!compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto)
+                    var explicitNonlocalArray = !local && compoundArrayKind != ArrayAssignmentKind.Auto;
+                    var conflictingKind = !local && (!compoundGlobal || explicitNonlocalArray)
                         && HasConflictingArrayKind(declarationBinding.Owner, declarationBinding.Name, kind);
-                    // A compatible -g initializer in a function has its own binding rules.
-                    var preparesReferencedElement = referencedElement && !local && compoundArrayKind != ArrayAssignmentKind.Auto
-                        && (!globalInFunction || conflictingKind);
-                    if (!preparesReferencedElement && (memberAssignment || (!local || targetLocal) && targetVariables.IsReadonly(name)))
-                    {
-                        await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(),
-                                memberAssignment ? "cannot assign list to array member" : "readonly variable", scope)
-                            .ConfigureAwait(false);
-                        break;
-                    }
-                    if (conflictingKind)
+                    var rejectsTarget = memberAssignment || (!local || targetLocal) && targetVariables.IsReadonly(name);
+                    if (conflictingKind && (explicitNonlocalArray || !rejectsTarget))
                     {
                         var subject = (referencedElement ? declarationBinding.Name
                             : compoundArrayKind == ArrayAssignmentKind.Auto ? name : declaredName).ToValue();
@@ -140,11 +132,21 @@ public sealed partial class Evaluation
                             GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }
-                    if (preparesReferencedElement)
+                    // A compatible -g initializer through an element in a function has its own binding rules.
+                    var rejectsElementReference = explicitNonlocalArray && referencedElement && !globalInFunction;
+                    if (rejectsTarget || rejectsElementReference)
                     {
-                        // The declaration prepares the array before the initializer rejects an element reference.
-                        if (!declarationBinding.Owner.TryDeclareResolvedArray(declarationBinding.Name, kind, ScalarArrayPromotion.RetainValue))
-                            await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "cannot assign list to array member", scope)
+                        var owner = declarationBinding.Owner;
+                        var arrayName = declarationBinding.Name;
+                        // Source attributes belong to the declaration phase, before the initializer attempts to write.
+                        var declared = explicitNonlocalArray && (!referencedElement || !globalInFunction)
+                            && owner.TryDeclareResolvedArray(arrayName, kind, ScalarArrayPromotion.RetainValue);
+                        if (declared)
+                            ApplyCompoundAttributes(owner, arrayName, setCompoundTransforms);
+
+                        if (!rejectsElementReference || !declared)
+                            await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(),
+                                    memberAssignment || rejectsElementReference ? "cannot assign list to array member" : "readonly variable", scope)
                                 .ConfigureAwait(false);
                         else
                         {
@@ -195,9 +197,7 @@ public sealed partial class Evaluation
                             await ReportRemovingNamerefAsync(name).ConfigureAwait(false);
                         targetVariables.TryRemoveNamerefAttribute(name);
                     }
-                    if (compoundInteger)
-                        targetVariables.SetIntegerBinding(name, setCompoundTransforms);
-                    targetVariables.SetCaseAttributes(name, GetCompoundCaseChange(setCompoundTransforms));
+                    ApplyCompoundAttributes(targetVariables, name, setCompoundTransforms);
                     if (!await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, scope, targetVariables, declaredName,
                             initializeReadonly: false)).ConfigureAwait(false))
@@ -423,15 +423,20 @@ public sealed partial class Evaluation
             }
         }
 
-        CaseAttributeChange GetCompoundCaseChange(bool set)
+        void ApplyCompoundAttributes(Variables owner, BindingName name, bool set)
         {
+            if (compoundInteger)
+                owner.SetIntegerBinding(name, set);
             if (compoundCase == BindingAttributes.None)
-                return default;
-            if (!set)
-                return new(BindingAttributes.None, compoundCase);
-            return compoundCase is BindingAttributes.Capitalize or BindingAttributes.Lowercase or BindingAttributes.Uppercase
-                ? default(CaseAttributeChange).Include(compoundCase, remove: false)
-                : new(compoundCase, BindingAttributes.Case);
+                return;
+            var change = compoundCase switch
+            {
+                _ when !set => new CaseAttributeChange(BindingAttributes.None, compoundCase),
+                BindingAttributes.Capitalize or BindingAttributes.Lowercase or BindingAttributes.Uppercase
+                    => default(CaseAttributeChange).Include(compoundCase, remove: false),
+                _ => new CaseAttributeChange(compoundCase, BindingAttributes.Case),
+            };
+            owner.SetCaseAttributes(name, change);
         }
 
         static bool HasConflictingArrayKind(Variables variables, BindingName name, ArrayKind kind) =>

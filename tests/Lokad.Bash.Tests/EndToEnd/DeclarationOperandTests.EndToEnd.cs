@@ -446,6 +446,32 @@ public sealed class DeclarationOperandTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("i=0; item=(old); declare -n alias='item[i++]'\ndeclare -ai alias=([2]=$(printf rhs >&2; printf skipped))\nprintf '<%s:%s>' \"$?\" \"$i\"; item[1]=2+3; printf '<%s:%s:%s>' \"${item[0]}\" \"${item[1]}\" \"${item[2]-unset}\"",
+        "<1:0><old:5:unset>", "rhsline 2: `item[i++]': not a valid identifier\n")]
+    [InlineData("i=0; item=(old); declare -n alias='item[i++]'\neval 'declare -au alias=([2]=$(printf rhs >&2; printf skipped))'\nprintf '<%s:%s>' \"$?\" \"$i\"; item[1]=MiXeD; printf '<%s:%s>' \"${item[0]}\" \"${item[1]}\"",
+        "<1:0><old:MIXED>", "rhsline 2: eval: `item[i++]': not a valid identifier\n")]
+    [InlineData("declare -Ar item=([k]=old); declare -n alias='item[k]'\ndeclare -Ac alias=([k]=$(printf rhs >&2; printf fresh))\nprintf '<%s>' \"$?\"; declare -p item",
+        "<1>declare -Arc item=([k]=\"old\" )\n", "rhsline 2: `item[k]': not a valid identifier\n")]
+    [InlineData("declare -Ar item=([k]=old); declare -n alias=item\ndeclare -Ai alias=([0]=$(printf rhs >&2; printf fresh))\nprintf '<%s>' \"$?\"; declare -p item",
+        "<1>declare -Air item=([k]=\"old\" )\n", "rhsline 2: alias: readonly variable\n")]
+    [InlineData("i=0; unset item\ndeclare -ai item[i++]=([2]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item",
+        "<1:0>declare -ai item\n", "rhsline 2: item[i++]: cannot assign list to array member\n")]
+    [InlineData("item=(old); readonly item; declare -n alias=item\ndeclare -Ai alias=([0]=$(printf rhs >&2; printf fresh))\nprintf '<%s>' \"$?\"; declare -p item",
+        "<1>declare -ar item=([0]=\"old\")\n", "rhsline 2: alias: cannot convert indexed to associative array\n")]
+    [InlineData("item=(old); readonly item; declare -n alias=item\nf(){\ndeclare -gAi alias=([0]=$(printf rhs >&2; printf fresh))\nprintf '<%s>' \"$?\"; declare -p item\n}; f",
+        "<1>declare -ar item=([0]=\"old\")\n", "rhsline 3: f: alias: cannot convert indexed to associative array\nline 3: declare: alias: cannot convert indexed to associative array\n")]
+    [InlineData("i=0; item=(old); declare -n alias='item[i++]'\ndeclare -arx alias=([2]=$(printf rhs >&2; printf fresh))\nprintf '<%s:%s>' \"$?\" \"$i\"; declare -p item",
+        "<1:0>declare -a item=([0]=\"old\")\n", "rhsline 2: `item[i++]': not a valid identifier\n")]
+    public async Task RejectedCompoundDeclarationPreservesSourceAttributes(string script, string stdout, string stderr)
+    {
+        var result = await EvaluationTestHelper.RunAsync(script);
+
+        Assert.Equal(stdout, result.StdOut);
+        Assert.Equal(stderr, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("v='a b'; export x=$v; printf '<%s>\\n' \"$x\"", "<a b>\n", "", 0)]
     [InlineData("v='a b'; \"export\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
     [InlineData("v='a b'; ex\"port\" x=$v; printf '<%s>\\n' \"$x\"", "<a>\n", "", 0)]
