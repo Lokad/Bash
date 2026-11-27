@@ -185,4 +185,35 @@ public sealed class AnsiCQuotedWordTests
         Assert.True(decoded.Bytes.Equals(input.Bytes));
         Assert.Equal(0, governor.ReservedBytes);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnchangedQuoteNormalizationSkipsStagingCopy(bool adjacentCapture)
+    {
+        const int repetitions = 32;
+        var literal = new string('x', 8192) + "\\q";
+        var source = ShellSource.FromText(adjacentCapture ? "((1)); printf '%s' $'" + literal + "'"
+            : "${missing:-$'" + literal + "'}");
+        ShellSource projected = default;
+
+        AllocationAssert.SustainedReuse(() => projected = Normalize(), repetitions, maximumBytes: 20480L * repetitions);
+
+        var expected = (adjacentCapture ? "((1)); printf '%s' '" : "missing:-'") + literal + "'";
+        Assert.Equal(expected, projected.ToUtf8String());
+
+        ShellSource Normalize()
+        {
+            var context = new ShellScanContext();
+            if (adjacentCapture)
+                return ShellSourceCursor.ReadAdjacentCaptureSpelling(context, source, 0, source.Length,
+                    workspace: null, prepareReplay: true, out _, out _, out _).Source;
+            var status = BracedParameterScanner.ScanWithPayload(context, source, 0, out _, out _, out var spelling,
+                out _, out _, out _, trackRenderedLines: true, BracedParameterScanner.LexicalQuotes.Unquoted,
+                resolveLateSubscripts: false, out _, out _);
+            if (status != BracedParameterScanStatus.Found)
+                throw new InvalidOperationException("Expected a complete braced operand.");
+            return spelling.Source;
+        }
+    }
 }

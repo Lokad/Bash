@@ -465,7 +465,8 @@ internal static class BracedParameterScanner
 
         internal void AddQuote(ShellScanContext context, int start, int end, ShellSource literal, bool protect)
         {
-            PrepareEdit(context).Add(new Edit(start, end, ShellEscapeDecoder.DecodeAnsiCValue(literal.AsSpan(), _scratch), protect, null));
+            // The edit is consumed while the physical backing still belongs to this scan.
+            PrepareEdit(context).Add(new Edit(start, end, ShellEscapeDecoder.DecodeAnsiCValue(literal.ToValue(), _scratch), protect, null));
             _hasQuoteEdits = true;
             HasUnprotectedEdits |= !protect;
         }

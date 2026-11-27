@@ -31,8 +31,8 @@ public static class ShellEscapeDecoder
         return ShellValue.FromBytes(source.ToArray());
     }
 
-    /// <summary>Reuses an already owned value when no escape changes it.</summary>
-    internal static ShellValue DecodeAnsiCValue(ShellValue source, MemoryCapacity memory) =>
+    /// <summary>Reuses the input backing when no escape changes the value.</summary>
+    internal static ShellValue DecodeAnsiCValue(ShellValue source, MemoryCapacity? memory) =>
         DecodeAnsiCEscapes(source.Bytes.Span, memory) ?? source;
 
     private static ShellValue? DecodeAnsiCEscapes(ReadOnlySpan<byte> source, MemoryCapacity? memory)

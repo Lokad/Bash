@@ -428,6 +428,9 @@ Conditional display edits borrow the operands' decoded ANSI-C values and the
 retained capture trees. The normalized display bytes have their own admission.
 Structured here-document delimiters keep admitted compact spelling and closing
 bytes with the parsed redirection, for collection and later function serialization.
+Braced operands and adjacent capture spelling borrow unchanged ANSI-C bytes from
+the source until the normalized output is written. Tokenized literal values keep
+independent backing so they can survive the source reader.
 Contiguous here-document bodies borrow their input source bytes. Tab removal or
 continuation joining uses the existing syntax owner for normalized backing.
 Here-document completion admits the traversal stack and node replacement map

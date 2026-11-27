@@ -264,7 +264,7 @@ internal sealed class ShellSourceCursor
                     {
                         if (!cursor.TryReadQuotedLiteralSource(out var value, out _))
                             break;
-                        var decoded = ShellEscapeDecoder.DecodeAnsiCValue(value.AsSpan(), workspace);
+                        var decoded = ShellEscapeDecoder.DecodeAnsiCValue(value.ToValue(), workspace);
                         if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(AppendBefore(first), decoded.Bytes.Span))
                             throw new ByteMemoryBuilder.LimitExceededException();
                         RecordLineChange(first, cursor.Position, decoded.Bytes.Span.Count((byte)'\n'));
