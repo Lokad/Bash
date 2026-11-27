@@ -2,6 +2,7 @@ using Lokad.Bash.Tests.EndToEnd;
 
 namespace Lokad.Bash.Tests;
 
+[Collection(ComplexityRegressionCollection.Name)]
 public sealed class ConditionalRegexTimeoutTests
 {
     [Fact]
