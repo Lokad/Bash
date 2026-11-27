@@ -150,8 +150,6 @@ public sealed partial class Variables
     private IReadOnlyDictionary<BindingName, NamerefTarget> NamerefTargets { get; }
     internal IReadOnlyDictionary<BindingName, ShellValue> Namerefs =>
         NamerefTargets.ToDictionary(entry => entry.Key, entry => entry.Value.Value);
-    internal IEnumerable<BindingName> BindingNames =>
-        EnumerateBindings().Where(entry => entry.Value is not AttributeSlot).Select(entry => entry.Key);
     internal IEnumerable<BindingName> AssignedNames
     {
         get
@@ -1733,7 +1731,7 @@ public sealed partial class Variables
             flags[length++] = kind;
         if ((attributes & BindingAttributes.Integer) != 0)
             flags[length++] = (byte)'i';
-        if (slot is NamerefSlot || slot?.IsArrayNameref == true)
+        if (slot?.HasNamerefAttribute == true)
             flags[length++] = (byte)'n';
         if ((attributes & BindingAttributes.Readonly) != 0)
             flags[length++] = (byte)'r';
@@ -1921,7 +1919,7 @@ public sealed partial class Variables
     internal bool IsArrayNameref(BindingName name) => HasAttribute(name, BindingAttributes.ArrayNameref);
 
     internal bool HasNamerefAttribute(BindingName name) => TryGetBinding(name, detachBorrowed: false, out var slot)
-        && (slot is NamerefSlot || slot.IsArrayNameref);
+        && slot.HasNamerefAttribute;
 
     internal bool IsUnsetNameref(BindingName name) => NamerefTargets.TryGetValue(name, out var target) && target.IsUnset;
 

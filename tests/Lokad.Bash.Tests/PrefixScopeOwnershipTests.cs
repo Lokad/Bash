@@ -153,7 +153,8 @@ public sealed class PrefixScopeOwnershipTests
             Assert.True(command.TrySetArrayElement("map", key, ShellValue.FromText("inner")));
             Assert.True(command.TryUnset("hidden"));
             Assert.False(command.HasBinding("hidden"));
-            Assert.DoesNotContain((BindingName)"hidden", command.BindingNames);
+            Assert.DoesNotContain((BindingName)"hidden",
+                command.EnumerateDeclarationNames(DeclarationListingAttributes.None, Variables.BindingAttributes.None));
             Assert.True(command.TryGetScalar("scalar", out var scalar));
             Assert.Equal("inner", scalar.ToUtf8String());
 
@@ -680,7 +681,8 @@ public sealed class PrefixScopeOwnershipTests
             Assert.True(command.TrySetScalar("temporary", value));
             Assert.True(command.TryGetScalar("retained_4095", out var retained));
             Assert.Equal(value, retained);
-            Assert.Equal(4098, command.BindingNames.Count());
+            Assert.Equal(4098, command.EnumerateDeclarationNames(
+                DeclarationListingAttributes.None, Variables.BindingAttributes.None).Count());
             Assert.Equal((BindingName)"unrelated_array", Assert.Single(command.IndexedArrays.Keys));
             Assert.Equal(4096, command.PositionalParameters.Count);
             Assert.InRange(governor.PeakBytes, 1, governor.LimitBytes);

@@ -2191,18 +2191,25 @@ public sealed partial class Evaluation : IFileTester
 
                 IEnumerable<BindingName> GetListedNames(MemoryCapacity listingMemory)
                 {
-                    var names = commandVars.BindingNames;
+                    // Attribute options do not narrow a local listing.
+                    var filters = localBuiltinFrame == null ? options.ListingAttributes : DeclarationListingAttributes.None;
+                    var caseFilter = localBuiltinFrame == null ? options.CaseChange.Set : BindingAttributes.None;
+                    var names = declarationScope.Variables.EnumerateDeclarationNames(filters, caseFilter);
                     if (bindings is { } savedBindings)
                     {
                         // Each store is unique. A saved prefix replaces the active entry for listing.
                         names = names.Where(name => !savedBindings.Contains(name))
-                            .Concat(savedBindings.SavedVariables.BindingNames);
+                            .Concat(savedBindings.SavedVariables.EnumerateDeclarationNames(filters, caseFilter));
                     }
-                    var selected = names.Where(MatchesFilter);
+                    // Uninstalled function prefixes can supply a separate view of visible names.
+                    if (!ReferenceEquals(commandVars, declarationScope.Variables))
+                        names = names.Where(commandVars.HasBinding);
+                    if (localBuiltinFrame != null)
+                        names = names.Where(localBuiltinFrame.Locals.Declares);
                     if (listOptionSnapshot)
-                        selected = selected.Prepend("-");
+                        names = names.Prepend("-");
                     var sorted = new List<BindingName>();
-                    foreach (var name in selected)
+                    foreach (var name in names)
                     {
                         Memory.PrepareListCapacity(listingMemory, sorted, 1);
                         if (name.NeedsValueEncoding)
@@ -2211,25 +2218,6 @@ public sealed partial class Evaluation : IFileTester
                     }
                     sorted.Sort(static (left, right) => ShellValue.ByteOrder.Compare(left.ToValue(), right.ToValue()));
                     return sorted;
-                }
-
-                bool MatchesFilter(BindingName name)
-                {
-                    var variables = SelectVariables(name);
-                    if (!variables.HasBinding(name))
-                        return false;
-                    // Attribute options do not narrow a local listing.
-                    if (localBuiltinFrame != null)
-                        return localBuiltinFrame.Locals.Declares(name);
-                    var flags = options.ListingAttributes;
-                    return (!flags.HasFlag(DeclarationListingAttributes.Indexed) || variables.IndexedArrays.ContainsKey(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Associative) || variables.AssociativeArrays.ContainsKey(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Nameref) || variables.HasNamerefAttribute(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Exported) || variables.IsExported(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Integer) || variables.IsIntegerBinding(name))
-                        && (!flags.HasFlag(DeclarationListingAttributes.Readonly) || variables.IsReadonlyBinding(name))
-                        && (options.CaseChange.Set == BindingAttributes.None
-                            || (variables.GetAssignmentAttributes(name) & options.CaseChange.Set) != 0);
                 }
             }
 

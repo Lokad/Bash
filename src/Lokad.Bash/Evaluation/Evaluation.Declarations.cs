@@ -476,13 +476,6 @@ public sealed partial class Evaluation
     private enum DeclarationAttributeChange { Unchanged, Set, Clear }
     private enum DeclarationPrefixPromotion { Element, Nameref, Integer }
 
-    /// <summary>Positive options select listing attributes even when a later option clears mutation intent.</summary>
-    [Flags]
-    private enum DeclarationListingAttributes
-    {
-        None = 0, Indexed = 1, Associative = 2, Nameref = 4, Exported = 8, Readonly = 16, Integer = 32
-    }
-
     private enum DeclarationHelp { None, FirstField, AfterOptions }
 
     private static BindingAttributes ReadCaseAttribute(byte flag) => flag switch

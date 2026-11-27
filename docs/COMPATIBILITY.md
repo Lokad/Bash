@@ -393,6 +393,14 @@ operands before the buffered write diagnostic. Named function listings without
 the print flag report the write diagnostic for each reached function.
 Host write errors still fail a declaration listing. Downstream reader closure
 stops the listing and preserves any failure already reported for an operand.
+
+For an operand-free variable listing, `declare` applies array-kind filters
+and selects bindings with any of the requested positive attributes. A
+positive case option remains a listing filter even when a later option
+clears it for assignments. Named print operands select their bindings
+directly. Attribute listings can display a name that has attributes and
+remains unset. Assignment-style listings omit names without values.
+
 `caller` uses a compact display of active function and
 sourced invocations for unnamed script input. Both `source` and `.` appear
 as `source`. An omitted index selects the current invocation. Explicit

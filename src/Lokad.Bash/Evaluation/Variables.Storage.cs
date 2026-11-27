@@ -9,6 +9,19 @@ using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
+/// <summary>Positive options select listing attributes even when a later option clears mutation intent.</summary>
+[Flags]
+internal enum DeclarationListingAttributes
+{
+    None = 0,
+    Readonly = (int)Variables.BindingAttributes.Readonly,
+    Exported = (int)Variables.BindingAttributes.Exported,
+    Integer = (int)Variables.BindingAttributes.Integer,
+    Nameref = (int)Variables.BindingAttributes.ArrayNameref,
+    Indexed = 256,
+    Associative = 512
+}
+
 public sealed partial class Variables
 {
     private const int BindingTableEntryBytes = 48;
@@ -41,6 +54,7 @@ public sealed partial class Variables
     {
         public BindingAttributes Attributes { get; set; }
         public bool IsArrayNameref => (Attributes & BindingAttributes.ArrayNameref) != 0;
+        public bool HasNamerefAttribute => this is NamerefSlot || IsArrayNameref;
 
         /// <summary>Copies mutable containers and attributes, sharing only immutable name/value bytes.</summary>
         public VariableSlot Clone()
@@ -231,6 +245,24 @@ public sealed partial class Variables
 
     private bool HasAttribute(BindingName name, BindingAttributes attribute) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) && (slot.Attributes & attribute) != 0;
+
+    /// <summary>Selects names from visible slots without taking ownership of their values.</summary>
+    internal IEnumerable<BindingName> EnumerateDeclarationNames(
+        DeclarationListingAttributes filters, BindingAttributes caseFilter)
+    {
+        const DeclarationListingAttributes arrayFilters =
+            DeclarationListingAttributes.Indexed | DeclarationListingAttributes.Associative;
+        var attributes = (BindingAttributes)(filters & ~arrayFilters) | caseFilter;
+        foreach (var (name, slot) in EnumerateBindings())
+        {
+            if (slot is not AttributeSlot
+                && (!filters.HasFlag(DeclarationListingAttributes.Indexed) || slot is IndexedSlot)
+                && (!filters.HasFlag(DeclarationListingAttributes.Associative) || slot is AssociativeSlot)
+                && (attributes == BindingAttributes.None || (slot.Attributes & attributes) != 0
+                    || (attributes & BindingAttributes.ArrayNameref) != 0 && slot.HasNamerefAttribute))
+                yield return name;
+        }
+    }
 
     internal readonly record struct ArrayMetadata(ArrayKind Kind, int Count, bool IsInitialized, long? MaxIndex);
 

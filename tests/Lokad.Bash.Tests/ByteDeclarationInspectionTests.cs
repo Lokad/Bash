@@ -308,6 +308,59 @@ public sealed class ByteDeclarationInspectionTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData("declare -axr probe_both=(both); declare -ar probe_readonly=(readonly); declare -ax probe_exported=(exported); declare -a probe_neither=(neither); declare -xr probe_scalar=no; declare -axrp",
+        "declare -arx probe_both=([0]=\"both\")\ndeclare -ax probe_exported=([0]=\"exported\")\ndeclare -ar probe_readonly=([0]=\"readonly\")\n")]
+    [InlineData("probe_value=target; declare -n probe_ref=probe_value; readonly probe_readonly=word; declare -nrp",
+        "declare -r probe_readonly=\"word\"\ndeclare -n probe_ref=\"probe_value\"\n")]
+    [InlineData("declare -u probe_upper=upper; readonly probe_readonly=word; declare -u +u -rp",
+        "declare -r probe_readonly=\"word\"\ndeclare -u probe_upper=\"UPPER\"\n")]
+    [InlineData("declare -u probe_upper=upper; declare -l probe_lower=LOWER; declare -u -lp",
+        "declare -l probe_lower=\"lower\"\ndeclare -u probe_upper=\"UPPER\"\n")]
+    [InlineData("export probe_outer=original; probe_outer=temporary declare -xp",
+        "declare -x probe_outer=\"original\"\n")]
+    [InlineData("f(){ local probe_local=original; probe_local=temporary local -rp; }; f",
+        "declare -- probe_local=\"original\"\n")]
+    public async Task OperandFreeListingFiltersTheVisibleDeclarationSlots(string script, string expected)
+    {
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected.TrimEnd('\n'),
+            string.Join('\n', result.StdOut.Split('\n').Where(static line => line.Contains(" probe_", StringComparison.Ordinal))));
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task OperandFreeListingSelectsNamesBeforeWritingAndRendersReachedValues()
+    {
+        var state = new Eval(Parser.Parse("export probe_first=one probe_last=before; probe_hidden=hidden; declare -xp"));
+        var governor = new MemoryGovernor(256 * 1024);
+        await using var host = new TestHost { MemoryBudget = governor };
+        using var owner = governor.CreateScope();
+        var rows = new List<string>();
+        host.BeforeAppend = (descriptor, content, _) =>
+        {
+            if (descriptor != FileDescriptor.StdOut || !content.Span.StartsWith("declare -x probe_"u8))
+                return;
+            if (rows.Count == 0)
+            {
+                state.SetExportedVariable("probe_hidden", ShellValue.FromText("hidden"));
+                state.SetExportedVariable("probe_last", ShellValue.FromText("after"));
+            }
+            rows.Add(Utf8Text.Decode(content));
+        };
+
+        var result = await new Engine().RunAsync(state, host, owner, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(["declare -x probe_first=\"one\"\n", "declare -x probe_last=\"after\"\n"], rows);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task VariableListingReleasesItsNameSnapshotBeforeWritingFunctions()
     {
