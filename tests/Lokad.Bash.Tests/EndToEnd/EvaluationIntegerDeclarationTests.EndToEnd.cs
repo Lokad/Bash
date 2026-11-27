@@ -23,6 +23,8 @@ public sealed class EvaluationIntegerDeclarationTestsEndToEnd
         "<5><18>")]
     [InlineData("""declare -i n; printf '<%s:%s>' "${n:=2+3}" "$n"; for n in '4+5' '6*7'; do printf '<%s>' "$n"; done""",
         "<5:5><9><42>")]
+    [InlineData("""for n in '2+3' '2+3' '2+3'; do printf '<%s>' "$n"; if [[ $n == 5 ]]; then declare +i n; else declare -i n; fi; done""",
+        "<2+3><5><2+3>")]
     [InlineData("""declare -i n; a=7; getopts a n -a; printf '<%s:%s:%s>' "$n" "$OPTIND" "${OPTIND@a}" """,
         "<7:2:i>")]
     [InlineData("""OPTIND='1+1'; getopts ab opt -a -b; printf '<%s:%s>' "$opt" "$OPTIND"; unset OPTIND; OPTIND='1+1'; declare -p OPTIND""",

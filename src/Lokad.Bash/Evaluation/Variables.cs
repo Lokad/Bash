@@ -13,7 +13,7 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
-internal enum ForAssignmentFailure { None, InvalidTarget, EmptyTarget, Readonly, IncompatibleAttributes }
+internal enum ForAssignmentResult { Assigned, NeedsIntegerEvaluation, InvalidTarget, EmptyTarget, Readonly, IncompatibleAttributes }
 internal enum BindingResolution { Referent, LastNameref, LastExpansionNameref }
 internal readonly record struct VariableBinding(VariableReference Reference, Variables Owner)
 {
@@ -1105,6 +1105,12 @@ public sealed partial class Variables
     internal ShellValue SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory)
     {
         TryGetBinding(resolved, detachBorrowed: false, out var slot);
+        return SetResolvedValuePreservingArray(resolved, value, memory, slot);
+    }
+
+    private ShellValue SetResolvedValuePreservingArray(
+        BindingName resolved, ShellValue value, EvaluationMemory? memory, VariableSlot? slot)
+    {
         if (slot is IndexedSlot)
             _ = TrySetResolvedArrayElement(resolved, default(IndexedArrayIndex), value, memory);
         else if (slot is AssociativeSlot)
@@ -1876,29 +1882,34 @@ public sealed partial class Variables
         SetNamerefTarget(name, value, reference, memory);
     }
 
-    internal ForAssignmentFailure AssignForIteration(BindingName name, ShellValue item, EvaluationMemory memory)
+    internal ForAssignmentResult AssignForIteration(
+        BindingName name, ShellValue item, EvaluationMemory memory, bool integerEvaluated)
     {
-        if (NamerefTargets.TryGetValue(name, out var previous))
+        TryGetBinding(name, detachBorrowed: false, out var slot);
+        var attributes = slot?.Attributes ?? BindingAttributes.None;
+        if (slot is NamerefSlot reference)
         {
-            if (previous is { IsInvalid: true, Value.IsEmpty: true })
-                return ForAssignmentFailure.EmptyTarget;
+            if (reference.Value is { IsInvalid: true, Value.IsEmpty: true })
+                return ForAssignmentResult.EmptyTarget;
             // A loop selects a new referent. Validate it before checking the reference's readonly attribute.
             if (!VariableReference.TryParseNamerefTarget(item, memory, out var target))
-                return ForAssignmentFailure.InvalidTarget;
-            if (IsReadonlyBinding(name))
-                return ForAssignmentFailure.Readonly;
-            if (IsIntegerBinding(name))
-                return ForAssignmentFailure.IncompatibleAttributes;
+                return ForAssignmentResult.InvalidTarget;
+            if ((attributes & BindingAttributes.Readonly) != 0)
+                return ForAssignmentResult.Readonly;
+            if ((attributes & BindingAttributes.Integer) != 0)
+                return ForAssignmentResult.IncompatibleAttributes;
             SetNamerefTarget(name, item, target, memory);
         }
         else
         {
-            if (IsReadonlyBinding(name))
-                return ForAssignmentFailure.Readonly;
-            SetResolvedValuePreservingArray(name, item, memory);
+            if ((attributes & BindingAttributes.Readonly) != 0)
+                return ForAssignmentResult.Readonly;
+            if (!integerEvaluated && (attributes & BindingAttributes.Integer) != 0)
+                return ForAssignmentResult.NeedsIntegerEvaluation;
+            SetResolvedValuePreservingArray(name, item, memory, slot);
         }
 
-        return ForAssignmentFailure.None;
+        return ForAssignmentResult.Assigned;
     }
 
     private void SetNamerefTarget(BindingName name, ShellValue? target, VariableReference? reference, EvaluationMemory? memory)

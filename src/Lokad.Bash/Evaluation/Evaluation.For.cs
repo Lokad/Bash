@@ -57,22 +57,21 @@ public sealed partial class Evaluation
                 workspace.TrimExcess();
             }
             _state.PreparationDiagnosticName = default;
-            var value = item;
-            if (scope.Variables.IsIntegerBinding(name) && !scope.Variables.TryGetNameref(name, out _)
-                && !scope.Variables.IsReadonlyBinding(name))
+            var assignment = scope.Variables.AssignForIteration(name, item, Memory, integerEvaluated: false);
+            if (assignment == ForAssignmentResult.NeedsIntegerEvaluation)
             {
                 var integer = await AwaitWordExpansionAsync(
                     WordExpansion.EvaluateIntegerAssignmentAsync(item, null, scope, ShellValue.Empty).AsTask()).ConfigureAwait(false);
                 if (!integer.HasValue)
                     return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
-                value = integer.Value;
+                // Arithmetic can change the binding before the computed value is assigned.
+                assignment = scope.Variables.AssignForIteration(name, integer.Value, Memory, integerEvaluated: true);
             }
-            var failure = scope.Variables.AssignForIteration(name, value, Memory);
-            if (failure == ForAssignmentFailure.InvalidTarget)
+            if (assignment == ForAssignmentResult.InvalidTarget)
                 return await RejectIdentifierAsync(ReportInvalidAssignmentIdentifierAsync(ShellValue.Empty, item, scope)).ConfigureAwait(false);
-            if (failure is ForAssignmentFailure.EmptyTarget or ForAssignmentFailure.IncompatibleAttributes)
+            if (assignment is ForAssignmentResult.EmptyTarget or ForAssignmentResult.IncompatibleAttributes)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
-            if (failure == ForAssignmentFailure.Readonly)
+            if (assignment == ForAssignmentResult.Readonly)
             {
                 await ReportCommandDiagnosticAsync([GetDiagnosticName(name)], [ShellValue.FromText("readonly variable")], scope)
                     .ConfigureAwait(false);

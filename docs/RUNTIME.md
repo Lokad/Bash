@@ -373,11 +373,12 @@ condition status. Outward flow carries that status and its tested origin. Local
 body continue still advances for-in iteration or performs arithmetic-for updates.
 For-in expands the complete item list before execution and releases its vector
 after selecting the last value. The selected value stays live through assignment.
-For-in assignments preserve array kind and update element zero. A nameref
-selects a new target for each item. An invalid target stops the loop with a
-diagnostic and failure status exempt from errexit at the loop boundary. A
-readonly loop binding exits its shell when errexit is enabled, including in a
-tested position.
+For-in assignments select the current binding on each iteration and select it
+again after integer evaluation. They preserve array kind and update element
+zero. A nameref selects a new target for each item. An invalid target stops the
+loop with a diagnostic and failure status exempt from errexit at the loop
+boundary. A readonly loop binding exits its shell when errexit is enabled,
+including in a tested position.
 
 Foreground commands admit space for `PIPESTATUS` before execution. Publication
 uses the command's admitted workspace through descriptor cleanup. It creates
