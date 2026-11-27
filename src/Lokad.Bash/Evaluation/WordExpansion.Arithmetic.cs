@@ -254,7 +254,7 @@ internal static partial class WordExpansion
                 if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read
                     && (binding.Location == null || reference.Kind == VariableReferenceKind.Name
                         && (!scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var resolved)
-                            || resolved.Reference.Kind != VariableReferenceKind.Name)))
+                            || resolved.Reference.Kind != VariableReferenceKind.Name || resolved.IsArrayNameref)))
                     binding = await SelectAsync(selected, ArithmeticReferenceUse.Assign).ConfigureAwait(false);
                 if (!scope.CanExpand)
                 {
@@ -275,6 +275,9 @@ internal static partial class WordExpansion
                     else if (fallback is ArithmeticReferenceFallback.Invalid invalid && (!invalid.IsNameref || !invalid.Subject.IsEmpty))
                         await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, invalid.Subject, scope)
                             .ConfigureAwait(false);
+                    else if (fallback is ArithmeticReferenceFallback.ProjectedElement { Subject: { } subject })
+                        await scope.Effects.ReportInvalidAssignmentIdentifierAsync(command, subject, scope)
+                            .ConfigureAwait(false);
                     return null;
                 }
                 var target = binding.Location;
@@ -289,7 +292,10 @@ internal static partial class WordExpansion
                     target = target.SelectPrefixElementWrite(reference, scope);
                 var activeVariables = scope.Variables;
                 var targetVariables = target.ReadOwner ?? activeVariables;
-                var readOnly = activeVariables.IsReadonlyWriteTarget(reference.Name, out var sourceBinding)
+                var sourceReadonly = activeVariables.IsReadonlyWriteTarget(reference.Name, out var sourceBinding);
+                var sourceOwnsReadonly = sourceBinding is not { IsArrayNameref: true } marked
+                    || marked.Name == target.Name && ReferenceEquals(marked.Owner, targetVariables);
+                var readOnly = sourceReadonly && sourceOwnsReadonly
                     || (target.Name != reference.Name || !ReferenceEquals(targetVariables, activeVariables)) && targetVariables.IsReadonly(target.Name)
                     || scope.ExpansionWriteTarget is { PreparingPrefixes: true }
                         && scope.GetExpansionWriteTarget(reference.Name)?.IsReadonlyWriteTarget(reference.Name, out _) == true;
@@ -382,9 +388,17 @@ internal static partial class WordExpansion
                         fallback = new ArithmeticReferenceFallback.Circular(new ResolvedVariableReference.Indexed(reference.Name, indexed.Index));
                     else
                     {
-                        scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding);
-                        fallback = new ArithmeticReferenceFallback.Invalid(binding.Reference.Kind == VariableReferenceKind.Name
-                            ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory), IsNameref: false);
+                        if (scope.Variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
+                            && binding.IsArrayNameref && TryFollowArrayNamerefProjections(ref binding, scope,
+                            BindingResolution.Referent, MissingProjectedLiteral.RetainNameref))
+                        {
+                            var subject = binding.IsArrayNameref ? GetArrayNamerefDiagnosticSubject(binding)
+                                : binding.IsUnsetNameref ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory);
+                            fallback = new ArithmeticReferenceFallback.ProjectedElement(binding.IsArrayNameref && subject.IsEmpty ? null : subject);
+                        }
+                        else
+                            fallback = new ArithmeticReferenceFallback.Invalid(binding.Reference.Kind == VariableReferenceKind.Name
+                                ? ShellValue.Empty : binding.Reference.ToValue(scope.Effects.Memory), IsNameref: false);
                     }
                     if (fallback != null)
                         target = null;
@@ -407,7 +421,7 @@ internal static partial class WordExpansion
                 // Whole-name writes retain scalar-prefix ownership and preserve the caller's array.
                 // Element namerefs use their already selected location, without replaying the selector.
                 if (reference.Kind == VariableReferenceKind.Name
-                    && sourceBinding is { Reference.Kind: VariableReferenceKind.Name })
+                    && sourceBinding is { Reference.Kind: VariableReferenceKind.Name, IsArrayNameref: false })
                     return TrySetWritableVariable(reference.Name, sourceBinding, value, scope).HasValue;
                 return target.TryPublishValue(scope, reference.Name, value);
             }
@@ -449,6 +463,7 @@ internal static partial class WordExpansion
 
         internal sealed record Circular(ResolvedVariableReference.Indexed Target) : ArithmeticReferenceFallback;
         internal sealed record Invalid(ShellValue Subject, bool IsNameref) : ArithmeticReferenceFallback;
+        internal sealed record ProjectedElement(ShellValue? Subject) : ArithmeticReferenceFallback;
     }
 
     internal enum ArithmeticFailureMode { Diagnostic, Expansion, ArrayIndex, IntegerAssignment, Promotion }

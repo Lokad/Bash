@@ -704,6 +704,144 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData(120, "x")]
+    [InlineData(1563581304, "x[2]")]
+    public async Task DirectAppendUsesTheProjectedArrayValueAndBounds(int maximumIndex, string destination)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            x=outer
+            f() {
+                local -n slot; local -a slot=([{{maximumIndex}}]=prior)
+                local -a slot=21; local -a 'slot[2]=23'
+                slot+=41
+                slot[-1]+=42
+                declare -p slot '{{destination}}'
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal($"declare -an slot=([{maximumIndex}]=\"prior\")\ndeclare -a {destination}=([0]=\"2141\" [2]=\"2342\")\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DirectElementAssignmentUsesTheProjectedAssociativeKey()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -A x=([0]=21 [i++]=23)
+                slot[i++]=41
+                printf '<%s:%s:%s>\n' "$i" "${x[0]}" "${x[i++]}"
+            }
+            f
+            """);
+
+        Assert.Equal("<0:21:41>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DirectNameAssignmentUsesTheBaseElementOfAMissingLiteralProjection()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=([0]=21 [2]=23)
+            f() {
+                local -nr slot; eval 'local -a slot=([1563581304]=prior)'
+                slot+=41
+                declare -p slot
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal("declare -anr slot=([1563581304]=\"prior\")\ndeclare -a x=([0]=\"21\" [2]=\"2341\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedReadonlyAssignmentReportsTheAuthoredElementNameAfterSelection()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                local -ar x=(21 22)
+                eval 'slot[i++]=41'
+                printf '<%s:%s:%s>\n' "$?" "$i" "${x[0]}"
+            }
+            f
+            """);
+
+        Assert.Equal("<1:1:21>\n", result.StdOut);
+        Assert.Equal("line 5: slot: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task WholeNameArithmeticReselectsTheStoredElementForWriting()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            j=0
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; local -n x='dest[j++]'; local -a dest=(21 22)
+                printf '<%s:%s>\n' "$((slot++))" "$j"
+                printf '<%s:%s>\n' "$((slot=41))" "$j"
+                declare -p dest
+            }
+            f
+            """);
+
+        Assert.Equal("<21:2>\n<41:3>\ndeclare -a dest=([0]=\"21\" [1]=\"22\" [2]=\"41\")\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ArithmeticElementMutationKeepsTheNumberOnAMissingLiteralProjection()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0; x=([0]=21 [2]=23)
+            f() {
+                local -nr slot; eval 'local -a slot=([1563581304]=prior)'
+                eval 'printf "<%s:%s>\n" "$((slot[i++]++))" "$i"'
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal("<0:1>\ndeclare -a x=([0]=\"21\" [2]=\"23\")\n", result.StdOut);
+        Assert.Equal("line 4: `x[2]': not a valid identifier\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ProjectedUnsetNamerefAppendReachesTheNearestCallerBinding()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            x=outer
+            inner() {
+                local -n slot; local -a slot=([120]=prior); unset x; local -n x
+                slot+=dest
+                declare -p x
+            }
+            outer() { local x=middle; inner; declare -p x; }
+            outer
+            declare -p x
+            """);
+
+        Assert.Equal("declare -n x\ndeclare -- x=\"middledest\"\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Fact]
     public async Task ArrayNamerefProjectionThroughAnOrdinaryElementReferenceRespectsSelectorRoles()
     {

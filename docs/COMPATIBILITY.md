@@ -1403,6 +1403,19 @@ attribute. An authored element selector can run once before the
 indexed projection's diagnostic. With an empty indexed projection,
 the marked local keeps its cells while the initializer writes a
 fresh array in the global namespace.
+
+A simple assignment or arithmetic write through a valid indexed array
+nameref projection selects the reached binding. A whole-name write uses
+the binding's scalar slot or array key zero. An authored selector uses
+the reached array kind and, for an indexed array, its negative-index
+bound. A projected element spelling can name a literal local. Without
+that local, a whole-name write selects the base element and an authored
+selector diagnoses the projected spelling after its effects. An arithmetic
+element write can report this diagnostic and still produce its numeric
+value. A bare arithmetic update through a projected ordinary element
+nameref selects its stored subscript again for the write. A whole-name
+write through a projected unset local nameref can reach a caller binding
+while leaving the local nameref unset.
 Valid indexed nameref projections also select bindings for scalar,
 element, aggregate and arithmetic reads, presence tests, length and
 attribute inspection. A literal projection can read the local

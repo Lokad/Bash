@@ -7705,13 +7705,23 @@ public sealed partial class Evaluation : IFileTester
         }
 
         /// <summary>Finds the writable binding beyond an unset chain reached through a local nameref.</summary>
-        public bool TryResolveLocalNamerefAssignment(BindingName name, Variables active, EvaluationMemory memory, out LocalNamerefAssignment? target)
+        public bool TryResolveLocalNamerefAssignment(BindingName name, Variables active, EvaluationMemory memory,
+            out LocalNamerefAssignment? target) =>
+            TryResolveLocalNamerefAssignment(name, active, memory, reached: null, out target);
+
+        public bool TryResolveLocalNamerefAssignment(BindingName name, Variables active, EvaluationMemory memory,
+            VariableBinding? reached, out LocalNamerefAssignment? target)
         {
             target = null;
             var source = FunctionContext;
             while (source != null && !source.Locals.OwnsDeclaration(name))
                 source = source.Enclosing;
-            if (source == null || !active.TryResolveBinding(name, selectOwner: null, out var binding))
+            if (source == null)
+                return false;
+            VariableBinding binding;
+            if (reached is { } selected)
+                binding = selected;
+            else if (!active.TryResolveBinding(name, selectOwner: null, out binding))
                 return false;
 
             var context = this;
