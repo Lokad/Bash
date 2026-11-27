@@ -486,12 +486,13 @@ internal static partial class WordExpansion
 
     internal static Task<ResolvedVariableReference?> ResolveCompoundElementAsync(
         VariableReference reference, ShellValue expandedSubscript, ShellValue value, AssignmentOperator operation,
-        ScopedEvaluation scope, Variables targetVariables, bool initializesArrayNameref) =>
+        ScopedEvaluation scope, Variables targetVariables, bool initializesArrayNameref, long? discardedMaximum) =>
         ResolveReferenceAsync(reference, ReferenceUse.CompoundAssign, scope, ExpansionPurpose.ArithmeticSource,
-            new CompoundElement(expandedSubscript, value, operation, initializesArrayNameref), targetVariables, targetVariables);
+            new CompoundElement(expandedSubscript, value, operation, initializesArrayNameref, discardedMaximum),
+            targetVariables, targetVariables);
 
     private readonly record struct CompoundElement(ShellValue Subscript, ShellValue Value, AssignmentOperator Operator,
-        bool InitializesArrayNameref);
+        bool InitializesArrayNameref, long? DiscardedMaximum);
 
     /// <summary>Reads a selected binding through ordinary nameref/array expansion rules.</summary>
     internal static Task<ResolvedVariableReference?> ResolveReadReferenceAsync(VariableReference reference, ScopedEvaluation scope) =>
@@ -795,10 +796,10 @@ internal static partial class WordExpansion
 
             if (index < 0)
             {
-                var maximum = indexVariables.GetArrayMetadata(name) is { Kind: ArrayKind.Indexed } array
+                var maximum = compound?.DiscardedMaximum ?? (indexVariables.GetArrayMetadata(name) is { Kind: ArrayKind.Indexed } array
                     ? array.MaxIndex
                     : use is ReferenceUse.Assign or ReferenceUse.DirectAssign or ReferenceUse.DeclarationAssign or ReferenceUse.BuiltinAssign or ReferenceUse.ArithmeticAssign
-                        && indexVariables.Scalars.ContainsKey(name) ? 0L : (long?)null;
+                        && indexVariables.Scalars.ContainsKey(name) ? 0L : (long?)null);
                 // Conversion discards the alias value but retains its scalar index-zero bound.
                 if (convertedNameref && maximum == null)
                     maximum = 0;
@@ -935,7 +936,7 @@ internal static partial class WordExpansion
         binding.Owner.IndexedArrays.TryGetValue(binding.Name, out var array)
             ? GetIndexedArrayNamerefSpelling(array.MaxIndex) : binding.Name.ToValue();
 
-    private static ShellValue GetIndexedArrayNamerefSpelling(long? maximum) =>
+    internal static ShellValue GetIndexedArrayNamerefSpelling(long? maximum) =>
         maximum is { } index ? FieldSeparators.ProjectIndex(index, firstOnly: false) : IndexedArrayNamerefSpelling;
 
     /// <summary>Warns at a reached read, then selects Bash's global fallback for a local cycle.</summary>

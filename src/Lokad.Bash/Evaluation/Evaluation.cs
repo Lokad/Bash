@@ -4564,14 +4564,22 @@ public sealed partial class Evaluation : IFileTester
 
             if (!VariableReference.TryParse(assignment.Target, Memory, out var compoundTarget))
                 return false;
-            var name = scope.Variables.ResolveNamerefName(compoundTarget.Name);
+            var variables = scope.Variables;
+            var name = variables.ResolveNamerefName(compoundTarget.Name);
             if (compoundTarget.Kind != VariableReferenceKind.Name || !name.IsIdentifier)
             {
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "cannot assign list to array member", scope)
                     .ConfigureAwait(false);
                 return false;
             }
-            if (scope.Variables.IsReadonly(name))
+            if (variables.IsArrayNameref(name))
+            {
+                var selected = await SelectArrayNamerefDestinationAsync(name, compoundTarget.Name).ConfigureAwait(false);
+                if (selected is not { } destination)
+                    return false;
+                name = destination;
+            }
+            if (variables.IsReadonly(name))
             {
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope).ConfigureAwait(false);
                 return false;
@@ -4579,10 +4587,71 @@ public sealed partial class Evaluation : IFileTester
             if (!await ValidateCompoundInitializerCapturesAsync(items, scope).ConfigureAwait(false))
                 return false;
 
-            var kind = scope.Variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
+            var kind = variables.AssociativeArrays.ContainsKey(name) ? ArrayKind.Associative : ArrayKind.Indexed;
             return await ExpandAndApplyCompoundArrayItemsAsync(
-                new VariableBinding(VariableReference.ForName(name), scope.Variables), kind, assignment.Operator, items,
+                new VariableBinding(VariableReference.ForName(name), variables), kind, assignment.Operator, items,
                 AssignmentContext.Direct, scope, scope, compoundTarget.Name, initializeReadonly: false).ConfigureAwait(false);
+        }
+
+        async Task<BindingName?> SelectArrayNamerefDestinationAsync(BindingName initial, BindingName source)
+        {
+            var variables = scope.Variables;
+            var binding = new VariableBinding(VariableReference.ForName(initial), variables);
+            using var visitedMemory = new MemoryCapacity(Memory.Budget, 0);
+            HashSet<BindingName>? visited = null;
+            while (binding.IsArrayNameref && variables.GetArrayMetadata(binding.Name) is { } array)
+            {
+                CheckCancellation();
+                if (!array.IsInitialized)
+                    return await DetachAsync(binding).ConfigureAwait(false);
+
+                var spelling = array.Kind == ArrayKind.Indexed
+                    ? WordExpansion.GetIndexedArrayNamerefSpelling(array.MaxIndex)
+                    : binding.Name.ToValue();
+                if (spelling.IsEmpty)
+                    return BindingName.Empty;
+                if (array.Kind == ArrayKind.Associative
+                    || !VariableReference.TryParseNamerefTarget(spelling, Memory, out var projected))
+                {
+                    await ReportInvalidNamerefElementTargetAsync(spelling, scope).ConfigureAwait(false);
+                    return null;
+                }
+                // A projected element spelling has no whole-array destination.
+                if (projected.Kind != VariableReferenceKind.Name)
+                    return BindingName.Empty;
+                visited ??= [];
+                visitedMemory.PrepareSetCapacity(visited, binding.Name,
+                    global::Lokad.Bash.Evaluation.Variables.BindingNameSetEntryBytes);
+                if (!visited.Add(binding.Name)
+                    || !variables.TryResolveBinding(projected.Name, selectOwner: null, out binding))
+                {
+                    await ReportCircularNameReferenceAsync(source, scope).ConfigureAwait(false);
+                    SetFatalExpansionError(ExpansionFailureKind.AssignmentTarget);
+                    return null;
+                }
+            }
+
+            if (binding.IsUnsetNameref)
+                return await DetachAsync(binding).ConfigureAwait(false);
+            if (binding.TryGetInvalidNameref(out var invalid) || binding.Reference.Kind != VariableReferenceKind.Name)
+            {
+                var subject = binding.Reference.Kind == VariableReferenceKind.Name ? invalid : binding.Reference.ToValue(Memory);
+                await ReportInvalidNamerefElementTargetAsync(subject, scope).ConfigureAwait(false);
+                return null;
+            }
+            return binding.Name;
+            async Task<BindingName?> DetachAsync(VariableBinding selected)
+            {
+                await ReportRemovingNamerefAsync(source, GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
+                if (!scope.CanExpand)
+                    return null;
+                // The unassigned array loses the flag even if readonly rejects the later write.
+                if (selected.IsArrayNameref)
+                    variables.UpdateBindingAttributes(selected.Name, BindingAttributes.None, BindingAttributes.ArrayNameref);
+                else
+                    variables.TryRemoveNamerefAttribute(selected.Name);
+                return selected.Name;
+            }
         }
     }
 

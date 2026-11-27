@@ -1381,6 +1381,15 @@ builtin clears the attribute after a successful compound write. With
 `-n` it can reject the flag after the write. A same-kind compound
 initializer on a readonly array nameref publishes its cells before the
 current reader returns failure.
+Direct compound assignment through an uninitialized array nameref
+warns and clears its nameref attribute before checking readonly or
+expanding the initializer. An initialized indexed array nameref uses
+its maximum index's projected spelling to select a whole destination.
+An empty or element spelling evaluates the initializer and selectors
+without publishing cells. An invalid spelling reports its raw bytes
+before either effect. Initialized associative array namerefs report
+the reached binding name because the pins disagree on its diagnostic
+subject bytes.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

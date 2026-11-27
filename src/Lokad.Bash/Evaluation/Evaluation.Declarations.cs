@@ -556,9 +556,12 @@ public sealed partial class Evaluation
         WriteDiagnosticAsync([ShellValue.FromText("warning")], [GetDiagnosticName(name), ShellValue.FromText(": circular name reference")],
             _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
 
-    internal Task ReportRemovingNamerefAsync(BindingName name) =>
-        ReportExpansionDiagnosticAsync([ShellValue.FromText("warning")],
-            [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")]);
+    internal Task ReportRemovingNamerefAsync(BindingName name) => ReportRemovingNamerefAsync(name, default);
+
+    private Task ReportRemovingNamerefAsync(BindingName name, SyntaxDiagnosticPrefix prefix) =>
+        WriteDiagnosticAsync([ShellValue.FromText("warning")],
+            [GetDiagnosticName(name), ShellValue.FromText(": removing nameref attribute")],
+            _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, prefix);
 
     private static string ArrayConversionMessage(ArrayKind kind) => kind == ArrayKind.Associative
         ? "cannot convert indexed to associative array" : "cannot convert associative to indexed array";

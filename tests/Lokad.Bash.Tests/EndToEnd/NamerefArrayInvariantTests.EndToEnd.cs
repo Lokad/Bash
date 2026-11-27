@@ -417,6 +417,119 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("a", "0:1:1", "a slot=([0]=\"fresh0\")", "")]
+    [InlineData("A", "0:0:1", "A slot=([i++]=\"fresh0\" )", "")]
+    [InlineData("ar", "1:0:0", "ar slot", "line 5: alias: readonly variable\n")]
+    public async Task DirectCompoundAssignmentClearsAnUninitializedArrayNameref(
+        string attributes, string effects, string listing, string error)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; j=0
+            f() {
+                local -n slot; local -{{attributes}} slot
+                local -n alias=slot
+                eval 'alias+=([i++]=fresh$((j++)))'
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot alias
+            }
+            f
+            """);
+
+        Assert.Equal($"<{effects}>\ndeclare -{listing}\ndeclare -n alias=\"slot\"\n", result.StdOut);
+        Assert.Equal("line 5: warning: alias: removing nameref attribute\n" + error, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("()", "()", "FFFFFFFFFFFFFFFF")]
+    [InlineData("([257]=prior)", "([257]=\"prior\")", "0101")]
+    public async Task DirectCompoundAssignmentRejectsAnInvalidProjectedNameBeforeExpansion(
+        string initializer, string listing, string diagnosticBytes)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; j=0
+            f() {
+                local -n slot; local -a slot={{initializer}}
+                eval 'slot=([i++]=fresh$((j++)))'
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot
+            }
+            f
+            """);
+
+        Assert.Equal($"<1:0:0>\ndeclare -an slot={listing}\n", result.StdOut);
+        Assert.Equal<byte>([
+            .. "line 4: `"u8, .. Convert.FromHexString(diagnosticBytes), .. "': not a valid identifier\n"u8
+        ], result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(256)]
+    [InlineData(1563581304)]
+    public async Task DirectCompoundAssignmentWithoutAWholeDestinationStillResolvesItsSelectors(int maximumIndex)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; j=0; x=outer
+            f() {
+                local -n slot; local -a slot=([{{maximumIndex}}]=prior)
+                slot=([2]=seed [0]=early [-2]=tail$((j++)) [i++]=last)
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot x
+            }
+            f
+            """);
+
+        Assert.Equal($"<0:1:1>\ndeclare -an slot=([{maximumIndex}]=\"prior\")\ndeclare -- x=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -A x=([0]=base)", 0, "declare -A x=([i++]=\"fresh0\" )\ndeclare -- dest=\"base\"\n")]
+    [InlineData("local -n x=dest", 1, "declare -n x=\"dest\"\ndeclare -a dest=([0]=\"fresh0\")\n")]
+    public async Task DirectCompoundAssignmentUsesTheProjectedDestination(
+        string declaration, int indexEffect, string listing)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; j=0; dest=base
+            f() {
+                local -n slot; local -a slot=([120]=prior)
+                unset x; {{declaration}}
+                slot=([i++]=fresh$((j++)))
+                printf '<%s:%s:%s>\n' "$?" "$i" "$j"
+                declare -p slot x dest
+            }
+            f
+            """);
+
+        Assert.Equal($"<0:{indexEffect}:1>\ndeclare -an slot=([120]=\"prior\")\n" + listing, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DirectCompoundAssignmentChecksReadonlyOnTheProjectedDestination()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local x=outer; local -nr slot; eval 'local -a slot=([120]=prior)'
+                slot=(first$((i++)))
+                local -r x
+                eval 'slot=(second$((i++)))'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot x
+            }
+            f
+            """);
+
+        Assert.Equal("<1:1>\ndeclare -anr slot=([120]=\"prior\")\ndeclare -ar x=([0]=\"first0\")\n", result.StdOut);
+        Assert.Equal("line 6: slot: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("-a slot=([i++]=value$((j++)))", "anr slot=([0]=\"value0\")")]
     [InlineData("-A slot=([key$((i++))]=value$((j++)))", "Anr slot=([key0]=\"value0\" )")]
     public async Task ReadonlyCompoundNamerefPublishesBeforeTheNestedReaderReturns(
