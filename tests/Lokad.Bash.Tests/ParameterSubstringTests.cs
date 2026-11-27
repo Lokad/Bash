@@ -5,6 +5,20 @@ namespace Lokad.Bash.Tests;
 public sealed class ParameterSubstringTests
 {
     [Fact]
+    public async Task ScalarLengthAndSlicesKeepCharacterBoundariesAcrossAsciiBlocks()
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            v='{{new string('x', 4095)}}'$'\u03bb\377\U0001f642''{{new string('z', 4097)}}'
+            printf '%s|%s|%s|%s|%s|%s' "${#v}" "${v:4095:3}" "${v:4096:1}" "${v: -4100:3}" "${v: -4098:1}" "${v:4094: -4096}"
+            """);
+
+        byte[] expected = [.. "8195|λ"u8, 0xff, .. "🙂|"u8, 0xff, .. "|λ"u8, 0xff, .. "🙂|🙂|xλ"u8, 0xff, .. "🙂z"u8];
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.Host.StandardOutput.Content.ToArray());
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
     public async Task EmptySubstringOffsetTerminatesATestedCommandWithErrexit()
     {
         await using var host = new TestHost();

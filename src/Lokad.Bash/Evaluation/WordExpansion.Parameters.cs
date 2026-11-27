@@ -16,6 +16,8 @@ internal enum CaseTransformation { Lowercase, Uppercase, Capitalize }
 
 internal static partial class WordExpansion
 {
+    private const int ParameterCharacterBlockBytes = 4096;
+
     // Array sources keep the selected owner. Some operators consume it after applying operand effects.
     private abstract record ParameterSource
     {
@@ -1469,12 +1471,24 @@ internal static partial class WordExpansion
                 }
 
                 var position = bytes.Length;
-                for (var remaining = -(int)offset; remaining > 0; remaining--)
+                var remaining = -(int)offset;
+                while (remaining > 0)
                 {
                     if (position == 0)
                         return null;
                     cancellationToken.ThrowIfCancellationRequested();
-                    position -= Utf8Text.LastCharacterLength(bytes[..position]);
+                    if (bytes[position - 1] >= 0x80)
+                    {
+                        position -= Utf8Text.LastCharacterLength(bytes[..position]);
+                        remaining--;
+                        continue;
+                    }
+
+                    var width = Math.Min(ParameterCharacterBlockBytes, Math.Min(remaining, position));
+                    var last = bytes.Slice(position - width, width).LastIndexOfAnyExceptInRange((byte)0, (byte)0x7f);
+                    var ascii = width - last - 1;
+                    position -= ascii;
+                    remaining -= ascii;
                 }
                 return position;
             }
@@ -1579,12 +1593,7 @@ internal static partial class WordExpansion
     /// <summary>Counts UTF-8 characters, treating each malformed byte as one character.</summary>
     private static int CountParameterCharacters(ShellValue value, ScopedEvaluation scope)
     {
-        var count = 0;
-        for (var position = 0; position < value.Bytes.Length; count++)
-        {
-            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-            position += Utf8Text.FirstCharacterLength(value.Bytes.Span[position..]);
-        }
+        AdvanceParameterCharacters(value.Bytes.Span, value.Bytes.Length, scope, out var count);
         return count;
     }
 
@@ -1594,10 +1603,21 @@ internal static partial class WordExpansion
         var cancellationToken = scope.Effects.CancellationToken;
         var position = 0;
         var count = 0;
-        for (; count < limit && position < bytes.Length; count++)
+        while (count < limit && position < bytes.Length)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            position += Utf8Text.FirstCharacterLength(bytes[position..]);
+            if (bytes[position] >= 0x80)
+            {
+                position += Utf8Text.FirstCharacterLength(bytes[position..]);
+                count++;
+                continue;
+            }
+
+            var width = Math.Min(ParameterCharacterBlockBytes, Math.Min(limit - count, bytes.Length - position));
+            var first = bytes.Slice(position, width).IndexOfAnyExceptInRange((byte)0, (byte)0x7f);
+            var ascii = first < 0 ? width : first;
+            position += ascii;
+            count += ascii;
         }
         characters = count;
         return position;
