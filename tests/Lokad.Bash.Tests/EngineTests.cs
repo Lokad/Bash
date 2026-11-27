@@ -386,6 +386,107 @@ public class EngineTests
     }
 
     [Theory]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task RunCapturedEvaluation_SettlesTheProducerWhenCancellationCallbacksThrow(
+        bool producerFails, bool readThrows)
+    {
+        var descriptor = new FileDescriptor(11);
+        var stage = new Eval(Parser.Parse("external"), descriptor);
+        var governor = new MemoryGovernor(TestMemoryBudget.DefaultBytes);
+        using var owner = governor.CreateScope();
+        stage.Memory.Budget = owner;
+        var result = new TaskCompletionSource<CapturedEvaluationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = new RunCapturedEvaluation(result, new PipelineEvaluationStage(stage, [descriptor]),
+            new FileDescriptor(10), 1024, owner);
+        var original = new IOException(producerFails ? "producer failed" : "reader failed");
+        var rejected = ByteReadResult.Failure(0, OperationError.BadFileDescriptor, reachedEoF: false);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var producer = new TaskCompletionSource<CommandExecutionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reader = new TaskCompletionSource<DescriptorReadBuffer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var close = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationTokenRegistration registration = default;
+
+        var visitor = new TestOperationVisitor([])
+        {
+            RunCommandOverride = () =>
+            {
+                started.SetResult();
+                return producer.Task;
+            },
+            ReadOverride = async token =>
+            {
+                registration = token.Register(() =>
+                {
+                    reader.TrySetCanceled(token);
+                    callback.SetResult();
+                    throw new InvalidOperationException("host cancellation callback failed");
+                });
+                readStarted.SetResult();
+                if (producerFails)
+                    return await reader.Task;
+                await started.Task;
+                if (readThrows)
+                    throw original;
+                return DescriptorReadBuffer.Failure(rejected);
+            },
+            BeforeDescriptorClose = _ => closing.SetResult(),
+        };
+        visitor.EnqueueCloseDescriptorTask(close.Task);
+        var dispatched = ShellOperationDispatcher.DispatchAsync(operation, visitor, CancellationToken.None);
+        try
+        {
+            bool completedBeforeClose;
+            try
+            {
+                await Task.WhenAll(started.Task, readStarted.Task).WaitAsync(deadline.Token);
+                if (producerFails)
+                    producer.SetException(original);
+                else
+                {
+                    await callback.Task.WaitAsync(deadline.Token);
+                    producer.SetResult(new CommandExecutionResult.Completed(0));
+                }
+                await closing.Task.WaitAsync(deadline.Token);
+                completedBeforeClose = dispatched.IsCompleted || result.Task.IsCompleted;
+            }
+            finally
+            {
+                producer.TrySetResult(new CommandExecutionResult.Completed(0));
+                close.TrySetResult();
+            }
+
+            var failure = await Record.ExceptionAsync(() => dispatched.WaitAsync(deadline.Token));
+            if (producerFails || readThrows)
+            {
+                Assert.Same(original, failure);
+                Assert.Same(original, await Record.ExceptionAsync(() => result.Task));
+            }
+            else
+            {
+                Assert.Null(failure);
+                var captured = await result.Task;
+                Assert.Equal(rejected, Assert.IsType<BoundedReadResult.Failed>(captured.Output).Failure);
+                Assert.Equal(1, captured.ExitCode);
+            }
+            Assert.False(completedBeforeClose);
+            Assert.True(callback.Task.IsCompletedSuccessfully);
+        }
+        finally { registration.Dispose(); }
+
+        Assert.True(stage.Completion.IsCompleted);
+        Assert.Equal(descriptor, Assert.Single(visitor.ClosedDescriptors));
+        Assert.Empty(stage.GetDescriptorsForCleanup());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("{ echo \"$(:)\"; } >/out")]
     [InlineData("{ value=$(:); } >/out")]
     [InlineData("exec 9> /out; value=$(:)")]

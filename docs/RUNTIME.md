@@ -523,6 +523,10 @@ An exceptional stage failure requests cancellation from the other stages while
 their cleanup is still active. The first reported failure survives cancellation
 and cleanup. The dispatcher waits for all stages and their endpoint closes before
 returning. Ordinary shell exit statuses still settle independently.
+Capture settlement preserves a reader failure, a producer failure that canceled
+the read, or a rejected read outcome through cancellation callbacks and producer
+cleanup. The dispatcher awaits the producer's endpoint close before completing
+the capture request.
 
 Here-input producers start independently before their consumers. Their payload
 copies have separate admitted ownership, surviving command workspace reuse when

@@ -136,7 +136,7 @@ internal static class ShellOperationDispatcher
                 output = await host.TryReadAllBytesAsync(request.Input, request.MaximumBytes,
                     static _ => { }, request.MemoryBudget, lifetime.Token).ConfigureAwait(false);
                 if (output is not BoundedReadResult.Complete)
-                    lifetime.Cancel();
+                    await AwaitCancellationCallbacksAsync(lifetime.CancelAsync()).ConfigureAwait(false);
             }
             catch (Exception captureFailure)
             {
@@ -146,7 +146,7 @@ internal static class ShellOperationDispatcher
                     && Volatile.Read(ref producerFailed) && !cancellationToken.IsCancellationRequested;
                 var canceledByCaller = captureFailure is OperationCanceledException
                     && !canceledByProducer && cancellationToken.IsCancellationRequested;
-                lifetime.Cancel();
+                await AwaitCancellationCallbacksAsync(lifetime.CancelAsync()).ConfigureAwait(false);
                 try { await producer.ConfigureAwait(false); }
                 catch (Exception) when (canceledByProducer)
                 {
@@ -188,7 +188,7 @@ internal static class ShellOperationDispatcher
                 {
                     // A failed writer close must also wake a reader still waiting for EOF.
                     Volatile.Write(ref producerFailed, true);
-                    lifetime.Cancel();
+                    await AwaitCancellationCallbacksAsync(lifetime.CancelAsync()).ConfigureAwait(false);
                     throw;
                 }
             }
@@ -263,8 +263,7 @@ internal static class ShellOperationDispatcher
             }
             catch
             {
-                try { await stopCallbacks.ConfigureAwait(false); }
-                catch (AggregateException) { /* A cancellation callback cannot replace the stage failure. */ }
+                await AwaitCancellationCallbacksAsync(stopCallbacks).ConfigureAwait(false);
                 if (firstFailure != null)
                     ExceptionDispatchInfo.Capture(firstFailure).Throw();
                 cancellationToken.ThrowIfCancellationRequested();
@@ -284,6 +283,12 @@ internal static class ShellOperationDispatcher
                     stopCallbacks = lifetime.CancelAsync();
             }
         }
+    }
+
+    private static async Task AwaitCancellationCallbacksAsync(Task callbacks)
+    {
+        try { await callbacks.ConfigureAwait(false); }
+        catch (AggregateException) { /* Preserve the outcome that stopped the evaluation. */ }
     }
 
     private static async Task<int> ExecuteStageAsync(
