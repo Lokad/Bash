@@ -480,16 +480,21 @@ public sealed class ByteStoredValueTests
         var firstLine = raw ? " first \t:second:third \t "u8 : " first \t:second:third \t \\"u8;
         if (retainEscape)
             firstLine = " f\\irst \t:second:third \t \\"u8;
-        Assert.Equal(!raw, input.AppendLine(firstLine, hasTerminator: true, CancellationToken.None));
+        var physicalLine = firstLine.ToArray().AsMemory();
+        Assert.Equal(!raw, input.AppendLine(physicalLine, hasTerminator: true, out var borrowed, CancellationToken.None));
         if (!raw)
-            Assert.False(input.AppendLine([], hasTerminator: true, CancellationToken.None));
+            Assert.False(input.AppendLine(ReadOnlyMemory<byte>.Empty, hasTerminator: true, out borrowed, CancellationToken.None));
+        if (raw)
+            Assert.Equal((ReadOnlyMemory<byte>)physicalLine, borrowed);
+        else
+            Assert.Null(borrowed);
         Assert.Equal(retainEscape ? ReadBackslashMode.InterpretEscapes : ReadBackslashMode.Preserve,
             input.FieldBackslashMode);
         using (var scratch = new MemoryCapacity(owner, 0))
         {
             var options = new ReadBuiltinOptions(FieldSeparators.FromVariables(variables),
                 input.FieldBackslashMode, ReadFieldMode.Split);
-            var fields = ReadFieldSplitter.Split(content.ToMemory(), 2,
+            var fields = ReadFieldSplitter.Split(borrowed ?? content.ToMemory(), 2,
                 options, scratch, variables, memory, CancellationToken.None);
 
             Assert.Equal([ShellValue.FromText("first"), ShellValue.FromText("second:third")], fields);

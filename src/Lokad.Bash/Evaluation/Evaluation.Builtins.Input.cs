@@ -214,7 +214,8 @@ public sealed partial class Evaluation
         }
         finally
         {
-            if (memory.Content.Capacity > ReadScratchRetentionBytes)
+            if (memory.Content.Capacity > ReadScratchRetentionBytes
+                || memory.PhysicalLine?.Capacity > ReadScratchRetentionBytes)
                 ReleaseReadWorkspace();
         }
         return await FinishAsync(exitCode).ConfigureAwait(false);
@@ -285,6 +286,7 @@ public sealed partial class Evaluation
 
             var normalization = new ReadInputBuffer(content, backslashMode);
             var physicalLine = memory.PhysicalLine ??= new ByteMemoryBuilder(0, Memory.Budget);
+            var borrowsPhysicalLine = false;
             try
             {
                 var exitCode = 0;
@@ -315,8 +317,8 @@ public sealed partial class Evaluation
 
                     var line = result.Content;
                     var hasTerminator = line.Span[^1] == (byte)'\n';
-                    if (normalization.AppendLine(hasTerminator ? line.Span[..^1] : line.Span,
-                            hasTerminator, _cancellationToken))
+                    if (normalization.AppendLine(hasTerminator ? line[..^1] : line,
+                            hasTerminator, out var borrowed, _cancellationToken))
                     {
                         if (result.ReachedEoF)
                         {
@@ -329,6 +331,18 @@ public sealed partial class Evaluation
                     if (result.ReachedEoF && !hasTerminator)
                         exitCode = 1;
 
+                    if (borrowed is { } record)
+                    {
+                        // Holding the line through assignment must fit the allowance the
+                        // normalized record would have needed after retiring a large line.
+                        if (physicalLine.Capacity <= ReadScratchRetentionBytes
+                            || physicalLine.Capacity <= content.CapacityForLength(record.Length) - content.Capacity)
+                        {
+                            borrowsPhysicalLine = true;
+                            return (exitCode, record, normalization.FieldBackslashMode, false);
+                        }
+                        content.Append(record);
+                    }
                     break;
                 }
 
@@ -341,7 +355,7 @@ public sealed partial class Evaluation
             finally
             {
                 // Large physical lines need not overlap field decoding and publication.
-                if (physicalLine.Capacity > ReadScratchRetentionBytes)
+                if (!borrowsPhysicalLine && physicalLine.Capacity > ReadScratchRetentionBytes)
                 {
                     physicalLine.Dispose();
                     memory.PhysicalLine = null;

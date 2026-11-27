@@ -13,11 +13,26 @@ internal struct ReadInputBuffer(ByteMemoryBuilder content, ReadBackslashMode bac
     /// <summary>Indicates whether the normalized record still needs escape interpretation.</summary>
     public ReadBackslashMode FieldBackslashMode { get; private set; } = ReadBackslashMode.Preserve;
 
-    /// <summary>Appends a framed line and reports whether its LF was escaped.</summary>
-    public bool AppendLine(ReadOnlySpan<byte> bytes, bool hasTerminator, CancellationToken cancellationToken)
+    /// <summary>Reports an escaped LF, or borrows the unchanged line when it supplies the entire record.</summary>
+    public bool AppendLine(ReadOnlyMemory<byte> bytes, bool hasTerminator, out ReadOnlyMemory<byte>? borrowed,
+        CancellationToken cancellationToken)
     {
+        borrowed = null;
+        if (content.Length == 0 && !_escaped)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var special = FindSpecialByte(bytes.Span, 0);
+            if (special < 0)
+            {
+                borrowed = bytes;
+                return false;
+            }
+            content.Append(bytes.Span[..special]);
+            bytes = bytes[special..];
+        }
+
         var remaining = int.MaxValue;
-        Append(bytes, delimiter: null, ref remaining, out _, cancellationToken);
+        Append(bytes.Span, delimiter: null, ref remaining, out _, cancellationToken);
         if (!hasTerminator || !_escaped)
             return false;
         _escaped = false;
@@ -43,8 +58,7 @@ internal struct ReadInputBuffer(ByteMemoryBuilder content, ReadBackslashMode bac
             }
 
             var run = bytes.Slice(consumed, Math.Min(bytes.Length - consumed, remaining));
-            var special = backslashMode == ReadBackslashMode.Preserve
-                ? run.IndexOfAny((byte)0, stop) : run.IndexOfAny((byte)0, (byte)'\\', stop);
+            var special = FindSpecialByte(run, stop);
             var length = special < 0 ? run.Length : special;
             if (!_assignedContentEnded)
                 content.Append(run[..length]);
@@ -61,6 +75,9 @@ internal struct ReadInputBuffer(ByteMemoryBuilder content, ReadBackslashMode bac
         }
         return remaining == 0;
     }
+
+    private int FindSpecialByte(ReadOnlySpan<byte> run, byte stop) => backslashMode == ReadBackslashMode.Preserve
+        ? run.IndexOfAny((byte)0, stop) : run.IndexOfAny((byte)0, (byte)'\\', stop);
 
     private void AppendEscapedByte(byte value)
     {

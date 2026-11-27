@@ -292,7 +292,11 @@ input retains its raw records through ordered arithmetic assignment and admits
 uncovered growth at each reached write, using remaining batch credit and
 holding the original binding through rollback.
 `read` retains the normalized assignment prefix while consuming the complete
-logical record. The physical read keeps its ordinary admitted buffer lifetime.
+logical record. An unchanged LF record borrows its physical line through field
+assignment when it fits the assignment's buffer allowance. Larger framing
+buffers can be retired earlier by staging the record separately. Published
+fields detach from reusable backing, and large borrowed lines are released
+once assignment settles.
 Custom-delimiter and counted reads normalize borrowed descriptor windows
 directly into the reusable content buffer. Each successful window commits
 only the accepted prefix. The window borrow settles before field assignment.

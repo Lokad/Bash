@@ -213,7 +213,8 @@ public sealed class ReadTargetBindingTests
         var value = new string('x', 8191);
         var expected = ShellValue.FromText(value);
 
-        var plain = await MeasureAsync(value + " \nnext\n");
+        // Both inputs need the reusable normalization buffer. Only the escaped field needs decoding scratch.
+        var plain = await MeasureAsync(value + "\0\nnext\n");
         var escaped = await MeasureAsync("\\" + value + "\nnext\n");
 
         Assert.Equal(plain, escaped);

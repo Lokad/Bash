@@ -215,14 +215,7 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         if (capacity >= MaxMemoryBuilderBytes)
             throw new LimitExceededException();
 
-        var newSize = capacity;
-        if (!exactCapacity)
-        {
-            newSize = _buffer.Length == 0 ? 16 : _buffer.Length;
-            while (newSize < capacity) newSize = (int)Math.Min(MaxMemoryBuilderBytes, 2L * newSize);
-            if (capacity <= _expectedLength)
-                newSize = Math.Min(newSize, _expectedLength);
-        }
+        var newSize = exactCapacity ? capacity : CapacityForLength(capacity);
 
         // Reserve the replacement before allocating: the old array still exists during growth.
         // Prepaid owners conservatively retain earlier arrays until their result batch ends.
@@ -236,6 +229,19 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
         catch { _reservation?.Resize(previousBytes); throw; }
         _reservation?.Resize((long)newSize);
         return true;
+    }
+
+    /// <summary>Returns the backing capacity an ordinary append needs for the given final length.</summary>
+    internal int CapacityForLength(int length)
+    {
+        if (length <= _buffer.Length)
+            return _buffer.Length;
+        if (length >= MaxMemoryBuilderBytes)
+            throw new LimitExceededException();
+        var capacity = _buffer.Length == 0 ? 16 : _buffer.Length;
+        while (capacity < length)
+            capacity = (int)Math.Min(MaxMemoryBuilderBytes, 2L * capacity);
+        return length <= _expectedLength ? Math.Min(capacity, _expectedLength) : capacity;
     }
 
     /// <summary>Leaves the backing array charged to the enclosing scope until that scope is disposed.</summary>

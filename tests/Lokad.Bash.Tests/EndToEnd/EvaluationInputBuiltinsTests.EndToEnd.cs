@@ -459,6 +459,63 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
     }
 
     [Fact]
+    public async Task ReadSplitsAnUnchangedPhysicalLineWithoutAnotherRecordBuffer()
+    {
+        const int LineLength = 80 * 1024;
+        var input = new byte[LineLength + "\nsaved\r\ntail\n"u8.Length];
+        input.AsSpan(0, LineLength).Fill((byte)' ');
+        "\nsaved\r\ntail\n"u8.CopyTo(input.AsSpan(LineLength));
+        input[LineLength + 3] = 0xff;
+
+        var governor = new MemoryGovernor(224 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.SetStandardInputBytes(input);
+        var result = await host.RunAsync("""
+            values=(old prior)
+            read -a values
+            status=$?
+            read -r saved
+            read -r tail
+            printf '<%s>' "$status" "${#values[@]}" "$saved" "$tail"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal([.. "<0><0><sa"u8, (byte)0xff, .. "ed\r><tail>"u8], host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ReadRetiresLargerFramingBeforeRetainingTheAssignedValue()
+    {
+        const int ValueLength = 64 * 1024;
+        var input = new byte[ValueLength + "\ntail\n"u8.Length];
+        input.AsSpan(0, ValueLength).Fill((byte)'x');
+        "\ntail\n"u8.CopyTo(input.AsSpan(ValueLength));
+
+        var governor = new MemoryGovernor(288 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+        host.SetStandardInputBytes(input);
+        var result = await host.RunAsync("""
+            read -r saved
+            status=$?
+            read -r tail
+            printf '<%s>' "$status" "${#saved}" "$tail"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0><65536><tail>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task Evaluation_ReadBuiltin_AssignsVariables()
     {
         // This test verifies that "read" assigns multiple variables from a single line.
