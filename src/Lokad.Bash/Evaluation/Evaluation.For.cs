@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
@@ -27,7 +28,7 @@ public sealed partial class Evaluation
         if (!await WordExpansion.CheckBraceDelimitersAsync(forCommand.Items, scope).ConfigureAwait(false))
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
-        var items = new List<ShellValue>();
+        List<ShellValue>? items = new();
         foreach (var word in forCommand.Items)
         {
             await AppendOperandValuesAsync(word, scope, items).ConfigureAwait(false);
@@ -42,9 +43,19 @@ public sealed partial class Evaluation
         }
 
         var lastBodyResult = EvaluationResult.FromExitCode(0);
-        foreach (var item in items)
+        for (var index = 0; items != null; index++)
         {
             CheckCancellation();
+            var item = items[index];
+            if (index + 1 == items.Count)
+            {
+                // The selected value survives independently of the list's backing.
+                var backingBytes = MemoryCapacity.ArrayBackingBytes<ShellValue>(items.Capacity);
+                items = null;
+                var workspace = Memory.Workspace;
+                workspace.Resize(workspace.Bytes - backingBytes);
+                workspace.TrimExcess();
+            }
             _state.PreparationDiagnosticName = default;
             var value = item;
             if (scope.Variables.IsIntegerBinding(name) && !scope.Variables.TryGetNameref(name, out _)

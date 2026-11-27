@@ -370,6 +370,8 @@ conditions, the condition gate precedes body suppression: a closed gate retains
 the previous body result, while an admitted but skipped body retains the tested
 condition status. Outward flow carries that status and its tested origin. Local
 body continue still advances for-in iteration or performs arithmetic-for updates.
+For-in expands the complete item list before execution and releases its vector
+after selecting the last value. The selected value stays live through assignment.
 For-in assignments preserve array kind and update element zero. A nameref
 selects a new target for each item. An invalid target stops the loop with a
 diagnostic and failure status exempt from errexit at the loop boundary. A

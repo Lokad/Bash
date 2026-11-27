@@ -72,6 +72,48 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task ForItems_ReleaseTheVectorBeforeTheFinalBody()
+    {
+        const int Narrow = 8;
+        const int Wide = 8192;
+        var narrow = await ObserveAsync(Narrow);
+        var wide = await ObserveAsync(Wide);
+        var extraBacking = MemoryCapacity.ArrayBackingBytes<ShellValue>(Wide)
+            - MemoryCapacity.ArrayBackingBytes<ShellValue>(Narrow);
+        Assert.Equal(extraBacking, wide.First.Live - narrow.First.Live);
+        Assert.Equal(narrow.Final.Live, wide.Final.Live);
+        Assert.True(wide.First.Reserved - wide.Final.Reserved >= extraBacking,
+            $"Expected the wide loop to refund its extra backing before the final body. First: {wide.First}, final: {wide.Final}.");
+
+        static async Task<((long Live, long Reserved) First, (long Live, long Reserved) Final)> ObserveAsync(int count)
+        {
+            var middle = string.Join(' ', Enumerable.Repeat("'other'", count - 2));
+            var state = new Eval(Parser.Parse(
+                $"for item in 'begin' {middle} 'final'; do case \"$item\" in begin|final) test -e \"$item\";; esac; done"));
+            var budget = new MemoryGovernor(512 * 1024);
+            using var owner = budget.CreateScope();
+            state.Memory.Budget = owner;
+
+            var first = await NextPathKindsAsync(state);
+            Assert.Equal("/begin", Assert.Single(first.Paths).Path);
+            var firstUsage = (state.Memory.Workspace.Bytes, budget.ReservedBytes);
+            first.SetResult([PathKindResult(FilePathKind.File)]);
+
+            var final = await NextPathKindsAsync(state);
+            Assert.Equal("/final", Assert.Single(final.Paths).Path);
+            var finalUsage = (state.Memory.Workspace.Bytes, budget.ReservedBytes);
+            final.SetResult([PathKindResult(FilePathKind.File)]);
+
+            Assert.Null(await NextStepAsync(state));
+            Assert.Equal(0, state.LastExitCode);
+            Assert.Equal("final", GetVariable(state, "item"));
+            owner.Dispose();
+            Assert.Equal(0, budget.ReservedBytes);
+            return (firstUsage, finalUsage);
+        }
+    }
+
+    [Fact]
     public async Task QuotedPositionalItems_KeepNoncompactValuesAfterTheFrameIsCleared()
     {
         var state = new Eval(Parser.Parse("for item in \"${@}\"; do set --; test -e body; done"));
