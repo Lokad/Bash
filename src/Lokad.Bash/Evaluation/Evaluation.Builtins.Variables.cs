@@ -93,7 +93,7 @@ public sealed partial class Evaluation
                 continue;
             if (namerefs && !commandVars.HasNamerefAttribute(name))
             {
-                commandVars.ResetGetoptsPosition(name);
+                commandVars.ReselectGetoptsIndex(name);
                 continue;
             }
             var unsetName = directSelector ? directReference.Name : name;
@@ -110,7 +110,7 @@ public sealed partial class Evaluation
                     continue;
                 if (elementResult.BindingToUnset.IsEmpty)
                 {
-                    commandVars.ResetGetoptsPosition(unsetName);
+                    commandVars.ReselectGetoptsIndex(unsetName);
                     continue;
                 }
                 // A scalar's zero selector removes the whole binding, including a kind change during evaluation.
@@ -139,9 +139,9 @@ public sealed partial class Evaluation
                     await ReportReadonlyUnsetAsync(target.ReadonlyName.ToValue(), function: false, context).ConfigureAwait(false);
                 continue;
             }
-            // `unset OPTIND` invalidates the scan even when it removed a differently named referent.
+            // `unset OPTIND` also selects the index after removing a differently named referent.
             if (unsetName != removedName)
-                commandVars.ResetGetoptsPosition(unsetName);
+                commandVars.ReselectGetoptsIndex(unsetName);
 
             if (bindings?.Contains(removedName) != true)
             {

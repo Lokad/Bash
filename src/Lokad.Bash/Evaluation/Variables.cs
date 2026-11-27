@@ -336,7 +336,7 @@ public sealed partial class Variables
         private readonly Variables _saved;
         private readonly Variables _retained;
         private readonly HashSet<BindingName> _retainedNames;
-        private GetoptsCursor? _functionEntryGetoptsCursor;
+        private (BindingName Name, GetoptsCursor Entry)? _functionGetoptsPrefix;
         private long _retainedCopyCapacity;
 
         /// <remarks>The prepared prefix names remain stable until this invocation finishes.</remarks>
@@ -392,7 +392,7 @@ public sealed partial class Variables
             _prefixes = new HashSet<BindingName>(source._prefixes);
             _ownsPrefixNames = true;
             _saved = source._saved.Clone();
-            _functionEntryGetoptsCursor = source._functionEntryGetoptsCursor;
+            _functionGetoptsPrefix = source._functionGetoptsPrefix;
             // Child contexts never restore the caller's pending output assignments.
             _retained = new Variables();
             _retainedNames = new HashSet<BindingName>();
@@ -407,8 +407,11 @@ public sealed partial class Variables
 
         internal void CaptureFunctionEntryGetoptsCursor(GetoptsCursor cursor)
         {
-            if (_prefixes.Contains("OPTIND"))
-                _functionEntryGetoptsCursor = cursor;
+            BindingName index = "OPTIND";
+            if (_prefixes.Contains(index)
+                || (_owner.HasNamerefAttribute(index)
+                    && _owner.TryResolveWholeName(index, out index) && _prefixes.Contains(index)))
+                _functionGetoptsPrefix = (index, cursor);
         }
 
         private static long PrefixSetBytes(HashSet<BindingName> names) => names.Count == 0 ? 0
@@ -601,8 +604,10 @@ public sealed partial class Variables
                 (retained ? _saved : _retained).ClearBinding(name);
                 // Functions restore their entry cursor. Simple commands keep the reached bundle
                 // and reselect its index from the restored binding.
-                if (name.CachedText == "OPTIND")
-                    _owner._getoptsCursor = _functionEntryGetoptsCursor ?? (cursor with { ArgumentIndex = 0 });
+                if (_functionGetoptsPrefix is { } getopts && name == getopts.Name)
+                    _owner._getoptsCursor = getopts.Entry;
+                else if (name.CachedText == "OPTIND")
+                    _owner._getoptsCursor = cursor.InvalidateIndex();
             }
             _prefixes = EmptyPrefixes;
             _retainedNames.Clear();
@@ -916,7 +921,7 @@ public sealed partial class Variables
                 {
                     // A local reference reselects the index while retaining the active bundle position.
                     if (isOptindReference)
-                        command.ResetGetoptsPosition(name);
+                        command._getoptsCursor = command.SelectGetoptsIndex();
                     else
                         command._getoptsCursor = stagedCursor;
                 }
@@ -1049,7 +1054,7 @@ public sealed partial class Variables
                     var isOptindReference = isOptind && _owner.HasNamerefAttribute(name);
                     _owner.TransferBindingFrom(_saved, name);
                     if (isOptindReference)
-                        _owner.ResetGetoptsPosition(name);
+                        _owner._getoptsCursor = _owner.SelectGetoptsIndex();
                     else if (isOptind)
                         _owner._getoptsCursor = _entryGetoptsCursor;
                 }
@@ -1950,6 +1955,9 @@ public sealed partial class Variables
         ReplaceValue(name, new NamerefSlot(new NamerefTarget(target, reference, literalName)));
         if (IsIntegerBinding(name))
             SetIntegerBinding(name, false);
+        // The cursor selects the referent at declaration. Later writes to the target name
+        // can change the visible index without restarting the scan.
+        ReselectGetoptsIndex(name);
     }
 
     internal bool IsArrayNameref(BindingName name) => HasAttribute(name, BindingAttributes.ArrayNameref);

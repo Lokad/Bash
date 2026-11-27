@@ -8,7 +8,12 @@ namespace Lokad.Bash.Evaluation;
 // Keep only offsets because arguments may change and can have command-local storage.
 internal readonly record struct GetoptsCursor(int ArgumentIndex, int BundleIndex, int ByteOffset)
 {
+    // A later index selection can still reuse the bundle until a scan starts.
+    internal bool RestartsAtFirstArgument { get; init; }
+
     internal static GetoptsCursor AtArgument(int index) => new(index, 0, 0);
+
+    internal GetoptsCursor InvalidateIndex() => this with { ArgumentIndex = 0, RestartsAtFirstArgument = false };
 }
 
 public sealed partial class Variables
@@ -19,10 +24,8 @@ public sealed partial class Variables
     {
         get
         {
-            if (_getoptsCursor.ArgumentIndex != 0)
-                return _getoptsCursor;
-            var index = TryGetExpansionValue("OPTIND", out var value) ? ReadDecimalPrefix(value) : 0;
-            return index <= 1 ? GetoptsCursor.AtArgument(1) : _getoptsCursor with { ArgumentIndex = index };
+            var cursor = _getoptsCursor.ArgumentIndex == 0 ? SelectGetoptsIndex() : _getoptsCursor;
+            return cursor.RestartsAtFirstArgument ? GetoptsCursor.AtArgument(1) : cursor;
         }
         set => _getoptsCursor = value;
     }
@@ -36,7 +39,19 @@ public sealed partial class Variables
     internal void ResetGetoptsPosition(BindingName name)
     {
         if (name.CachedText == "OPTIND")
-            _getoptsCursor = _getoptsCursor with { ArgumentIndex = 0 };
+            _getoptsCursor = _getoptsCursor.InvalidateIndex();
+    }
+
+    internal void ReselectGetoptsIndex(BindingName name)
+    {
+        if (name.CachedText == "OPTIND")
+            _getoptsCursor = SelectGetoptsIndex();
+    }
+
+    private GetoptsCursor SelectGetoptsIndex()
+    {
+        var index = TryGetExpansionValue("OPTIND", out var value) ? ReadDecimalPrefix(value) : 0;
+        return _getoptsCursor with { ArgumentIndex = Math.Max(index, 1), RestartsAtFirstArgument = index <= 1 };
     }
 
     private static int ReadDecimalPrefix(ShellValue value)

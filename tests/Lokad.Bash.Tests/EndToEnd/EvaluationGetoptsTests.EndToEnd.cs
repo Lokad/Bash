@@ -463,6 +463,83 @@ public sealed class EvaluationGetoptsTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("OPTIND", "index=3", ":", "<2:2><d:3:3><d:3:3>")]
+    [InlineData("index", ":", ":", "<2:2><x:1:1><a:2:2>")]
+    [InlineData("index", "index=3", "getopts :abcdefgxy opt", "<2:2><e:4:4><e:4:4>")]
+    public async Task GetoptsRetainsTheEntryCursorAcrossATemporaryNamerefTarget(
+        string prefix, string setup, string advance, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                printf '<%s:%s>' "$OPTIND" "$index"
+                getopts :abcdefgxy opt
+                printf '<%s:%s:%s>' "$opt" "$OPTIND" "$index"
+            }
+            set -- -a -bc -de -f
+            {{setup}}
+            unset OPTIND
+            declare -n OPTIND=index
+            {{advance}}
+            {{prefix}}=2 f -xy -bc -de -fg
+            getopts :abcdefgxy opt
+            printf '<%s:%s:%s>' "$opt" "$OPTIND" "$index"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(":", "<4:4><d:3:3>")]
+    [InlineData("unset OPTIND", "<4:4><a:2:2>")]
+    public async Task GetoptsSelectsTheIndexBeforeALaterNamerefTargetWrite(string change, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            index=3
+            unset OPTIND
+            declare -n OPTIND=index
+            {{change}}
+            index=4
+            printf '<%s:%s>' "$OPTIND" "$index"
+            getopts :abcdef opt -a -bc -de -f
+            printf '<%s:%s:%s>' "$opt" "$OPTIND" "$index"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(":")]
+    [InlineData("unset OPTIND")]
+    public async Task GetoptsReselectsARestoredNamerefBeforeTheNextAssignment(string exitCommand)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                local -n OPTIND=inner
+                getopts :abcdef opt
+                printf '<%s:%s>' "$opt" "$OPTIND"
+                {{exitCommand}}
+            }
+            set -- -a -bc -de -f
+            inner=2
+            index=3
+            unset OPTIND
+            declare -n OPTIND=index
+            f -a -bc -de -f
+            index=4
+            getopts :abcdef opt
+            printf '<%s:%s>' "$opt" "$OPTIND"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<b:2><c:4>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("-4", "<0:4><0:a:3>")]
     [InlineData("-4a", "<0:4><0:a:2>")]
     public async Task Getopts_WritingOptindAsTheResultKeepsTheSavedCursor(string firstOperand, string expected)

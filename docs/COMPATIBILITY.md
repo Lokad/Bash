@@ -1250,16 +1250,22 @@ past it. A later call can scan an option at that new position. An ordinary
 non-option returns status 1 and keeps its position. `OPTIND` starts with the
 integer attribute.
 Successful `unset` of `OPTIND` or one of its elements reselects the index
-on the next scan. The rule also applies when `OPTIND` is a nameref and
+for the next scan. The rule also applies when `OPTIND` is a nameref and
 the unset removes its target, or when `unset -n OPTIND` finds an ordinary
 variable. A local nameref named `OPTIND` reselects
 the index on entry and again when it leaves scope as a nameref.
+A whole-name nameref declaration for `OPTIND` selects the current index.
+Later assignments to the target can change the visible value while
+scanning continues from the selected cursor.
 An ordinary local `OPTIND` restores the cursor from function entry,
 even when the declaration follows an earlier scan in the function.
 The visible binding is restored from the declaration boundary.
 When a function exits with a temporary `OPTIND` prefix still in scope,
 it restores the option cursor selected at function entry. The visible
 binding follows the ordinary prefix restoration and promotion rules.
+A prefix that temporarily replaces the referent of an `OPTIND`
+nameref also restores the function-entry cursor. The prefix value is
+visible in the body while the scan uses the previously selected index.
 
 `declare -i` and `local -i` evaluate subsequent assigned values as arithmetic
 and store the decimal result. For integer bindings, `+=` adds the evaluated
