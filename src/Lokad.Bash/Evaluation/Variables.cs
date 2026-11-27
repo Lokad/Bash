@@ -828,8 +828,6 @@ public sealed partial class Variables
                 }
                 else
                 {
-                    if (binding.Reference.IsAggregate)
-                        return false;
                     if (binding.Reference.Kind != VariableReferenceKind.Name)
                         resolved = BindingNameExpansion.FromValue(binding.Reference.ToValue(memory), memory);
                     // A declaration localizes the complete target spelling (even "a[1]"),

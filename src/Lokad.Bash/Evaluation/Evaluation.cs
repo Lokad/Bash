@@ -2878,8 +2878,9 @@ public sealed partial class Evaluation : IFileTester
                 var keepLocalNameref = local && clearedNamerefTarget is { IsEmpty: false } localTarget
                     && !targetVars.HasBinding(BindingNameExpansion.FromValue(localTarget, Memory));
                 var localizesTarget = clearsWholeNameref && keepLocalNameref && !rejectsIntegerNamerefRemoval;
-                var localizesElementSpelling = selectedLocalBinding is { Reference.Kind: VariableReferenceKind.Element }
-                    && (element || arrayKind == ArrayAssignmentKind.Auto);
+                var localizesElementSpelling = selectedLocalBinding is { Reference.IsAggregate: true }
+                    || selectedLocalBinding is { Reference.Kind: VariableReferenceKind.Element }
+                        && (element || arrayKind == ArrayAssignmentKind.Auto);
                 var clearsReadonlyUnsetNameref = clearsUnsetNameref
                     && operand.Value == null && options.ReadonlyChange != DeclarationAttributeChange.Clear
                     && targetVars.IsReadonlyBinding(name);

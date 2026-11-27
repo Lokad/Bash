@@ -204,7 +204,8 @@ A rejected selector leaves those attributes on that binding. Expansions
 that already ran while constructing the command's fields see the earlier
 attributes.
 When the local nameref already points to an array element, the complete
-target spelling can name a separate local array. Readonly on the alias or
+target spelling can name a separate local array. This includes stored `[@]`
+and `[*]` selectors when the function owns the nameref. Readonly on the alias or
 on the underlying array leaves that declaration available. An empty
 selector with `-n` selects that local before rejecting the nameref flag.
 A nonempty replacement initializer in that form is validated as a nameref

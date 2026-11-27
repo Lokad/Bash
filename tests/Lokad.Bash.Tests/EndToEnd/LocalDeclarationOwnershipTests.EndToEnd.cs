@@ -355,6 +355,57 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("@", "-a", "-n", "local link", "-- item[@]")]
+    [InlineData("*", "-a", "-n", "local +n link", "-- item[*]")]
+    [InlineData("@", "-a", "-n", "local -r link", "-r item[@]")]
+    [InlineData("*", "-a", "-n", "local -a link=fresh; local -i link[1]=3+4", "-ai item[*]=([0]=\"fresh\" [1]=\"7\")")]
+    [InlineData("@", "-a", "-n", "local -A link[2]=fresh", "-A item[@]=([2]=\"fresh\" )")]
+    [InlineData("@", "-ar", "-n", "local -a link=fresh", "-a item[@]=([0]=\"fresh\")")]
+    [InlineData("*", "-a", "-nr", "local -a link=fresh", "-a item[*]=([0]=\"fresh\")")]
+    public async Task StoredAggregateNamerefDeclaresTheLiteralLocalBinding(string selector, string baseFlags,
+        string aliasFlags, string declaration, string literalListing)
+    {
+        var target = $"item[{selector}]";
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            declare {{baseFlags}} item=(zero one)
+            f() {
+                local {{aliasFlags}} link='{{target}}'
+                {{declaration}}
+                printf '<%s>\n' "$?"
+                declare -p item link '{{target}}'
+            }
+            f
+            declare -p '{{target}}' 2>/dev/null
+            printf '<removed:%s>\n' "$?"
+            """);
+
+        Assert.Equal($"<0>\ndeclare {baseFlags} item=([0]=\"zero\" [1]=\"one\")\n"
+            + $"declare {aliasFlags} link=\"{target}\"\ndeclare {literalListing}\n<removed:1>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task AuthoredAggregateSubscriptRejectsTheInitializer()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            item=(zero one)
+            f() {
+                local -n link='item[@]'
+                local -a link[@]=fresh
+                printf '<%s>\n' "$?"
+                declare -p item link 'item[@]'
+            }
+            f
+            """);
+
+        Assert.Equal("<1>\ndeclare -a item=([0]=\"zero\" [1]=\"one\")\n"
+            + "declare -n link=\"item[@]\"\ndeclare -a item[@]\n", result.StdOut);
+        Assert.Equal("line 4: link[@]: bad array subscript\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
 
     [Fact]
     public async Task Evaluation_DeclareScalar_ShadowsInheritedNameref()
