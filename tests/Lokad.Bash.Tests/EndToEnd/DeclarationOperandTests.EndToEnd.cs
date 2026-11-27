@@ -7,6 +7,19 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class DeclarationOperandTestsEndToEnd
 {
     [Theory]
+    [InlineData("name='typeset -i'; $name")]
+    [InlineData("name=declare; builtin \"$name\" -i")]
+    public async Task ResolvedDeclarationKeepsItsExpandedOptionsAndEvaluatesTheOperandOnce(string declaration)
+    {
+        var result = await EvaluationTestHelper.RunAsync("count=0; " + declaration
+            + " 'value=++count+2'; printf '<%s:%s:%s>' \"$value\" \"${value@a}\" \"$count\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<3:i:1>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("declare item={1..3}; printf '<%s:%s>' \"$item\" \"$_\"", "<3:item=3>")]
     [InlineData("item=seed; typeset item+={a,\"$item\"}; printf '<%s:%s>' \"$item\" \"$_\"", "<seedaseed:item+=seed>")]
     [InlineData("export item={left,\"b c\"}; declare -p item", "declare -x item=\"b c\"\n")]

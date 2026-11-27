@@ -1210,8 +1210,12 @@ public sealed partial class Evaluation : IFileTester
         PreparedDeclaration? declaration = null;
         if (simpleCommand.DeclarationAssignments.Count > 0)
         {
+            // Parser-staged assignments use the authored declaration even if a function later shadows it.
+            var authoredName = simpleCommand.Words[0].Parts[0].GetUtf8Text();
+            if (!BuiltinClassification.TryResolve(authoredName.AsSpan(), out var authoredBuiltin))
+                throw new InvalidOperationException("A declaration requires a declaration command name.");
             declaration = await AwaitWordExpansionAsync(PrepareDeclarationAsync(
-                simpleCommand, new CommandWords(simpleCommand.Words), scope, captureCommandWords: true))
+                simpleCommand, new CommandWords(simpleCommand.Words), scope, authoredBuiltin, captureCommandWords: true))
                 .ConfigureAwait(false);
             simpleCommand = declaration.Command;
         }
@@ -1302,10 +1306,11 @@ public sealed partial class Evaluation : IFileTester
         {
             lastArgument = command.CommandValue;
             var kind = (command.Resolution as CommandResolution.EvaluatorBuiltin)?.Kind;
-            if (kind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)
+            if (kind is { } declarationKind
+                && declarationKind is BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local)
             {
                 declaration ??= await AwaitWordExpansionAsync(PrepareDeclarationAsync(
-                    simpleCommand, command.Words, scope, captureCommandWords: false)).ConfigureAwait(false);
+                    simpleCommand, command.Words, scope, declarationKind, captureCommandWords: false)).ConfigureAwait(false);
                 if (_state.TryConsumeExpansionError(out var declarationError))
                     return PublishStatus(await FailPreparationAsync(declarationError).ConfigureAwait(false));
 
