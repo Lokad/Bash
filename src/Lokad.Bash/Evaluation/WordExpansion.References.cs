@@ -1072,7 +1072,12 @@ internal static partial class WordExpansion
 
     internal static bool TryFollowArrayNamerefProjections(
         ref VariableBinding binding, ScopedEvaluation scope, BindingResolution resolution, MissingProjectedLiteral missingLiteral,
-        Func<BindingName, Variables>? selectOwner)
+        Func<BindingName, Variables>? selectOwner) =>
+        TryFollowArrayNamerefProjections(ref binding, scope, resolution, missingLiteral, selectOwner, namerefScope: null);
+
+    internal static bool TryFollowArrayNamerefProjections(
+        ref VariableBinding binding, ScopedEvaluation scope, BindingResolution resolution, MissingProjectedLiteral missingLiteral,
+        Func<BindingName, Variables>? selectOwner, Variables.LocalBindings? namerefScope)
     {
         if (!binding.IsArrayNameref)
             return true;
@@ -1082,7 +1087,7 @@ internal static partial class WordExpansion
         try
         {
             var memory = scope.Effects.Memory;
-            while (binding.Owner.GetArrayMetadata(binding.Name) is
+            while (namerefScope?.Declares(binding.Name) != false && binding.Owner.GetArrayMetadata(binding.Name) is
                 { Kind: ArrayKind.Indexed, MaxIndex: { } maximum })
             {
                 scope.Effects.CancellationToken.ThrowIfCancellationRequested();
@@ -1098,7 +1103,7 @@ internal static partial class WordExpansion
                         binding = new VariableBinding(projection, selectOwner?.Invoke(projection.Name) ?? binding.Owner);
                     return true;
                 }
-                if (!owner.TryResolveBinding(name, selectOwner, resolution, out var next))
+                if (!owner.TryResolveBinding(name, selectOwner, resolution, namerefScope, out var next))
                     return false;
 
                 // A single projection to an ordinary binding needs no cycle-tracking storage.

@@ -2063,17 +2063,23 @@ public sealed partial class Variables
         => TryResolveBinding(name, selectOwner, BindingResolution.Referent, out binding);
 
     internal bool TryResolveBinding(BindingName name, Func<BindingName, Variables>? selectOwner,
-        BindingResolution resolution, out VariableBinding binding)
+        BindingResolution resolution, out VariableBinding binding) =>
+        TryResolveBinding(name, selectOwner, resolution, namerefScope: null, out binding);
+
+    internal bool TryResolveBinding(BindingName name, Func<BindingName, Variables>? selectOwner,
+        BindingResolution resolution, LocalBindings? namerefScope, out VariableBinding binding)
     {
         binding = new VariableBinding(VariableReference.ForName(name), this);
         if (name.IsEmpty)
             return false;
-        if (!NamerefTargets.TryGetValue(name, out var target) || target.Reference is not { } reference)
+        if (!NamerefTargets.TryGetValue(name, out var target) || target.Reference is not { } reference
+            || namerefScope?.Declares(name) == false)
             return true;
-        return TryFollowReferences(target, reference, selectOwner, resolution, ref binding);
+        return TryFollowReferences(target, reference, selectOwner, resolution, namerefScope, ref binding);
 
         static bool TryFollowReferences(NamerefTarget target, VariableReference reference,
-            Func<BindingName, Variables>? selectOwner, BindingResolution resolution, ref VariableBinding binding)
+            Func<BindingName, Variables>? selectOwner, BindingResolution resolution, LocalBindings? namerefScope,
+            ref VariableBinding binding)
         {
             var origin = binding;
             var initialTarget = target;
@@ -2090,7 +2096,7 @@ public sealed partial class Variables
                     return true;
 
                 binding = selected;
-                if (!isNameref || target.Reference is not { } following)
+                if (!isNameref || target.Reference is not { } following || namerefScope?.Declares(binding.Name) == false)
                     return true;
 
                 if (SameBinding(binding, origin))

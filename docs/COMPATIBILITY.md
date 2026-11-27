@@ -1384,6 +1384,12 @@ builtin clears the attribute after a successful compound write. With
 `-n` it can reject the flag after the write. A same-kind compound
 initializer on a readonly array nameref publishes its cells before the
 current reader returns failure.
+After compound preparation, a valid indexed projection can select a
+local declaration. An ordinary or array nameref owned by the current
+function can extend that selection. A caller's nameref stays visible,
+including when it is unset or its target is readonly. A selected element
+spelling declares a literal local. A selected readonly global reports
+the target name after retaining the marked array's cells.
 Direct compound assignment through an uninitialized array nameref
 warns and clears its nameref attribute before checking readonly or
 expanding the initializer. An initialized indexed array nameref uses

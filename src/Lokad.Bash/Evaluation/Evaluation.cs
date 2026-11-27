@@ -3883,19 +3883,37 @@ public sealed partial class Evaluation : IFileTester
                     var name = WordExpansion.GetArrayNamerefProjectionName(projected, spelling, Memory);
                     if (name == source)
                         return reference;
-                    var whole = VariableReference.ForName(name);
                     if (operand.CompoundApplied)
                     {
                         if (clears)
                             return reference;
-                        if (function.Locals.Declares(name) && commandVars.TryGetNameref(name, out _))
+                        // Preparation already wrote the marked cells. Late declaration follows
+                        // only namerefs declared by this invocation, stopping at a caller's ref.
+                        if (commandVars.HasNamerefAttribute(name))
+                        {
+                            if (!commandVars.TryResolveBinding(name, selectOwner: null, BindingResolution.Referent,
+                                    function.Locals, out var target)
+                                || !WordExpansion.TryFollowArrayNamerefProjections(ref target, executionScope,
+                                    BindingResolution.Referent, WordExpansion.MissingProjectedLiteral.Unassigned,
+                                    selectOwner: null, function.Locals)
+                                || target.Reference.Kind == VariableReferenceKind.Name && target.Owner.HasNamerefAttribute(target.Name))
+                            {
+                                await ApplyAttributesAsync(source, commandVars, global: false, local: true, options.ExportChange)
+                                    .ConfigureAwait(false);
+                                return null;
+                            }
+                            name = WordExpansion.GetArrayNamerefProjectionName(target.Reference, target.Reference.ToValue(Memory), Memory);
+                        }
+                        if (name == source)
                             return null;
-                        var declaration = new VariableOperand(VariableOperandKind.Name, whole, ShellValue.Empty);
+                        var declaration = new VariableOperand(VariableOperandKind.Name, VariableReference.ForName(name), ShellValue.Empty);
                         if (function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration, prefixNames,
                                 requested, isNameref: false, options.Inherit, caseChange: default, elementAttributes: default,
                                 Memory, function.Enclosing))
                             await ApplyAttributesAsync(name, commandVars, global: false, local: true, options.ExportChange)
                                 .ConfigureAwait(false);
+                        else if (commandVars.IsReadonlyBinding(name) && !function.IsLocal(name))
+                            await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         else
                             await DiagnoseAsync(source, ArrayConversionMessage(requestedKind)).ConfigureAwait(false);
                         return null;
@@ -3923,7 +3941,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (clears && !subscripted)
                         commandVars.TryRemoveNamerefAttribute(source);
-                    return subscripted ? VariableReference.ForElement(name, reference.Subscript) : whole;
+                    return subscripted ? VariableReference.ForElement(name, reference.Subscript) : VariableReference.ForName(name);
                 }
                 if (operand.CompoundApplied || operand.Value == null
                     && (clears || options.ReadonlyChange == DeclarationAttributeChange.Clear))

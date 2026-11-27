@@ -355,6 +355,104 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("readonly x=outer", "declare -r x=\"outer\"")]
+    [InlineData("readonly -a x=([2]=outer)", "declare -ar x=([2]=\"outer\")")]
+    [InlineData("readonly -A x=([key]=outer)", "declare -Ar x=([key]=\"outer\" )")]
+    public async Task CompoundLocalDeclarationReportsTheProjectedReadonlyGlobal(string setup, string listing)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}
+            f() {
+                local -n slot
+                local -a slot=([120]=prior)
+                printf '<%s>\n' "$?"
+                declare -p slot x
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal($"<1>\ndeclare -an slot=([120]=\"prior\")\n{listing}\n{listing}\n", result.StdOut);
+        Assert.Equal("line 4: local: x: readonly variable\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("hidden=outer", "declare -- hidden=\"outer\"\n", 0, "", "")]
+    [InlineData("readonly hidden=outer", "declare -r hidden=\"outer\"\n", 1,
+        "declare -r hidden=\"outer\"\n", "line 6: unset: hidden: cannot unset: readonly variable\n")]
+    public async Task CompoundLocalDeclarationLeavesTheGlobalNamerefVisible(
+        string setup, string beforeUnset, int unsetStatus, string afterUnset, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{setup}}; declare -n x=hidden
+            f() {
+                local -n slot
+                local -a slot=([120]=prior)
+                declare -p slot x hidden
+                unset x
+                printf '<%s>\n' "$?"
+            }
+            f
+            declare -p x hidden 2>/dev/null || :
+            """);
+
+        Assert.Equal($"declare -an slot=([120]=\"prior\")\ndeclare -n x=\"hidden\"\n{beforeUnset}"
+            + $"<{unsetStatus}>\ndeclare -n x=\"hidden\"\n{afterUnset}", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("declare -gn", "anx", "declare -- hidden=\"outer\"")]
+    [InlineData("local -n", "an", "declare -ax hidden")]
+    public async Task CompoundLocalDeclarationFollowsOnlyCurrentNamerefs(
+        string nextDeclaration, string slotAttributes, string targetListing)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            hidden=outer
+            f() {
+                {{nextDeclaration}} next=hidden
+                local -n x=next
+                local -n slot
+                local -xa slot=([120]=prior)
+                printf '<%s>\n' "$?"
+                declare -p slot x next hidden
+            }
+            f
+            declare -p hidden
+            """);
+
+        Assert.Equal($"<0>\ndeclare -{slotAttributes} slot=([120]=\"prior\")\ndeclare -n x=\"next\"\n"
+            + $"declare -n next=\"hidden\"\n{targetListing}\ndeclare -- hidden=\"outer\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task CompoundLocalDeclarationKeepsAProjectedElementTargetLiteral()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            readonly -a hidden=([2]=outer)
+            f() {
+                local -n x=hidden[2]
+                local -n slot
+                local -a slot=([120]=prior)
+                printf '<%s>\n' "$?"
+                declare -p slot x 'hidden[2]' hidden
+            }
+            f
+            declare -p hidden
+            """);
+
+        Assert.Equal("<0>\ndeclare -an slot=([120]=\"prior\")\ndeclare -n x=\"hidden[2]\"\n"
+            + "declare -a hidden[2]\ndeclare -ar hidden=([2]=\"outer\")\ndeclare -ar hidden=([2]=\"outer\")\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("a", "[i+=2]", 2, "")]
     [InlineData("A", "[2]", 0, " ")]
     public async Task ReadonlyArrayNamerefAppendPublishesBeforeEvalReturns(
