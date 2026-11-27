@@ -119,6 +119,37 @@ public sealed class EchoFormattingTests
     }
 
     [Theory]
+    [InlineData('e', "a\tb")]
+    [InlineData('E', @"a\tb")]
+    public void SuppliedFormatKeepsItsNewlinePolicyAcrossLaterEscapeOptions(char lastFlag, string payload)
+    {
+        ShellValue[] operands =
+        [
+            ShellValue.FromText("-n"),
+            ShellValue.FromText("-" + new string('n', 256) + lastFlag),
+            ShellValue.FromText(@"a\tb")
+        ];
+        var computed = EchoFormatting.GetOutputFormat(operands);
+        Assert.Equal(new EchoFormatting.OutputFormat(2, true, payload.Length), computed);
+
+        var governor = new MemoryGovernor(payload.Length + 1);
+        using (var owner = governor.CreateScope())
+        {
+            Assert.Equal(payload, ShellValue.FromBytes(EchoFormatting.Format(operands, owner)).ToUtf8String());
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        var supplied = computed with { SuppressNewline = false, Length = computed.Length + 1 };
+        using (var owner = governor.CreateScope())
+        {
+            var formatted = EchoFormatting.Format(operands, supplied, owner);
+            Assert.Equal(payload + "\n", ShellValue.FromBytes(formatted).ToUtf8String());
+            Assert.Equal(supplied.Length, governor.ReservedBytes);
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(@"\a\b\e\E\f\n\r\t\v\\", "07081B1B0C0A0D090B5C0A")]
     [InlineData(@"\1\12\123\777", "5C315C31325C3132335C3737370A")]
     [InlineData(@"\01\012\01234\0777\0000Z\08\09\0", "010A5334FF005A00380039000A")]

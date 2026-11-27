@@ -14,7 +14,8 @@ public static class EchoFormatting
 
     private static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments, out bool needsEscaping)
     {
-        var firstArgument = ReadOptions(arguments, arguments.Count, out var suppressNewline, out var expandEscapes);
+        var firstArgument = ReadOptions(arguments, arguments.Count, detectNewlineSuppression: true,
+            out var suppressNewline, out var expandEscapes);
         if (expandEscapes)
         {
             var length = WalkEscapedArguments(arguments, firstArgument, output: null, out var status);
@@ -31,7 +32,8 @@ public static class EchoFormatting
     }
 
     private static int ReadOptions(
-        IReadOnlyList<ShellValue> arguments, int limit, out bool suppressNewline, out bool expandEscapes)
+        IReadOnlyList<ShellValue> arguments, int limit, bool detectNewlineSuppression,
+        out bool suppressNewline, out bool expandEscapes)
     {
         suppressNewline = false;
         expandEscapes = false;
@@ -43,7 +45,8 @@ public static class EchoFormatting
                 break;
 
             var flags = option[1..];
-            suppressNewline |= flags.Contains((byte)'n');
+            if (detectNewlineSuppression && !suppressNewline && flags.Contains((byte)'n'))
+                suppressNewline = true;
             var lastEscapeFlag = flags.LastIndexOfAny((byte)'e', (byte)'E');
             if (lastEscapeFlag >= 0)
                 expandEscapes = flags[lastEscapeFlag] == (byte)'e';
@@ -56,7 +59,8 @@ public static class EchoFormatting
     public static ReadOnlyMemory<byte> Format(
         IReadOnlyList<ShellValue> arguments, OutputFormat format, IMemoryScope memory)
     {
-        ReadOptions(arguments, Math.Min(format.FirstArgument, arguments.Count), out _, out var expandEscapes);
+        ReadOptions(arguments, Math.Min(format.FirstArgument, arguments.Count), detectNewlineSuppression: false,
+            out _, out var expandEscapes);
         return Format(arguments, format, expandEscapes, memory);
     }
 
