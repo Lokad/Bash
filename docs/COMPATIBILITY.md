@@ -1132,7 +1132,9 @@ capture word. When `eval` or `source` reads a damaged spelling, it reports
 the delimiter at the loaded reader's line. If a decoded NUL leaves an
 evaluator-produced function export with an unclosed delimiter, the same-host
 child reports the rejected import, publishes the other validated functions,
-and runs its script.
+and runs its script. The child uses Bash's function table order for these
+imports. The hosted function payload and accepted bindings retain their
+namespace order.
 The import diagnostic uses the invocation name. After that recovery,
 the child reader's diagnostic prefix preserves the bytes of its `$0`,
 including an empty name. A named `source` reader displays its own path.

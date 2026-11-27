@@ -106,6 +106,131 @@ public sealed class HostedFunctionExportTests
     }
 
     [Fact]
+    public async Task ChildGroupsRejectedExportsInBucketOrderAlongsideValidExports()
+    {
+        const string script = """
+            unset v
+            town界(){ printf %s "$(printf %s "${v:-$'a\0hidden'}")"; }
+            good(){ printf '[good]'; }
+            e(){ [[ "$(printf %s "${v:-$'a\0hidden'}")" == a ]] && printf unreached; }
+            export -f town界 good e
+            bash -c good
+            """;
+        byte[] errors = [.. "bash: e: line 0: unexpected EOF while looking for matching `\"'\n"u8,
+            .. "bash: e: line 2: unexpected token `"u8, 0xff, .. "' in conditional command\n"u8,
+            .. "bash: error importing function definition for `e'\n"u8,
+            .. "bash: town界: line 0: unexpected EOF while looking for matching `\"'\n"u8,
+            .. "bash: error importing function definition for `town界'\n"u8];
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("[good]", host.StandardOutput.TextContent);
+        Assert.Equal(errors, host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(false, "probe145", "probe0")]
+    [InlineData(true, "probe0", "probe145")]
+    public async Task CollidingImportDiagnosticsRetainInsertionHistoryAcrossRedefinitionAndFork(
+        bool removeAndFork, string first, string last)
+    {
+        static string Damaged(string name) => name + "(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }\n";
+
+        var initial = "unset v\n" + Damaged("probe0") + Damaged("probe145");
+        var fork = removeAndFork ? "unset -f probe0\n(\n" : "";
+        var script = initial + fork + Damaged("probe0") + "export -f probe0 probe145\nbash -c 'printf alive'\n"
+            + (removeAndFork ? ")" : "");
+        var expected = string.Concat(new[] { first, last }.Select(name =>
+            $"bash: {name}: line 0: unexpected EOF while looking for matching `\"'\nbash: error importing function definition for `{name}'\n"));
+
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("alive", host.StandardOutput.TextContent);
+        Assert.Equal(expected, host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task ImportDiagnosticBucketGrowthSurvivesAnEmptySubshellNamespace()
+    {
+        const string body = "(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }\n";
+        var names = Enumerable.Range(0, 1025).Select(i => $"padding{i}").ToArray();
+        var pad = string.Concat(names.Select(name => name + "(){ :; }\n"));
+        var remove = "unset -f " + string.Join(' ', names) + "\n";
+        var script = pad + remove + "(\nprobe0" + body + "probe30" + body
+            + "export -f probe0 probe30\nbash -c 'printf alive'\n)";
+        var expected = string.Concat(new[] { "probe30", "probe0" }.Select(name =>
+            $"bash: {name}: line 0: unexpected EOF while looking for matching `\"'\nbash: error importing function definition for `{name}'\n"));
+        var governor = new MemoryGovernor(8 * 1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("alive", host.StandardOutput.TextContent);
+        Assert.Equal(expected, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HealthyImportsKeepBucketHistoryForLaterRedefinitions(bool reuseSlot)
+    {
+        const string body = "(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }\n";
+        var fixture = "probe0" + body + "probe145" + body + "bash -c 'printf alive'\n";
+        var setup = reuseSlot ? "vacant(){ :; }\nprobe0(){ :; }\nunset -f vacant\n" : "probe0(){ :; }\n";
+        var script = "unset v\n" + setup + "probe145(){ :; }\nexport -f probe0 probe145\nbash ./fixture";
+        var expected = string.Concat(new[] { "probe0", "probe145" }.Select(name =>
+            $"bash: {name}: line 0: unexpected EOF while looking for matching `\"'\nbash: error importing function definition for `{name}'\n"));
+        await using var host = EndToEndHarness.BuildTree([("/fixture", fixture)]);
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("alive", host.StandardOutput.TextContent);
+        Assert.Equal(expected, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ValidChildImportsPublishInTheOriginalPayloadOrder()
+    {
+        var parent = new Eval(Parser.Parse("probe0(){ :; }; probe145(){ :; }; export -f probe0 probe145; inspect"));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var passed = Assert.IsType<RunCommand>(await parent.GetNextStep(deadline.Token));
+        var child = ShellEvaluationStartup.CreateInherited(passed.Command, Parser.Parse("inspect"), ShellValue.FromText("bash"), []);
+        try
+        {
+            var returned = Assert.IsType<RunCommand>(await child.GetNextStep(deadline.Token));
+            try
+            {
+                Assert.Equal(new[] { "probe0", "probe145" }, returned.Command.Functions.Select(export =>
+                    Assert.IsType<FunctionDefinition>(Assert.Single(Parser.Parse(export.Source).Commands)).Name.Value.ToUtf8String()));
+            }
+            finally
+            {
+                returned.SetResult(new CommandExecutionResult.Completed(0));
+                Assert.Null(await child.GetNextStep(deadline.Token));
+            }
+        }
+        finally
+        {
+            child.ReleaseFunctions();
+            passed.SetResult(new CommandExecutionResult.Completed(0));
+            Assert.Null(await parent.GetNextStep(deadline.Token));
+            parent.ReleaseFunctions();
+        }
+    }
+
+    [Fact]
     public async Task ReplacementExportListKeepsStrictStartupValidation()
     {
         var outer = new Eval(Parser.Parse("f(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }; export -f f; inspect"));
@@ -178,6 +303,8 @@ public sealed class HostedFunctionExportTests
         var state = new Eval(Parser.Parse(definitions + "inspect\ninspect\n" + export + "inspect\ninspect"));
         var admission = MemoryCapacity.ArrayBackingBytes<ExportedFunction>(count)
             + MemoryCapacity.ArrayBackingBytes<FunctionBinding>(count);
+        if (count > 1)
+            admission += 32L + MemoryCapacity.ArrayBackingBytes<BashCommandInheritance.ImportEntry>(count);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var warmup = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));

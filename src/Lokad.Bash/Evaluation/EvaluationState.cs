@@ -298,6 +298,10 @@ internal sealed class EvaluationState
     private readonly Dictionary<ShellValue, int> _functions = [];
     private readonly List<FunctionSlot> _functionSlots = [];
     private const int FunctionSlotsPerBlock = 64;
+    private const uint InitialFunctionBucketCount = 512;
+    private uint _functionBucketCount = InitialFunctionBucketCount;
+    private long _functionInsertionSequence;
+    private bool _oddFunctionRehash;
     private readonly List<FunctionSlotMasks> _functionSlotMasks = [];
     // A single block is cheap to scan. Index larger namespaces so forks skip empty blocks.
     private SortedSet<int>? _occupiedFunctionBlocks;
@@ -309,14 +313,19 @@ internal sealed class EvaluationState
     private IMemoryReservation? _exportedFunctionsMemory;
 
     // Occupied slots keep their cached export index. Empty slots link to the next free slot.
-    private readonly record struct FunctionSlot(FunctionBinding? Binding, int Index);
+    private readonly record struct FunctionSlot(FunctionBinding? Binding, int Index, long InsertionRank);
     private readonly record struct FunctionSlotMasks(ulong Occupied, ulong Exported);
 
-    // Capacity covers the name map, slots, and membership indexes.
-    // Live entries cover binding and cache-cell metadata.
+    // The capacity estimate covers the name map, slots, and membership indexes.
+    // The live-binding estimate covers binding and cache-cell metadata.
+    private const long FunctionCapacityBytesPerSlot = 136;
+    private const long FunctionBindingBytes = 128;
+    internal const long FunctionPublicationBytes = FunctionCapacityBytesPerSlot + FunctionBindingBytes;
+
     internal long EstimatedFunctionMemoryBytes => EstimateFunctionMemoryBytes(_functionCapacity, _functions.Count);
 
-    private static long EstimateFunctionMemoryBytes(int capacity, int count) => 128L * capacity + 128L * count;
+    private static long EstimateFunctionMemoryBytes(int capacity, int count) =>
+        FunctionCapacityBytesPerSlot * capacity + FunctionBindingBytes * count;
 
     public EvaluationState(
         ParsedScript script,
@@ -387,6 +396,17 @@ internal sealed class EvaluationState
     private FunctionBinding GetFunctionBinding(int slot) => _functionSlots[slot].Binding
         ?? throw new InvalidOperationException("The function slot is empty.");
 
+    internal (uint Bucket, long Chain) GetFunctionImportOrder(ShellValue name)
+    {
+        // Bash's function table uses FNV-1 with signed bytes on the pinned builds.
+        var hash = 2166136261u;
+        foreach (var value in name.Bytes.Span)
+            hash = unchecked((hash * 16777619u) ^ (uint)(sbyte)value);
+
+        var rank = _functionSlots[_functions[name]].InsertionRank;
+        return (hash & (_functionBucketCount - 1), _oddFunctionRehash ? rank : -rank);
+    }
+
     /// <summary>Borrows the current export selection in function namespace order.</summary>
     internal ReadOnlySpan<FunctionBinding> GetExportedFunctions(EvaluationMemory memory)
     {
@@ -404,7 +424,7 @@ internal sealed class EvaluationState
             foreach (var slot in EnumerateExportedFunctionSlots())
             {
                 var binding = GetFunctionBinding(slot);
-                _functionSlots[slot] = new FunctionSlot(binding, index);
+                _functionSlots[slot] = _functionSlots[slot] with { Index = index };
                 selected[index++] = binding;
             }
             _exportedFunctionsMemory = reservation;
@@ -610,7 +630,10 @@ internal sealed class EvaluationState
             ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,
-            Traps = Traps?.Fork(kind)
+            Traps = Traps?.Fork(kind),
+            _functionBucketCount = _functionBucketCount,
+            _functionInsertionSequence = _functionInsertionSequence,
+            _oddFunctionRehash = _oddFunctionRehash
         };
 
         var functionCount = _functions.Count;
@@ -622,14 +645,14 @@ internal sealed class EvaluationState
         clone._functionSlotMasks.EnsureCapacity((functionCount - 1) / FunctionSlotsPerBlock + 1);
         if (_occupiedFunctionBlocks is { } occupiedBlocks)
         {
-            foreach (var slot in EnumerateFunctionSlots(occupiedBlocks, exported: false))
-                clone.SetFunctionBinding(GetFunctionBinding(slot));
+            foreach (var position in EnumerateFunctionSlots(occupiedBlocks, exported: false))
+                clone.SetFunctionBinding(GetFunctionBinding(position), _functionSlots[position].InsertionRank);
         }
         else
         {
             foreach (var slot in _functionSlots)
                 if (slot.Binding is { } binding)
-                    clone.SetFunctionBinding(binding);
+                    clone.SetFunctionBinding(binding, slot.InsertionRank);
         }
 
         return clone;
@@ -702,7 +725,7 @@ internal sealed class EvaluationState
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
-        memory.Charge(256);
+        memory.Charge(FunctionPublicationBytes);
         var coordinates = context.Coordinates;
         var bodyLine = coordinates.Locations?.TryGet(functionDefinition.Body, out var body) == true
             ? coordinates.Offset + body.StartLine : coordinates.Line;
@@ -719,7 +742,27 @@ internal sealed class EvaluationState
         return true;
     }
 
-    public void SetFunctionBinding(FunctionBinding function)
+    internal readonly record struct FunctionImport(FunctionBinding Binding, int ExportIndex, long InsertionRank);
+
+    internal void PublishFunctionImports(List<FunctionImport> imports, bool inBucketOrder)
+    {
+        if (inBucketOrder)
+        {
+            // Preserve the native insertion history for future exports while retaining
+            // the original order of slots observed by the host.
+            var count = _functions.Count;
+            for (var i = 0; i < imports.Count; i++)
+                imports[i] = imports[i] with { InsertionRank = NextFunctionInsertionRank(++count) };
+            imports.Sort(static (left, right) => left.ExportIndex.CompareTo(right.ExportIndex));
+        }
+
+        foreach (var import in imports)
+            SetFunctionBinding(import.Binding, import.InsertionRank);
+    }
+
+    public void SetFunctionBinding(FunctionBinding function) => SetFunctionBinding(function, inheritedRank: 0);
+
+    private void SetFunctionBinding(FunctionBinding function, long inheritedRank)
     {
         var name = function.Definition.Name.Value;
         var previous = _functions.TryGetValue(name, out var position) ? GetFunctionBinding(position) : null;
@@ -738,12 +781,15 @@ internal sealed class EvaluationState
         _functionCapacity = Math.Max(_functionCapacity, _functions.Count);
         // Acquire before retiring the old binding: attribute copies can share this owner.
         function.Retain();
-        var exportIndex = _functionSlots[position].Index;
-        _functionSlots[position] = new FunctionSlot(function, exportIndex);
+        var slot = _functionSlots[position];
+        var rank = slot.InsertionRank;
+        if (previous == null)
+            rank = inheritedRank != 0 ? inheritedRank : NextFunctionInsertionRank(_functions.Count);
+        _functionSlots[position] = new FunctionSlot(function, slot.Index, rank);
         if (wasExported != isExported)
             SetExportMembership(position, isExported);
         else if (isExported && _exportedFunctions is { } selected)
-            selected[exportIndex] = function;
+            selected[slot.Index] = function;
         previous?.Release();
 
         int AllocateSlot()
@@ -763,6 +809,19 @@ internal sealed class EvaluationState
             _functionSlots.Add(default);
             return next;
         }
+    }
+
+    private long NextFunctionInsertionRank(int count)
+    {
+        // A new name starts at the head of its bucket. Each later growth reverses
+        // the chain for names still sharing that bucket. Rank sign records insertion parity.
+        if (count > 2L * _functionBucketCount)
+        {
+            _functionBucketCount *= 4;
+            _oddFunctionRehash = !_oddFunctionRehash;
+        }
+        var sequence = ++_functionInsertionSequence;
+        return _oddFunctionRehash ? -sequence : sequence;
     }
 
     private void SetOccupiedMembership(int position, bool occupied)
@@ -807,7 +866,7 @@ internal sealed class EvaluationState
             return false;
 
         _functions.Remove(name);
-        _functionSlots[position] = new FunctionSlot(null, _freeFunctionSlot);
+        _functionSlots[position] = new FunctionSlot(null, _freeFunctionSlot, 0);
         _freeFunctionSlot = position;
         SetOccupiedMembership(position, occupied: false);
         if (function.Attributes.HasFlag(FunctionAttributes.Exported))
@@ -836,6 +895,9 @@ internal sealed class EvaluationState
         _functionSlotMasks.Clear();
         _exportedFunctionCount = 0;
         _freeFunctionSlot = -1;
+        _functionBucketCount = InitialFunctionBucketCount;
+        _functionInsertionSequence = 0;
+        _oddFunctionRehash = false;
         _functionSlots.Clear();
         _functions.Clear();
     }

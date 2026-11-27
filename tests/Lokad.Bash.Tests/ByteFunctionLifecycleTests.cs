@@ -27,7 +27,7 @@ public sealed class ByteFunctionLifecycleTests
         Assert.Equal(0, result.ExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.TextContent);
-        Assert.Equal(256L * count, state.RetainedFunctionMemoryBytes);
+        Assert.Equal((256L + sizeof(long)) * count, state.RetainedFunctionMemoryBytes);
         Assert.InRange(budget.AdmissionCalls, 1, 64);
         owner.Dispose();
         Assert.Equal(0, governor.ReservedBytes);

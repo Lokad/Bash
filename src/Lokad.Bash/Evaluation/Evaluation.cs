@@ -1785,7 +1785,7 @@ public sealed partial class Evaluation : IFileTester
                 return CompleteCommandResult(builtinResult, executable.Completion, commandInvoked: true);
             }
 
-            if (!TryBuildFunctionExports(out var functions, out var damagedExports))
+            if (!TryBuildFunctionExports(out var functions, out var functionImports))
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("exported function limit exceeded"))
                     .ConfigureAwait(false);
@@ -1805,7 +1805,7 @@ public sealed partial class Evaluation : IFileTester
                 ref inheritedDescriptors,
                 CaptureDescriptorBindings().Bindings,
                 functions,
-                damagedExports);
+                functionImports);
             var execution = await ExecuteRunCommandAsync(commandInvocation, invocationScope,
                 executable.Completion == CommandCompletion.ExitEvaluation).ConfigureAwait(false);
             var commandResult = await FinalizeResultAsync(
@@ -1884,10 +1884,10 @@ public sealed partial class Evaluation : IFileTester
         }
 
         bool TryBuildFunctionExports(out IReadOnlyList<ExportedFunction> exports,
-            out BashCommandInheritance.TruncatedExports? damagedExports)
+            out BashCommandInheritance.FunctionImports? imports)
         {
             exports = [];
-            damagedExports = null;
+            imports = null;
             if (preparation is PreparedCommand.Executable { ExecutionOptions.ClearEnvironment: true })
                 return true;
             var selected = _state.GetExportedFunctions(Memory);
@@ -1898,6 +1898,7 @@ public sealed partial class Evaluation : IFileTester
             var result = new ExportedFunction[selected.Length];
             var owners = new FunctionBinding[selected.Length];
             exportOwners = owners;
+            BashCommandInheritance.ImportEntry[]? entries = selected.Length > 1 ? CreateImportEntries(selected.Length) : null;
             var remaining = ExportedFunction.MaximumSourceBytes;
             for (var index = 0; index < selected.Length; index++)
             {
@@ -1905,19 +1906,32 @@ public sealed partial class Evaluation : IFileTester
                 function.Retain();
                 owners[retainedExportCount++] = function;
                 if (!function.TryGetExport(remaining, out result[index], out var hasDecodedNulCapture)) return false;
-                if (hasDecodedNulCapture)
-                {
-                    if (damagedExports == null)
-                    {
-                        Memory.Charge(checked(32L + MemoryCapacity.ArrayBackingBytes<FunctionName?>(selected.Length)));
-                        damagedExports = new BashCommandInheritance.TruncatedExports(result, new FunctionName?[selected.Length]);
-                    }
-                    damagedExports.Names[index] = function.Definition.Name;
-                }
+                if (hasDecodedNulCapture && entries == null)
+                    entries = CreateImportEntries(selected.Length);
+                if (entries != null)
+                    entries[index] = new BashCommandInheritance.ImportEntry(index, hasDecodedNulCapture ? function.Definition.Name : null);
                 remaining -= result[index].Source.Length;
+            }
+            if (entries != null)
+            {
+                if (entries.Length > 1)
+                {
+                    using var scratch = Memory.Budget.Reserve(MemoryCapacity.ArrayBackingBytes<(uint, long)>(entries.Length));
+                    var order = new (uint Bucket, long Chain)[entries.Length];
+                    for (var index = 0; index < order.Length; index++)
+                        order[index] = _state.GetFunctionImportOrder(owners[index].Definition.Name.Value);
+                    Array.Sort(order, entries);
+                }
+                imports = new BashCommandInheritance.FunctionImports(result, entries);
             }
             exports = result;
             return true;
+
+            BashCommandInheritance.ImportEntry[] CreateImportEntries(int count)
+            {
+                Memory.Charge(checked(32L + MemoryCapacity.ArrayBackingBytes<BashCommandInheritance.ImportEntry>(count)));
+                return new BashCommandInheritance.ImportEntry[count];
+            }
         }
 
         async Task<int?> PrepareAssignmentsAsync()
@@ -5051,7 +5065,7 @@ public sealed partial class Evaluation : IFileTester
     {
         // Host initialization is admitted at Engine startup; callbacks during execution
         // share the active namespace's prepublication admission.
-        if (Memory.HasCommand) Memory.Charge(256);
+        if (Memory.HasCommand) Memory.Charge(EvaluationState.FunctionPublicationBytes);
         _state.SetFunctionBinding(new FunctionBinding(definition, FunctionAttributes.Exported, sourceMemory: null, Memory));
     }
 

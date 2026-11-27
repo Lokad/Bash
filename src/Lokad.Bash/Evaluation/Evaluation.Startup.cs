@@ -32,17 +32,18 @@ public sealed partial class Evaluation
         ReplacePositionalParameters(positionalParameters);
     }
 
-    private (string CommandName, IReadOnlyList<ExportedFunction> Functions, FunctionName?[]? DamagedNames)? _inheritedFunctions;
+    private (string CommandName, IReadOnlyList<ExportedFunction> Functions,
+        BashCommandInheritance.ImportEntry[]? ImportOrder)? _inheritedFunctions;
 
     internal void SetInheritedFunctions(string commandName, IReadOnlyList<ExportedFunction> functions) =>
         SetInheritedFunctions(commandName, functions, null);
 
     internal void SetInheritedFunctions(string commandName, IReadOnlyList<ExportedFunction> functions,
-        BashCommandInheritance.TruncatedExports? damagedExports)
+        BashCommandInheritance.FunctionImports? imports)
     {
         if (functions.Count != 0)
             _inheritedFunctions = (commandName, functions,
-                damagedExports != null && ReferenceEquals(damagedExports.Functions, functions) ? damagedExports.Names : null);
+                imports != null && ReferenceEquals(imports.Functions, functions) ? imports.Entries : null);
     }
 
     private async Task<(bool Ready, ShellValue? DiagnosticName)> TryImportInheritedFunctionsAsync(ScopedEvaluation scope)
@@ -52,30 +53,30 @@ public sealed partial class Evaluation
         _inheritedFunctions = null;
 
         using var command = Memory.BeginCommand(scope);
-        var bindings = new List<FunctionBinding>();
+        var bindings = new List<EvaluationState.FunctionImport>();
         var skippedExport = false;
         try
         {
-            for (var index = 0; index < inherited.Functions.Count; index++)
+            for (var ordinal = 0; ordinal < inherited.Functions.Count; ordinal++)
             {
                 CheckCancellation();
+                var entry = inherited.ImportOrder?[ordinal] ?? new BashCommandInheritance.ImportEntry(ordinal, null);
                 var owner = new SourceMemory(Memory.Budget.CreateScope());
                 try
                 {
-                    var source = inherited.Functions[index].Source;
-                    var damagedName = inherited.DamagedNames?[index];
+                    var source = inherited.Functions[entry.Index].Source;
                     owner.SyntaxMemory.Grow(32L + source.Length);
                     source = source.ToArray();
                     var parser = new ShellScanContext
                     {
                         SyntaxMemory = owner.SyntaxMemory,
-                        RetainCaptureEofDelimiter = damagedName != null
+                        RetainCaptureEofDelimiter = entry.DamagedName != null
                     };
                     if (!Parser.TryParseScript(source, parser, out var parsed, out var failure))
                     {
-                        if (damagedName != null && failure is { Kind: not ParserFailureKind.Limit, UnclosedDelimiter: { } delimiter })
+                        if (entry.DamagedName is { } name && failure is { Kind: not ParserFailureKind.Limit, UnclosedDelimiter: { } delimiter })
                         {
-                            await ReportTruncatedExportAsync(damagedName, delimiter, source).ConfigureAwait(false);
+                            await ReportTruncatedExportAsync(name.Value, delimiter, source).ConfigureAwait(false);
                             skippedExport = true;
                             continue;
                         }
@@ -94,25 +95,24 @@ public sealed partial class Evaluation
                     if (_state.TryGetFunction(definition.Name.Value, out _))
                         continue;
                     Memory.PrepareListCapacity(bindings, 1);
-                    Memory.Charge(256);
+                    Memory.Charge(EvaluationState.FunctionPublicationBytes);
                     var binding = new FunctionBinding(definition, FunctionAttributes.Exported, owner, Memory);
-                    bindings.Add(binding);
+                    bindings.Add(new EvaluationState.FunctionImport(binding, entry.Index, 0));
                     binding.Retain();
                 }
                 finally { owner.Release(); }
             }
 
-            foreach (var binding in bindings)
-                _state.SetFunctionBinding(binding);
+            _state.PublishFunctionImports(bindings, inherited.ImportOrder is { Length: > 1 });
             return (true, skippedExport ? _vars.ArgumentZero : null);
         }
         finally
         {
-            foreach (var binding in bindings)
-                binding.Release();
+            foreach (var import in bindings)
+                import.Binding.Release();
         }
 
-        async Task ReportTruncatedExportAsync(FunctionName name, UnclosedDelimiter delimiter, ReadOnlyMemory<byte> source)
+        async Task ReportTruncatedExportAsync(ShellValue name, UnclosedDelimiter delimiter, ReadOnlyMemory<byte> source)
         {
             var descriptor = GetStdErrDescriptor();
             if (descriptor.IsClosed)
@@ -120,10 +120,10 @@ public sealed partial class Evaluation
             // The function import reader begins on line zero.
             var line = source.Span[..delimiter.ReadPosition].Count((byte)'\n') + delimiter.LineAdvance;
             var invocationName = ShellValue.FromText(inherited.CommandName);
-            await ReportUnclosedDelimiterAsync(delimiter, line, invocationName, name.Value,
+            await ReportUnclosedDelimiterAsync(delimiter, line, invocationName, name,
                 SyntaxDiagnosticOrigin.Script, SyntaxDiagnosticDetail.Complete).ConfigureAwait(false);
             await WriteDiagnosticAsync(descriptor, [invocationName],
-                [ShellValue.FromText("error importing function definition for `"), name.Value, ShellValue.FromText("'")], scope: null)
+                [ShellValue.FromText("error importing function definition for `"), name, ShellValue.FromText("'")], scope: null)
                 .ConfigureAwait(false);
         }
 

@@ -512,6 +512,13 @@ The command admits exact backing for its host payload and retained bindings from
 the selection count before allocating either array. Each invocation retains the
 reached bindings through dispatch and cleanup, including the retained prefix
 when preparation fails.
+Function slots include the insertion rank used for child imports. The command
+admits an index of the original payload in Bash's import order for multiple
+exports and admits temporary sort keys only through its construction. A
+single damaged export carries its diagnostic name. The child validates in
+import order and holds each failed parser's syntax through its diagnostics.
+After validation, staged imports keep their insertion ranks when the child
+publishes them in payload order.
 In-process `exec -c` clears owned variable exports through the fork's export
 index. An overlay admits a temporary snapshot of the visible export names before
 detaching any borrowed slots. Function export clearing admits the exported
