@@ -406,7 +406,7 @@ sourced invocations for unnamed script input. Both `source` and `.` appear
 as `source`. An omitted index selects the current invocation. Explicit
 indices select enclosing invocations starting at zero. A leading `--` ends
 option scanning. Invalid options and malformed indices report usage and
-return 2. In a named source, the error includes the reached file and line.
+return 2. The error includes the reached line and any active source filename.
 A valid index beyond the available frames returns 1. A leading
 `--help` requests help and returns 2 even with closed stdout. Frame output
 returns its selection status even if the write fails.
@@ -1341,8 +1341,8 @@ ending line of the variable name. Missing loop syntax still fails during parsing
 `eval`, `source` and `.` consume one leading `--` from their expanded fields.
 Other multi-byte dash options report status 2. A leading `--help` prints the
 builtin's usage and returns 2, including when stdout is closed. Usage errors
-return 2 when stderr is closed. In a named source, the first error record
-includes the reached file and line. The usage line follows without a location.
+return 2 when stderr is closed. The first error record includes the reached
+line and any active source filename. The usage line follows without a location.
 Later fields are ordinary operands.
 `eval` joins its remaining fields with spaces and succeeds on empty input.
 `source` and `.` require a filename and use any following fields as positional
@@ -1352,8 +1352,8 @@ filename searches the current scalar `PATH` in order, then the working
 directory. Empty `PATH` components select the working directory at their
 position in the search. Search directories use the shell's supported tilde
 prefixes. Open failures report the filename and host reason through the reached
-stderr and return 1. The diagnostic includes the calling file and line in
-a named source. A directory failure includes the builtin's spelling. An
+stderr and return 1. The diagnostic includes the calling line and any active
+source filename. A directory failure includes the builtin's spelling. An
 explicitly empty filename clears the positional replacement decision and
 reports the missing-file diagnostic during operand validation. A source call
 without additional fields uses the caller's current parameters directly.

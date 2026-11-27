@@ -559,7 +559,7 @@ public sealed class EvaluationFunctionTestsEndToEnd
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.StdOut);
-        Assert.Equal($"caller: {diagnostic}\ncaller: usage: caller [expr]\n", result.StdErr);
+        Assert.Equal($"line 1: caller: {diagnostic}\ncaller: usage: caller [expr]\n", result.StdErr);
     }
 
     [Fact]

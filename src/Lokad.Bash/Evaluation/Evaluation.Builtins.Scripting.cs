@@ -77,8 +77,7 @@ public sealed partial class Evaluation
 
         async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {
-            await WriteDiagnosticAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics,
-                ClosedStderrHandling.AttemptWrite, GetNamedSourceDiagnosticPrefix(context))
+            await ReportBuiltinDiagnosticAsync([command], [operand, ShellValue.FromText(reason)], context)
                 .ConfigureAwait(false);
             var synopsis = BuiltinDocumentation.For(BuiltinKind.Caller).Synopsis("caller");
             await ReportExpansionDiagnosticAsync([command], [ShellValue.FromText("usage: "), ShellValue.FromText(synopsis)])
@@ -161,7 +160,7 @@ public sealed partial class Evaluation
         async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {
             await WriteDiagnosticUnlessStderrClosedAsync([command], [operand, ShellValue.FromText(reason)], _builtinDiagnostics,
-                GetNamedSourceDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
+                GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
             await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromText("usage: "
                 + BuiltinDocumentation.For(kind).Synopsis(commandName))], _builtinDiagnostics).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
@@ -174,7 +173,7 @@ public sealed partial class Evaluation
         if (standardError.IsClosed)
             return Task.CompletedTask;
 
-        var sourcePrefix = GetNamedSourceDiagnosticPrefix(context);
+        var sourcePrefix = GetBuiltinDiagnosticPrefix(context);
         return error.Kind == OperationErrorKind.IsDirectory
             ? WriteOperationDiagnosticAsync(standardError, ShellValue.Empty, commandName + ": ", path,
                 new OperationError("is a directory\n"), sourcePrefix)

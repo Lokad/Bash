@@ -267,7 +267,7 @@ public sealed class ByteValuedWordTests
     public async Task CallerReportsTheOriginalBytesOfAnInvalidIndex()
     {
         var result = await EndToEndHarness.RunScriptAsync("f() { caller $'\\377'; }; f", new TestHost());
-        byte[] expected = [.. "caller: "u8, 0xff, .. ": invalid number\ncaller: usage: caller [expr]\n"u8];
+        byte[] expected = [.. "line 1: caller: "u8, 0xff, .. ": invalid number\ncaller: usage: caller [expr]\n"u8];
 
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.Host.StandardOutput.Content.ToArray());

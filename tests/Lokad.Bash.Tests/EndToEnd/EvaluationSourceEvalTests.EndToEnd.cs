@@ -26,10 +26,10 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("source -- ./missing", "./missing: No such file or directory\n")]
-    [InlineData(". ''", ": No such file or directory\n")]
-    [InlineData("source ./folder", "source: ./folder: is a directory\n")]
-    [InlineData(". ./folder", ".: ./folder: is a directory\n")]
+    [InlineData("source -- ./missing", "line 1: ./missing: No such file or directory\n")]
+    [InlineData(". ''", "line 1: : No such file or directory\n")]
+    [InlineData("source ./folder", "line 1: source: ./folder: is a directory\n")]
+    [InlineData(". ./folder", "line 1: .: ./folder: is a directory\n")]
     [InlineData("source ./missing 2>&-", "")]
     public async Task SourceReportsReachedFilenameFailures(string invocation, string diagnostic)
     {
@@ -345,7 +345,7 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync(script, tree: tree);
 
         Assert.Empty(result.StdOut);
-        Assert.StartsWith(name + ": filename argument required\n", result.StdErr);
+        Assert.StartsWith($"line 1: {name}: filename argument required\n", result.StdErr);
         Assert.Equal(2, result.ExitCode);
     }
 
@@ -375,7 +375,7 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.StartsWith(".: -x: invalid option\n", host.ReadFile("/diagnostic"));
+        Assert.StartsWith("line 1: .: -x: invalid option\n", host.ReadFile("/diagnostic"));
         Assert.DoesNotContain("selected", host.CaptureEntries().Keys);
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -428,7 +428,7 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
         var result = await EvaluationTestHelper.RunAsync("f(){ printf ran; }; eval -xyz f; printf '<%s>' \"$?\"");
 
         Assert.Equal("<2>", result.StdOut);
-        Assert.StartsWith("eval: -x: invalid option\n", result.StdErr);
+        Assert.StartsWith("line 1: eval: -x: invalid option\n", result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

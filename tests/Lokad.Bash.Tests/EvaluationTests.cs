@@ -1044,7 +1044,7 @@ public partial class EvaluationTests
 
         var error = await NextWriteAsync(state);
         Assert.Equal(2, error.FileDescriptor.Id);
-        Assert.Equal("source: filename argument required\n", Text(error.Content));
+        Assert.Equal("line 1: source: filename argument required\n", Text(error.Content));
         error.SetResult(DescriptorWriteResult.Open);
 
         var usage = await NextWriteAsync(state);

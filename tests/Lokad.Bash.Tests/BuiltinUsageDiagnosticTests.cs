@@ -128,6 +128,30 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Theory]
+    [InlineData("eval \\\n-xyz 2>log", 3, "eval: -x: invalid option", "eval: usage: eval [arg ...]\n", 2)]
+    [InlineData("command eval \\\n-xyz 2>log", 2, "eval: -x: invalid option", "eval: usage: eval [arg ...]\n", 2)]
+    [InlineData("caller nope \\\n2>log", 2, "caller: nope: invalid number", "caller: usage: caller [expr]\n", 2)]
+    [InlineData("builtin source -- 2>log", 2, "source: filename argument required", "source: usage: source filename [arguments]\n", 2)]
+    [InlineData(". \\\n./absent 2>log", 3, "./absent: No such file or directory", "", 1)]
+    public async Task ScriptingReportsTheReachedLineInAnUnnamedScript(
+        string invocation, int line, string diagnostic, string usage, int failureStatus)
+    {
+        var script = ":\n" + invocation + "\nprintf '<%s>' \"$?\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal($"<{failureStatus}>", host.StandardOutput.TextContent);
+            Assert.True(host.StandardError.Content.IsEmpty);
+            Assert.Equal($"line {line}: {diagnostic}\n{usage}", host.ReadFile("/log"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData("dirs -c stray")]
     [InlineData("pushd -x")]
     [InlineData("popd stray")]
@@ -166,7 +190,7 @@ public sealed class BuiltinUsageDiagnosticTests
         await new Engine().RunAsync(state, host);
 
         var descriptor = new FileDescriptor(9);
-        var prefix = System.Text.Encoding.ASCII.GetBytes(combined ? $"line 1: {name}: -" : $"{name}: -");
+        var prefix = System.Text.Encoding.ASCII.GetBytes($"line 1: {name}: -");
         byte[] invalid = [.. prefix, 0xff, .. ": invalid option\n"u8];
         var usage = System.Text.Encoding.ASCII.GetBytes($"{name}: usage: {name} {arguments}\n");
         if (combined)

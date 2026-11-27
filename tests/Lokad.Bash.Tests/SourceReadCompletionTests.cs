@@ -69,7 +69,7 @@ public sealed class SourceReadCompletionTests
         }
 
         var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
-        Assert.Equal("item: No such file or directory\n"u8.ToArray(), diagnostic.Content.ToArray());
+        Assert.Equal("line 1: item: No such file or directory\n"u8.ToArray(), diagnostic.Content.ToArray());
         diagnostic.SetResult(DescriptorWriteResult.Open);
         Assert.Null(await state.GetNextStep());
         Assert.Equal(1, state.LastExitCode);
@@ -86,7 +86,7 @@ public sealed class SourceReadCompletionTests
 
         var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
         Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
-        Assert.Equal("./target: input policy refused\n"u8.ToArray(), diagnostic.Content.ToArray());
+        Assert.Equal("line 1: ./target: input policy refused\n"u8.ToArray(), diagnostic.Content.ToArray());
         Assert.False(state.Variables.ContainsKey("after"));
         diagnostic.SetResult(DescriptorWriteResult.Open);
 

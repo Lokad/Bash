@@ -55,7 +55,7 @@ public sealed class ByteSourceEvalTests
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.Content.ToArray());
         var diagnostic = host.StandardError.Content.Span;
-        var prefix = "eval: -"u8;
+        var prefix = "line 1: eval: -"u8;
         Assert.True(diagnostic.StartsWith(prefix));
         Assert.Equal(0xff, diagnostic[prefix.Length]);
         Assert.True(diagnostic[(prefix.Length + 1)..].StartsWith(": invalid option\n"u8));
