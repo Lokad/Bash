@@ -343,6 +343,23 @@ public sealed class ByteValuedWordTests
             value => Assert.Equal(second, value.ToValue(evaluation.Memory).Bytes.ToArray()));
     }
 
+    [Theory]
+    [InlineData("$value\"*\"", "FF,622A")]
+    [InlineData("{pre,post}$value\"*\"", "707265FF,622A,706F7374FF,622A")]
+    public async Task ParameterFieldsKeepOpaqueBytesAndQuotedSuffixAcrossBraceSelection(string source, string expectedHex)
+    {
+        var tokenizer = new Tokenizer(ShellSource.FromText(source));
+        Assert.True(tokenizer.NextToken().TryGetWordToken(out var token));
+        var evaluation = new Eval(Parser.Parse(string.Empty));
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("value", ShellValue.FromBytes(new byte[] { 0xff, (byte)' ', (byte)'b' })));
+        var scope = new ScopedEvaluation(evaluation, variables, default);
+
+        var expanded = await WordExpansion.ExpandToWordsAsync(Assert.IsType<WordToken>(token).Word, scope);
+        Assert.Equal(expectedHex.Split(','), expanded.Select(field => Convert.ToHexString(field.ToValue(evaluation.Memory).Bytes.Span)));
+        Assert.All(expanded, field => Assert.False(GlobPattern.RequiresExpansion(field)));
+    }
+
     [Fact]
     public async Task SingleLiteralRetainsBytesAcrossScalarAndFieldExpansion()
     {

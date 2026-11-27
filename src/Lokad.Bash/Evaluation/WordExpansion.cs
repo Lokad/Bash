@@ -75,8 +75,16 @@ internal static partial class WordExpansion
     /// <returns>The expanded words.</returns>
     public static Task<IReadOnlyList<ExpandedWord>> ExpandToWordsAsync(
         Word word,
-        ScopedEvaluation scope) =>
-        ExpandInternalAsync(word, scope, allowWordSplitting: true, ExpansionPurpose.Normal);
+        ScopedEvaluation scope)
+    {
+        if (!scope.CanExpand)
+            return Task.FromResult<IReadOnlyList<ExpandedWord>>([]);
+
+        var alternatives = ExpandBraceAlternatives(word, scope);
+        return alternatives == null
+            ? ExpandWithoutBraceAsync(word, scope, allowWordSplitting: true, ExpansionPurpose.Normal, TildeExpansion.Argument)
+            : ExpandBraceArgumentsAsync(alternatives, scope);
+    }
 
     private static Task<IReadOnlyList<ExpandedWord>> ExpandInternalAsync(
         Word word,
