@@ -1,13 +1,18 @@
 using System.Collections.Generic;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
 /// <summary>Immutable Bash descriptor inheritance carried independently of command ownership.</summary>
 /// <remarks>The bindings are immutable snapshots; tools never receive mutable evaluator state.</remarks>
-internal readonly record struct BashCommandInheritance(DescriptorBindings.Snapshot Bindings)
+internal readonly record struct BashCommandInheritance(DescriptorBindings.Snapshot Bindings,
+    BashCommandInheritance.TruncatedExports? DamagedExports)
 {
+    /// <summary>Associates damage recorded during export with the original serialized function list.</summary>
+    internal sealed record TruncatedExports(IReadOnlyList<ExportedFunction> Functions, FunctionName?[] Names);
+
     /// <summary>Captures the evaluator's mappings before the invocation crosses the host boundary.</summary>
     internal static CommandInvocation CreateInheritedCommand(
         string commandName,
@@ -20,14 +25,16 @@ internal readonly record struct BashCommandInheritance(DescriptorBindings.Snapsh
         FileDescriptor stdErr,
         ref DescriptorHandleCollector borrowedDescriptors,
         DescriptorBindings.Snapshot inheritedBindings,
-        IReadOnlyList<ExportedFunction> functions)
+        IReadOnlyList<ExportedFunction> functions,
+        TruncatedExports? damagedExports)
     {
         var bindings = inheritedBindings.WithStandardStreams(stdIn, stdOut, stdErr);
         // Select command-owned streams before adding handles that only the nested interpreter borrows.
         var owned = CommandContext.BuildDescriptorsToClose(stdIn, stdOut, stdErr, borrowedDescriptors.Descriptors);
         bindings.AddReferencedHandlesTo(ref borrowedDescriptors);
         return new CommandInvocation(commandName, arguments, currentDirectory, environment, stdIn, stdOut, stdErr,
-            new CommandContext<BashCommandInheritance>(owned, borrowedDescriptors.Descriptors, new BashCommandInheritance(bindings)))
+            new CommandContext<BashCommandInheritance>(owned, borrowedDescriptors.Descriptors,
+                new BashCommandInheritance(bindings, damagedExports)))
         { ArgumentZeroOverride = argumentZero, Functions = functions };
     }
 }

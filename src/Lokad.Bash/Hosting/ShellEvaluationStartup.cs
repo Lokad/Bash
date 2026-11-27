@@ -24,7 +24,7 @@ public static class ShellEvaluationStartup
         var evaluation = new ShellEvaluation(script, new EvaluationOptions(0, command.CurrentDirectory),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(bindings), command.BorrowedDescriptors),
             command.Environment, argumentZero, positionalParameters);
-        evaluation.SetInheritedFunctions(command.CommandName, command.Functions);
+        evaluation.SetInheritedFunctions(command.CommandName, command.Functions, inherited.DamagedExports);
         return evaluation;
     }
 

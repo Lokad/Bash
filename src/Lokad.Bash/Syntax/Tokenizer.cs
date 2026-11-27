@@ -588,7 +588,7 @@ internal sealed class Tokenizer
     private void RecordUnclosedDelimiter(char delimiter, int start, string message, int offset)
     {
         var inCapture = IsCommandSubstitution && AllowEofHereDocuments;
-        if (inCapture || TracksScriptDiagnostics)
+        if (inCapture || TracksScriptDiagnostics || _scanContext.RetainCaptureEofDelimiter)
         {
             RecordFailure(new ParserFailure(new SyntaxError(message, offset), ParserFailureKind.Delimiter)
             {
@@ -1923,8 +1923,8 @@ internal sealed class Tokenizer
 
         Position = endIndex + 1;
         var parsed = payload ?? throw new InvalidOperationException("A complete substitution requires executable syntax.");
-        if (parsed is CommandSubstitutionSyntax.Parsed { CanRenderBody: true })
-            spelling.RecordCapture(start, Position, parsed);
+        if (parsed is CommandSubstitutionSyntax.Parsed { CanRenderBody: true } capture)
+            spelling.RecordCapture(start, Position, capture);
         return new CommandSubstitutionWordPart(kind, parsed);
     }
 

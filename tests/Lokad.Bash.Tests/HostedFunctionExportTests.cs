@@ -70,6 +70,74 @@ public sealed class HostedFunctionExportTests
     }
 
     [Theory]
+    [InlineData("", "", "bash", false)]
+    [InlineData("((1)); ", "", "bash", false)]
+    [InlineData("", " reader", "reader", false)]
+    [InlineData("", "", "bash", true)]
+    public async Task ChildSkipsItsTruncatedExportAndRunsWithTheRemainingDefinitions(
+        string beginning, string argumentZero, string reader, bool conditional)
+    {
+        var capture = "\"$(" + beginning + "printf seen >&2; printf %s \"${v:-$'a\\0hidden'}\")\"";
+        var body = conditional ? "[[ " + capture + " == a ]] && printf live" : "printf %s " + capture;
+        var script = "unset v\nf(){ " + body + "; }; "
+            + "g(){ printf '[good]'; }; export -f f g\nbash -c 'g; f'" + argumentZero + "; printf '[child:%s]' \"$?\"";
+        byte[] conditionDiagnostic = conditional
+            ? [.. "bash: f: line 2: unexpected token `"u8, 0xff, .. "' in conditional command\n"u8]
+            : [];
+        byte[] stderr = [.. "bash: f: line 0: unexpected EOF while looking for matching `\"'\n"u8,
+            .. conditionDiagnostic, .. "bash: error importing function definition for `f'\n"u8,
+            .. Utf8Text.Encode($"{reader}: line 1: f: command not found\n").Span];
+        foreach (var prepared in new[] { false, true })
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var result = prepared
+                ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+                : await host.RunAsync(script, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("[good][child:127]", host.StandardOutput.TextContent);
+            Assert.Equal(stderr, host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task ReplacementExportListKeepsStrictStartupValidation()
+    {
+        var outer = new Eval(Parser.Parse("f(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }; export -f f; inspect"));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var operation = Assert.IsType<RunCommand>(await outer.GetNextStep(deadline.Token));
+        var original = operation.Command;
+        try
+        {
+            var offered = new CommandInvocation("bash", [], original.CurrentDirectory, original.Environment,
+                original.StdIn, original.StdOut, original.StdErr, original.Context)
+            {
+                Functions = original.Functions.ToArray()
+            };
+            var child = ShellEvaluationStartup.CreateInherited(offered, Parser.Parse("printf unreached"), ShellValue.FromText("bash"), []);
+            await using var host = new TestHost();
+            var result = await new Engine().RunAsync(child, host, deadline.Token);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+            Assert.Equal("syntax error: Unterminated command substitution.\n", host.StandardError.TextContent);
+            Assert.Equal(0, child.RetainedFunctionMemoryBytes);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+        finally
+        {
+            operation.SetResult(new CommandExecutionResult.Completed(0));
+            Assert.Null(await outer.GetNextStep(deadline.Token));
+            outer.ReleaseFunctions();
+        }
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(17)]

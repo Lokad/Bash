@@ -20,7 +20,11 @@ internal static class FunctionDefinitionFormatter
     /// <summary>Omits presentation-only tokens, indentation and wrapper groups before child parsing.</summary>
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public static bool TryAppendExport(FunctionDefinition definition, BoundedByteMemoryBuilder output) =>
-        TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.Export, CancellationToken.None);
+        TryAppendExport(definition, output, out _);
+
+    internal static bool TryAppendExport(FunctionDefinition definition, BoundedByteMemoryBuilder output, out bool hasDecodedNulCapture) =>
+        TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.Export,
+            CancellationToken.None, null, null, out hasDecodedNulCapture);
 
     internal static bool TryAppendImportValidation(FunctionDefinition definition, BoundedByteMemoryBuilder output,
         CancellationToken cancellationToken) =>
@@ -150,8 +154,13 @@ internal static class FunctionDefinitionFormatter
     }
 
     private static bool TryAppend(Step initial, IByteMemoryWriter output, IMemoryBudget? budget, Format format,
-        CancellationToken cancellationToken, CommandLocations? locations = null, ShellScanContext? captures = null)
+        CancellationToken cancellationToken, CommandLocations? locations = null, ShellScanContext? captures = null) =>
+        TryAppend(initial, output, budget, format, cancellationToken, locations, captures, out _);
+
+    private static bool TryAppend(Step initial, IByteMemoryWriter output, IMemoryBudget? budget, Format format,
+        CancellationToken cancellationToken, CommandLocations? locations, ShellScanContext? captures, out bool hasDecodedNulCapture)
     {
+        hasDecodedNulCapture = false;
         var display = format == Format.Display;
         var importValidation = format == Format.ImportValidation;
         var captureSpelling = format switch
@@ -236,6 +245,8 @@ internal static class FunctionDefinitionFormatter
                         });
                     break;
                 case Step.Word(var word):
+                    if (format == Format.Export)
+                        hasDecodedNulCapture |= word.HasDecodedNulCapture;
                     if (!AppendWordParts(word.Parts, 0, 0)) return false;
                     break;
                 case Step.WordTail(var parts, var firstPart, var firstOffset):
@@ -340,7 +351,10 @@ internal static class FunctionDefinitionFormatter
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             if (index != 0 && !Append(" ")) return false;
-                            if (!AppendWordParts(values[index].Word.Parts, 0, 0)) return false;
+                            var arrayWord = values[index].Word;
+                            if (format == Format.Export)
+                                hasDecodedNulCapture |= arrayWord.HasDecodedNulCapture;
+                            if (!AppendWordParts(arrayWord.Parts, 0, 0)) return false;
                         }
                         cancellationToken.ThrowIfCancellationRequested();
                         if (!Append(")")) return false;
@@ -631,6 +645,13 @@ internal static class FunctionDefinitionFormatter
                             Push(new Step.Text("(("), new Step.Source(arithmetic.Expression), new Step.Text("))"));
                             break;
                         case ConditionalCommand conditional:
+                            if (format == Format.Export && !hasDecodedNulCapture && conditional.Spelling.Captures is { } operands)
+                                foreach (var operand in operands)
+                                    if (operand.Syntax is CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true })
+                                    {
+                                        hasDecodedNulCapture = true;
+                                        break;
+                                    }
                             if (capture) PushStep(new Step.Condition(conditional.Condition));
                             else if (!Append("[[ ") || !AppendSpelling(conditional.Spelling, 0, output, budget, cancellationToken, captureSpelling)
                                 || !Append(" ]]"))

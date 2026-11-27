@@ -331,8 +331,12 @@ internal sealed class ConditionalParser : IDisposable
             Record(new SpellingEdit(offset + start, offset + end, new SourceSpelling(ShellSource.FromBytes(value.Bytes), null),
                 null, SpellingEditKind.Literal));
 
-        internal void RecordCapture(int start, int end, CommandSubstitutionSyntax capture) =>
-            Record(new SpellingEdit(offset + start, offset + end, default, capture, SpellingEditKind.Capture));
+        internal void RecordCapture(int start, int end, CommandSubstitutionSyntax.Parsed capture)
+        {
+            var endsAtNul = capture.AdjacentSpelling is { EndsAtDecodedNul: true };
+            Record(new SpellingEdit(offset + start, offset + (endsAtNul ? length : end),
+                new SourceSpelling(default, null) { EndsAtDecodedNul = endsAtNul }, capture, SpellingEditKind.Capture));
+        }
 
         internal void RecordLocalePrefix(int start, int end) =>
             Record(new SpellingEdit(offset + start, offset + end, default, null, SpellingEditKind.Omit));

@@ -1127,6 +1127,12 @@ spelling before evaluating any of its words. A command-only assignment list
 checks each value when it reaches that value. An ordinary capture can
 report a delimiter error while rereading the normalized word. Adjacent
 parentheses can report a missing delimiter in the truncated enclosing word.
+Conditional listings keep subsequent operators and operands after a truncated
+capture word. When `eval` or `source` reads a damaged spelling, it reports
+the delimiter at the loaded reader's line. If a decoded NUL leaves an
+evaluator-produced function export with an unclosed delimiter, the same-host
+child reports the rejected import, publishes the other validated functions,
+and runs its script.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split

@@ -87,7 +87,7 @@ public sealed class CommandInvocationTests
         var collector = new DescriptorHandleCollector(handles);
 
         var invocation = BashCommandInheritance.CreateInheritedCommand("synthetic", null, [], ShellPath.Root, [],
-            FileDescriptor.StdIn, output, FileDescriptor.StdErr, ref collector, bindings.Capture(), []);
+            FileDescriptor.StdIn, output, FileDescriptor.StdErr, ref collector, bindings.Capture(), [], damagedExports: null);
 
         Assert.Same(handles, invocation.BorrowedDescriptors);
         Assert.Equal(output, Assert.Single(invocation.DescriptorsToClose));
@@ -124,7 +124,7 @@ public sealed class CommandInvocationTests
         var finalOutput = new FileDescriptor(13);
         var borrowed = new DescriptorHandleCollector(new List<FileDescriptor>());
         var parent = BashCommandInheritance.CreateInheritedCommand("parent", null, [], ShellPath.Root, [],
-            FileDescriptor.StdIn, originalOutput, FileDescriptor.StdErr, ref borrowed, CreateBindings(includeAdditionalMappings), functions: []);
+            FileDescriptor.StdIn, originalOutput, FileDescriptor.StdErr, ref borrowed, CreateBindings(includeAdditionalMappings), functions: [], damagedExports: null);
         var child = parent.WithCommandName("alias").CreateChild("wrapper", [], [],
             FileDescriptor.StdIn, intermediateOutput, FileDescriptor.StdErr);
         var grandchild = child.CreateChild("sh", [], [], originalOutput, finalOutput, FileDescriptor.StdErr);
@@ -213,7 +213,7 @@ public sealed class CommandInvocationTests
     {
         var directory = new ShellPath("/work");
         var parent = new CommandInvocation("parent", [], directory, [], null, null, null,
-            new CommandContext<BashCommandInheritance>([], [], new BashCommandInheritance(CreateBindings(includeAdditionalMappings))));
+            new CommandContext<BashCommandInheritance>([], [], new BashCommandInheritance(CreateBindings(includeAdditionalMappings), null)));
         var environment = new[] { new EnvironmentVariable("PWD", ShellValue.FromText("/other")) };
         var child = parent.CreateChild("child", [], environment,
             FileDescriptor.StdIn, FileDescriptor.StdOut, FileDescriptor.StdErr);
@@ -249,7 +249,7 @@ public sealed class CommandInvocationTests
         var owned = new FileDescriptor[] { new(10) };
         var invocation = new CommandInvocation("original", [], currentDirectory: ShellPath.Root, [],
             borrowed[0], owned[0], null,
-            new CommandContext<BashCommandInheritance>(owned, borrowed, new BashCommandInheritance(mappings.Capture().Bindings)))
+            new CommandContext<BashCommandInheritance>(owned, borrowed, new BashCommandInheritance(mappings.Capture().Bindings, null)))
         {
             Functions = [new("f(){ :; }"u8.ToArray())]
         };
@@ -270,7 +270,7 @@ public sealed class CommandInvocationTests
     {
         var parent = new CommandInvocation(
             "parent", [], currentDirectory: ShellPath.Root, [], null, null, null,
-            new CommandContext<BashCommandInheritance>([], [], new BashCommandInheritance(CreateBindings(includeAdditionalMappings))))
+            new CommandContext<BashCommandInheritance>([], [], new BashCommandInheritance(CreateBindings(includeAdditionalMappings), null)))
         {
             Functions = [new("f(){ :; }"u8.ToArray())]
         };
@@ -625,7 +625,7 @@ public sealed class CommandInvocationTests
         var borrowed = new DescriptorHandleCollector(new List<FileDescriptor> { new FileDescriptor(11) });
         var invocation = BashCommandInheritance.CreateInheritedCommand("sh", null, [], ShellPath.Root, [],
             FileDescriptor.StdIn, FileDescriptor.StdOut, FileDescriptor.StdErr, ref borrowed,
-            mappings.Capture().Bindings, functions: []);
+            mappings.Capture().Bindings, functions: [], damagedExports: null);
 
         mappings.Set(new LogicalDescriptor(9), new FileDescriptor(12));
 

@@ -53,6 +53,10 @@ public sealed partial class ConditionalLexingTests
     [InlineData("\"${v:-$'a\\0hidden'}\"\"$(printf dropped)\"$'tail' == a || x == x", "", "\"${v:-a == a || x == x", "")]
     [InlineData("\"${v:-$'a\\0hidden'}\" == \"${v:-$'a}\\0hidden'}\"", "", "\"${v:-a == \"${v:-a}", "")]
     [InlineData("x == x || \"${v:-$'a\\0hidden'}\" == a", "; f; printf '[%s]' \"$?\"", "x == x || \"${v:-a == a", "[0]")]
+    [InlineData("\"$(((1)); printf %s \"${v:-$'a\\0hidden'}\")\"tail$(printf drop) == \"x\"", "",
+        "\"$(((1)); printf %s \"${v:-a == \"x\"", "")]
+    [InlineData("\"$(((1)); printf %s \"${v:-$'a\\0hidden'}\")\" == \"$(((1)); printf %s \"${v:-$'a}\\0hidden'}\")\"", "",
+        "\"$(((1)); printf %s \"${v:-a == \"$(((1)); printf %s \"${v:-a}", "")]
     public async Task ConditionalDisplayEndsTheOperandAtDecodedNul(string condition, string invocation, string spelling, string output)
     {
         var script = "unset v\nf(){ [[ " + condition + " ]]; }; declare -f f" + invocation;

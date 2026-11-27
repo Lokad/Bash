@@ -177,6 +177,7 @@ public static class Parser
         var tokenizer = new Tokenizer(context.ScriptInput, 0, context)
         {
             TrackCommandLocations = true,
+            TrackUnexpectedTokens = context.RetainCaptureEofDelimiter,
             AllowEofHereDocuments = true
         };
         SkipNewlines(tokenizer);

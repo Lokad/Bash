@@ -468,6 +468,7 @@ public sealed partial class Evaluation : IFileTester
             var result = EvaluationResult.FromExitCode(0);
             Exception? failure = null;
             OperationError? closeError = null;
+            SourceMemory? startupSource = null;
             try
             {
                 var scope = new ScopedEvaluation(this, _vars, _initialContext)
@@ -476,10 +477,18 @@ public sealed partial class Evaluation : IFileTester
                     LoadedReaderIgnoresErrexit = _loadedReaderIgnoresErrexit,
                     PipelineExitReader = _state.ForkKind == ShellForkKind.PipelineSimpleCommand ? default : _pipelineExitBoundary
                 };
-                if (!await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false))
+                var startup = await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false);
+                if (!startup.Ready)
                     result = EvaluationResult.FromExitCode(2);
                 else
                 {
+                    if (startup.DiagnosticPath is { } path && scope.Context.DiagnosticPath == null)
+                    {
+                        var parent = scope.Context.SourceMemory;
+                        startupSource = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent);
+                        startupSource.OwnDiagnosticPath(path, prefixCurrentDirectory: false);
+                        scope = scope with { Context = scope.Context.WithSourceMemory(startupSource) };
+                    }
                     result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
                     if (_state.ForkKind == ShellForkKind.Subshell)
                         result = CompleteDiscardInChild(result);
@@ -508,6 +517,7 @@ public sealed partial class Evaluation : IFileTester
                 {
                     _state.PreparationDiagnosticName = default;
                     ReleaseReadWorkspace();
+                    startupSource?.Release();
                     Interlocked.Exchange(ref _preparedSubstitutionMemory, null)?.Release();
                     _state.ReleaseExportedFunctionSelection();
                     Memory.Finish(_rootFlowHandling == RootFlowHandling.Normalize || _retainCompletedMemory);
@@ -1775,7 +1785,7 @@ public sealed partial class Evaluation : IFileTester
                 return CompleteCommandResult(builtinResult, executable.Completion, commandInvoked: true);
             }
 
-            if (!TryBuildFunctionExports(out var functions))
+            if (!TryBuildFunctionExports(out var functions, out var damagedExports))
             {
                 await ReportExpansionDiagnosticAsync(ShellValue.FromText(commandName), ShellValue.FromText("exported function limit exceeded"))
                     .ConfigureAwait(false);
@@ -1794,7 +1804,8 @@ public sealed partial class Evaluation : IFileTester
                 GetStdErrDescriptor(),
                 ref inheritedDescriptors,
                 CaptureDescriptorBindings().Bindings,
-                functions);
+                functions,
+                damagedExports);
             var execution = await ExecuteRunCommandAsync(commandInvocation, invocationScope,
                 executable.Completion == CommandCompletion.ExitEvaluation).ConfigureAwait(false);
             var commandResult = await FinalizeResultAsync(
@@ -1872,9 +1883,11 @@ public sealed partial class Evaluation : IFileTester
             void ClearExports(Variables variables) => variables.ClearExportAttributes(Memory, _cancellationToken);
         }
 
-        bool TryBuildFunctionExports(out IReadOnlyList<ExportedFunction> exports)
+        bool TryBuildFunctionExports(out IReadOnlyList<ExportedFunction> exports,
+            out BashCommandInheritance.TruncatedExports? damagedExports)
         {
             exports = [];
+            damagedExports = null;
             if (preparation is PreparedCommand.Executable { ExecutionOptions.ClearEnvironment: true })
                 return true;
             var selected = _state.GetExportedFunctions(Memory);
@@ -1891,7 +1904,16 @@ public sealed partial class Evaluation : IFileTester
                 var function = selected[index];
                 function.Retain();
                 owners[retainedExportCount++] = function;
-                if (!function.TryGetExport(remaining, out result[index])) return false;
+                if (!function.TryGetExport(remaining, out result[index], out var hasDecodedNulCapture)) return false;
+                if (hasDecodedNulCapture)
+                {
+                    if (damagedExports == null)
+                    {
+                        Memory.Charge(checked(32L + MemoryCapacity.ArrayBackingBytes<FunctionName?>(selected.Length)));
+                        damagedExports = new BashCommandInheritance.TruncatedExports(result, new FunctionName?[selected.Length]);
+                    }
+                    damagedExports.Names[index] = function.Definition.Name;
+                }
                 remaining -= result[index].Source.Length;
             }
             exports = result;
@@ -5985,15 +6007,19 @@ public sealed partial class Evaluation : IFileTester
         return coordinates.FunctionBodyLine != 0 ? coordinates.FunctionBodyLine : coordinates.Line;
     }
 
+    private Task ReportUnclosedDelimiterAsync(
+        UnclosedDelimiter endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail) =>
+        ReportUnclosedDelimiterAsync(endOfInput, line, path, ShellValue.Empty, origin, detail);
+
     private async Task ReportUnclosedDelimiterAsync(
-        UnclosedDelimiter endOfInput, int line, string? path, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
+        UnclosedDelimiter endOfInput, int line, string? path, ShellValue subject, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
     {
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
         if (origin == SyntaxDiagnosticOrigin.Script && (endOfInput.AtOpeningDelimiter || endOfInput.IncludeScriptLine))
             origin = SyntaxDiagnosticOrigin.ScriptLine;
-        var prefix = new SyntaxDiagnosticPrefix(path, origin, line);
+        var prefix = new SyntaxDiagnosticPrefix(path, subject, origin, line);
         var message = endOfInput.Delimiter switch
         {
             ')' => MissingCommandSubstitutionClose,
@@ -6006,11 +6032,11 @@ public sealed partial class Evaluation : IFileTester
         if (endOfInput.Conditional is { } conditional && detail != SyntaxDiagnosticDetail.PrimaryOnly)
         {
             var lineOffset = line - conditional.ReadLine;
-            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, lineOffset + conditional.ReasonLine),
+            await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + conditional.ReasonLine),
                 GetConditionalEndOfInputMessage(conditional.Error, followsUnclosedDelimiter: true)).ConfigureAwait(false);
             if (conditional.UnclosedGroupLines is { } groups)
                 foreach (var groupLine in groups)
-                    await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, origin, lineOffset + groupLine),
+                    await WriteSyntaxDiagnosticLineAsync(descriptor, new SyntaxDiagnosticPrefix(path, subject, origin, lineOffset + groupLine),
                         MissingConditionalGroup).ConfigureAwait(false);
         }
     }

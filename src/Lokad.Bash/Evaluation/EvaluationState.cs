@@ -139,9 +139,13 @@ internal sealed record FunctionBinding
 
     /// <summary>Retains a bounded serialization under its creator's owner, shared by attribute copies.</summary>
     /// <remarks>The caller holds namespace or borrow ownership through consumption of the returned bytes.</remarks>
-    public bool TryGetExport(int maximumBytes, out ExportedFunction export)
+    public bool TryGetExport(int maximumBytes, out ExportedFunction export) =>
+        TryGetExport(maximumBytes, out export, out _);
+
+    internal bool TryGetExport(int maximumBytes, out ExportedFunction export, out bool hasDecodedNulCapture)
     {
         export = default;
+        hasDecodedNulCapture = false;
         var cached = Volatile.Read(ref _exportCache.Value);
         if (cached == null)
         {
@@ -151,8 +155,8 @@ internal sealed record FunctionBinding
             {
                 _ = memory.Reserve(192); // Cache/scope/result metadata and backing-array headers.
                 using var output = new BoundedByteMemoryBuilder(0, Math.Min(maximumBytes, Parser.MaximumScriptBytes), memory);
-                if (!FunctionDefinitionFormatter.TryAppendExport(Definition, output)) return false;
-                var rendered = new CachedExport(new ExportedFunction(output.ToMemory()), memory);
+                if (!FunctionDefinitionFormatter.TryAppendExport(Definition, output, out var damagedCapture)) return false;
+                var rendered = new CachedExport(new ExportedFunction(output.ToMemory()), damagedCapture, memory);
                 // Concurrent first readers may render independently; no evaluator waits for another one.
                 cached = Interlocked.CompareExchange(ref _exportCache.Value, rendered, null);
                 if (cached == null)
@@ -166,6 +170,7 @@ internal sealed record FunctionBinding
         }
         if (cached.Export.Source.Length > maximumBytes) return false;
         export = cached.Export;
+        hasDecodedNulCapture = cached.HasDecodedNulCapture;
         return true;
     }
 
@@ -183,7 +188,7 @@ internal sealed record FunctionBinding
         }
     }
 
-    private sealed record CachedExport(ExportedFunction Export, IMemoryScope Memory);
+    private sealed record CachedExport(ExportedFunction Export, bool HasDecodedNulCapture, IMemoryScope Memory);
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
     public bool TryAppend(ByteMemoryBuilder output, FunctionDisplayStyle style)

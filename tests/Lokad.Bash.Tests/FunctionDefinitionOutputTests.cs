@@ -417,6 +417,27 @@ public sealed class FunctionDefinitionOutputTests
     }
 
     [Theory]
+    [InlineData("", 5)]
+    [InlineData(";\nprintf after", 6)]
+    public async Task ReloadReportsTheQuoteFromAnOrdinaryCaptureDamagedByDecodedNul(string tail, int line)
+    {
+        var script = "unset v\nf(){ printf %s \"$(printf seen >&2; printf %s \"${v:-$'a\\0hidden'}\")\"" + tail
+            + "; }\nsaved=$(declare -f f); unset -f f; eval \"$saved\"; printf '[eval:%s]' \"$?\"\nprintf '[next:%s]' \"$?\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("[eval:2][next:0]", host.StandardOutput.TextContent);
+            Assert.Equal($"eval: line {line}: unexpected EOF while looking for matching `\"'\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
     [InlineData("$(printf \"%s\" \"", "\")")]
     [InlineData("$((printf \"%s\" \"", "\");)")]
     public void NestedRejectedCapturesHaveDisplayAndImportSpelling(string opener, string closer)
