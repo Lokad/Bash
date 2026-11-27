@@ -388,6 +388,33 @@ public sealed class ByteValuedWordTests
         Assert.Empty(await WordExpansion.ExpandWithoutBraceAsync(word, scope, false, ExpansionPurpose.Scalar, TildeExpansion.Leading));
     }
 
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("name=value:path", true)]
+    [InlineData("~", false)]
+    [InlineData("name:~", false)]
+    [InlineData("name=~", false)]
+    [InlineData("name~tail:~", false)]
+    [InlineData("name~tail=~", false)]
+    [InlineData("name~tail{1,2}", false)]
+    [InlineData("name~tail$value", false)]
+    [InlineData("name~~tail~", true)]
+    public void UnquotedLiteralFieldsRespectExpansionMarkers(string text, bool literal)
+    {
+        var part = WordPart.FromText(WordPartKind.Unquoted, text);
+        var word = new Word([part]);
+
+        if (literal)
+        {
+            var fields = Assert.IsAssignableFrom<IReadOnlyList<ExpandedWord>>(word.LiteralFields);
+            var segment = Assert.Single(Assert.Single(fields).Segments);
+            Assert.Equal(part.GetUnexpandedValue().Bytes, segment.Content.Bytes);
+            Assert.False(segment.IsGlobQuoted);
+        }
+        else
+            Assert.Null(word.LiteralFields);
+    }
+
     [Fact]
     public void FlatteningJoinsBytesAndRetainsSingleSegments()
     {

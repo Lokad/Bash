@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Memory;
@@ -13,6 +14,8 @@ namespace Lokad.Bash.Syntax;
 /// </remarks>
 public sealed class Word
 {
+    private static readonly SearchValues<byte> UnquotedExpansionMarkers = SearchValues.Create("$\\`{}~"u8);
+
     public Word(IReadOnlyList<WordPart> parts)
     {
         Parts = parts;
@@ -58,9 +61,7 @@ public sealed class Word
                 var bytes = source.Source.AsSpan();
                 if (source.Kind == WordPartKind.DoubleQuoted && bytes.IndexOfAny("$\\`"u8) < 0)
                     quoted = true;
-                else if (source.Kind == WordPartKind.Unquoted && bytes.Length > 0 && bytes[0] != (byte)'~'
-                    && bytes.IndexOfAny("$\\`{}"u8) < 0
-                    && bytes.IndexOf(":~"u8) < 0 && bytes.IndexOf("=~"u8) < 0)
+                else if (source.Kind == WordPartKind.Unquoted && IsUnquotedLiteral(bytes))
                     quoted = false;
                 else
                     return null;
@@ -69,6 +70,23 @@ public sealed class Word
             else
                 return null;
             return [new ExpandedWord([new ExpandedSegment(value, quoted)])];
+        }
+
+        static bool IsUnquotedLiteral(ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.IsEmpty)
+                return false;
+
+            var marker = bytes.IndexOfAny(UnquotedExpansionMarkers);
+            if (marker < 0)
+                return true;
+            if (marker == 0 || bytes[marker] != (byte)'~' || bytes[marker - 1] is (byte)':' or (byte)'=')
+                return false;
+
+            // An interior tilde can be literal. Everything before it has already been checked.
+            var remaining = bytes[(marker + 1)..];
+            return remaining.IndexOfAny("$\\`{}"u8) < 0
+                && remaining.IndexOf(":~"u8) < 0 && remaining.IndexOf("=~"u8) < 0;
         }
     }
 
