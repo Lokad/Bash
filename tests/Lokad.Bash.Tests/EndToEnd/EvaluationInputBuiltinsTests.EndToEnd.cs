@@ -402,6 +402,29 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Theory]
+    [InlineData("read -u 3 -u 4 scalar", "$scalar")]
+    [InlineData("mapfile -t -n 1 -u 3 -u 4 array", "${array[0]}")]
+    public async Task InputBuiltinsConsumeOnlyTheLastExplicitDescriptor(string command, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/first", "first\nfirst-tail\n");
+        host.AddFile("/second", "second\nsecond-tail\n");
+        var result = await host.RunAsync($"""
+            exec 3<first 4<second
+            {command} 0<&-
+            printf '<%s:%s>' "$?" "{output}"
+            read -u 3 first_tail
+            read -u 4 second_tail
+            printf '<%s:%s>' "$first_tail" "$second_tail"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<0:second><first:second-tail>", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task ReadDoesNotRetainTheDiscardedSuffixAcrossPhysicalRecords()
     {

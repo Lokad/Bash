@@ -18,7 +18,7 @@ public sealed partial class Evaluation
     {
         const int ReadBatchRecords = 128;
         using var diagnostics = new BuiltinDiagnosticScope(this);
-        var input = ResolveInputBinding(LogicalDescriptor.StdIn);
+        DescriptorBinding? selectedInput = null;
         var delimiter = (byte)'\n';
         var trimDelimiter = false;
         uint count = 0;
@@ -53,7 +53,7 @@ public sealed partial class Evaluation
                     await ReportInvalidInputDescriptorAsync(arguments[0], operand, number, scope.Context).ConfigureAwait(false);
                     return await FinishAsync(1).ConfigureAwait(false);
                 }
-                input = binding;
+                selectedInput = binding;
             }
             else
             {
@@ -77,6 +77,7 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
         }
 
+        var input = selectedInput ?? ResolveInputBinding(LogicalDescriptor.StdIn);
         var targetValue = options.ArgumentIndex < arguments.Count ? arguments[options.ArgumentIndex] : ShellValue.FromText("MAPFILE");
         var (selected, targetStatus) = await SelectIndexedInputTargetAsync(arguments[0], targetValue, scope, warn: true)
             .ConfigureAwait(false);

@@ -64,7 +64,7 @@ public sealed partial class Evaluation
         var backslashMode = ReadBackslashMode.InterpretEscapes;
         var delimiter = (byte)'\n';
         var inputNumber = LogicalDescriptor.StdIn;
-        var inputBinding = ResolveInputBinding(inputNumber);
+        DescriptorBinding? selectedInput = null;
         ShellValue? arrayName = null;
         int? count = null;
         var ignoreDelimiter = false;
@@ -118,7 +118,7 @@ public sealed partial class Evaluation
                 return await FinishAsync(1).ConfigureAwait(false);
             }
             inputNumber = logical;
-            inputBinding = binding;
+            selectedInput = binding;
         }
         if (options.RequestedHelp)
             return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Read, "read", negated)
@@ -133,6 +133,7 @@ public sealed partial class Evaluation
         if (hasPositionals && !TryParseTarget(words[argumentIndex], out firstReference))
             return await InvalidTargetAsync(words[argumentIndex]).ConfigureAwait(false);
 
+        var inputBinding = selectedInput ?? ResolveInputBinding(inputNumber);
         var memory = _readWorkspace ??= new ReadWorkspace(Memory.Budget);
         memory.Content.Truncate(0);
         var exitCode = 0;
