@@ -120,7 +120,6 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     [Theory]
     [InlineData("local -n slot=dest", "+n", "i++", "-an slot=()", 1, "local: `slot[i++]': not a valid identifier")]
     [InlineData("local -n slot", "", "0", "-an slot", 0, "local: `slot[0]': not a valid identifier")]
-    [InlineData("local -n slot", "-a", "i++", "-an slot", 1, "local: `slot[i++]': not a valid identifier")]
     [InlineData("local -n slot", "-A", "i++", "-An slot", 1, "local: `slot[i++]': not a valid identifier")]
     [InlineData("local -n slot", "-A", "i++ - 1", "-An slot", 1, "slot[i++ - 1]: bad array subscript")]
     public async Task RejectedLocalNamerefElementKeepsSelectorEffectsAndThePreparedArray(
@@ -151,17 +150,19 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("local -n slot=dest", "slot=value$((j++))", "0:0:1", "-a slot=()")]
-    [InlineData("local -n slot=dest", "slot[i++]=value$((j++))", "1:1:1", "-an slot=()")]
-    [InlineData("local -n slot", "slot+=value$((j++))", "0:0:1", "-a slot")]
-    public async Task ClearingLocalIndexedNamerefSeparatesPreparationFromTheInitializer(
-        string setup, string operand, string outcome, string listing)
+    [InlineData("local -n slot=dest", "+n", "slot=value$((j++))", "0:0:1", "-a slot=()")]
+    [InlineData("local -n slot=dest", "+n", "slot[i++]=value$((j++))", "1:1:1", "-an slot=()")]
+    [InlineData("local -n slot", "+n", "slot+=value$((j++))", "0:0:1", "-a slot")]
+    [InlineData("local -n slot", "", "slot=value$((j++))", "0:0:1", "-an slot")]
+    [InlineData("local -n slot", "", "'slot[i++]'=value$((j++))", "1:1:1", "-an slot")]
+    public async Task LocalIndexedNamerefSeparatesPreparationFromTheInitializer(
+        string setup, string change, string operand, string outcome, string listing)
     {
         var result = await EvaluationTestHelper.RunAsync($$"""
             slot=outside; dest=target; i=0; j=0
             f() {
                 {{setup}}
-                local +n -a {{operand}} after=kept
+                local {{change}} -a {{operand}} after=kept
                 printf '<%s:%s:%s>\n' "$?" "$i" "$j"
                 declare -p slot after dest
             }
@@ -176,6 +177,37 @@ public sealed class NamerefArrayInvariantTestsEndToEnd
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             .. "': not a valid identifier\n"u8
         ], result.Host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -nr slot", "local -a slot", 0, "declare -anr slot\n", "")]
+    [InlineData("local -nr dest; local -n slot=dest", "local -Au slot=fresh", 0,
+        "declare -Anu slot=([0]=\"FRESH\" )\ndeclare -nr dest\n", "")]
+    [InlineData("local -n dest; local -nr slot=dest", "local -A slot=fresh", 1,
+        "declare -Anr slot=()\ndeclare -n dest\n", "local: slot: readonly variable\n")]
+    [InlineData("local -n slot=dest", "local -n -Au slot=fresh", 1,
+        "declare -n slot=\"dest\"\ndeclare -A dest\n", "local: slot: reference variable cannot be an array\n")]
+    [InlineData("local -n slot", "local -a slot[i++]=42", 1, "declare -an slot\n",
+        "local: `42': invalid variable name for name reference\n")]
+    public async Task OrdinaryLocalArrayDeclarationPreparesTheSelectedNamerefBinding(
+        string setup, string declaration, int status, string listing, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            slot=outside; i=0
+            f() {
+                {{setup}}
+                {{declaration}}
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p slot
+                declare -p dest 2>/dev/null || :
+            }
+            f
+            declare -p slot
+            """);
+
+        Assert.Equal($"<{status}:0>\n{listing}declare -- slot=\"outside\"\n", result.StdOut);
+        Assert.Equal(diagnostic.Length == 0 ? "" : "line 4: " + diagnostic, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
 

@@ -1367,6 +1367,14 @@ or sourced reader returns to the caller with the prepared array visible.
 An indexed array with the nameref attribute uses the maximum index's byte
 projection as its reference spelling. An assignment through an empty
 projected spelling leaves the stored cells intact.
+An ordinary indexed or associative declaration that keeps the nameref
+attribute prepares the array under the authored local name when the
+function-local reference chain ends unset. A source reference with a
+stored target produces an initialized empty array before any initializer
+write. A named indexed initializer can report an invalid identifier
+with status zero, while a valid named associative initializer can
+populate key zero. With a missing target, explicit `-n` and an array
+flag prepare the target before rejecting the nameref flag.
 
 `export -a/-A` and `readonly -a/-A` filter listings when there are no
 operands. A bare name receives the requested attribute and keeps its binding

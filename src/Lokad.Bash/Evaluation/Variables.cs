@@ -717,14 +717,15 @@ public sealed partial class Variables
                 Publish(name, command);
         }
 
-        internal void PrepareRejectedNamerefArray(Variables command, BindingName name, ArrayKind kind, bool initialized,
+        internal void PrepareNamerefArray(Variables command, BindingName name, ArrayKind kind, bool initialized, bool retainNameref,
             (BindingAttributes Set, BindingAttributes Clear) attributes, EvaluationMemory memory)
         {
             memory.Charge(BindingOverheadBytes);
             VariableSlot array = kind == ArrayKind.Indexed
                 ? new IndexedSlot(new IndexedArray(isInitialized: initialized))
                 : new AssociativeSlot(new AssociativeArray(isInitialized: initialized));
-            array.Attributes = BindingAttributes.ArrayNameref;
+            if (retainNameref)
+                array.Attributes = BindingAttributes.ArrayNameref;
             command.ReplaceValue(name, array);
             command.UpdateBindingAttributes(name, attributes.Set, attributes.Clear);
             Publish(name, command);
