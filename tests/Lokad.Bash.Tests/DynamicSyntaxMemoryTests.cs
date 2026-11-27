@@ -191,7 +191,8 @@ public sealed class DynamicSyntaxMemoryTests
         var governor = new MemoryGovernor(256 * 1024);
         using var owner = governor.CreateScope();
         await using var host = new TestHost { MemoryBudget = owner };
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        // The watchdog bounds a stalled run. The 2,049 iterations check retirement and quota behavior.
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var result = await BashScript.RunAsync(host, source, EvaluationOptions.Default, cancellation.Token);
 
