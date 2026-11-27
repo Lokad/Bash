@@ -19,6 +19,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("getopts -z option")]
     [InlineData("trap -pz")]
     [InlineData("trap unknown_name")]
+    [InlineData("unset -z sample")]
     public async Task ShellClosedStderrPreservesUsageStatus(string command)
     {
         var result = await EndToEndHarness.RunScriptAsync(command + " 2>&-; printf '<%s>' \"$?\"",
@@ -115,6 +116,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData(". -xyz", 2, ".: -x: invalid option", ".: usage: . filename [arguments]")]
     [InlineData("caller 0xno", 2, "caller: 0xno: invalid hex number", "caller: usage: caller [expr]")]
     [InlineData("getopts -xyz spec flag", 2, "getopts: -x: invalid option", "getopts: usage: getopts optstring name [arg ...]")]
+    [InlineData("unset -vxyz sample", 2, "unset: -x: invalid option", "unset: usage: unset [-f] [-v] [-n] [name ...]")]
     public async Task BuiltinUsagePrefixesOnlyTheErrorInTheReachedFile(
         string invocation, int line, string diagnostic, string usage)
     {

@@ -41,7 +41,7 @@ public sealed class UnsetFunctionTestsEndToEnd
     [Theory]
     [InlineData("unset -v --help value >&-", "<2><keep>", "")]
     [InlineData("unset -vq --help value", "<2><keep>",
-        "unset: -q: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n")]
+        "line 1: unset: -q: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n")]
     [InlineData("unset -- --help value", "<0><>", "")]
     public async Task HelpRespectsLeadingOptionsAndTheOutputDescriptor(
         string invocation, string expectedOutput, string expectedError)
@@ -58,9 +58,9 @@ public sealed class UnsetFunctionTestsEndToEnd
     [InlineData("keep=value; unset '' bad-name keep; printf '<%s><%s>' \"$?\" \"${keep-unset}\"",
         "<0><unset>", "")]
     [InlineData("function bad-name { printf body; }; unset -v bad-name; printf '<%s>' \"$?\"; bad-name",
-        "<1>body", "unset: `bad-name': not a valid identifier\n")]
+        "<1>body", "line 1: unset: `bad-name': not a valid identifier\n")]
     [InlineData("a=(one); unset -v '' 'a[]'; printf '<%s><%s>' \"$?\" \"${a[0]}\"",
-        "<1><one>", "unset: `': not a valid identifier\nunset: `a[]': not a valid identifier\n")]
+        "<1><one>", "line 1: unset: `': not a valid identifier\nline 1: unset: `a[]': not a valid identifier\n")]
     [InlineData("a=(one two); i=1; unset -v 'a[i++]'; printf '<%s><%s><%s>' \"$?\" \"$i\" \"${a[1]-unset}\"",
         "<0><2><unset>", "")]
     [InlineData("keep=value; unset -v bad-name keep 2>&-; printf '<%s><%s>' \"$?\" \"${keep-unset}\"",
@@ -85,7 +85,29 @@ public sealed class UnsetFunctionTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<1><unset><unset>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal<byte>([.. "unset: `"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diag"));
+        Assert.Equal<byte>([.. "line 1: unset: `"u8, 0xff, .. "': not a valid identifier\n"u8], host.ReadFileBytes("/diag"));
+    }
+
+    [Theory]
+    [InlineData("unset \\\n-vq kept", 3, "<2><old>",
+        "unset: -q: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n")]
+    [InlineData("command unset \\\n-vq kept", 2, "<2><old>",
+        "unset: -q: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n")]
+    [InlineData("unset -v -- bad-name kept", 2, "<1><missing>",
+        "unset: `bad-name': not a valid identifier\n")]
+    public async Task UnsetReportsTheReachedLineThroughTheActiveStderr(
+        string invocation, int line, string output, string diagnostic)
+    {
+        var script = "kept=old\n" + invocation + " 2>diag\n"
+            + """printf '<%s><%s>' "$?" "${kept-missing}" """;
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal($"line {line}: {diagnostic}", host.ReadFile("/diag"));
+        Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
@@ -158,7 +180,7 @@ public sealed class UnsetFunctionTestsEndToEnd
         Assert.Equal("line 1: unset: head: cannot unset: readonly variable\n", result.StdErr);
     }
 
-    // Git Bash 5.2.37, isolated environment; omit only script-path/line diagnostic prefixes.
+    // Git Bash 5.2.37, isolated environment with the native script path omitted.
     [Theory]
     [InlineData("x=global; f(){ local x=local; unset 'x[0]'; export x; printf '<%s>\\n' \"${x-unset}\"; }; x=prefix f; declare -p x", "<unset>\ndeclare -- x=\"global\"\n", "", 0)]
     [InlineData("x=global; f(){ local x=local; declare -n r=x; unset 'r[0]'; export x; printf '<%s>\\n' \"${x-unset}\"; }; x=prefix f; declare -p x", "<unset>\ndeclare -- x=\"global\"\n", "", 0)]
@@ -168,8 +190,8 @@ public sealed class UnsetFunctionTestsEndToEnd
     [InlineData("function bad-name { :; }; readonly -f bad-name; unset -n bad-name; printf '<%s>' \"$?\"; declare -Fp bad-name", "<1>declare -fr bad-name\n", "line 1: unset: bad-name: cannot unset: readonly function\n", 0)]
     [InlineData("function a[1] { :; }; a=(zero one); unset -n 'a[1]'; declare -p a; declare -F 'a[1]'", "declare -a a=([0]=\"zero\" [1]=\"one\")\n", "", 1)]
     [InlineData("function a[1] { :; }; readonly -f 'a[1]'; unset -n 'a[1]'; printf '<%s>' \"$?\"; declare -Fp 'a[1]'", "<1>declare -fr a[1]\n", "line 1: unset: a[1]: cannot unset: readonly function\n", 0)]
-    [InlineData("function bad-name { :; }; unset -vn bad-name; printf '<%s>' \"$?\"; declare -F bad-name", "<1>bad-name\n", "unset: `bad-name': not a valid identifier\n", 0)]
-    [InlineData("function a[1] { :; }; unset -vn 'a[1]'; printf '<%s>' \"$?\"; declare -F 'a[1]'", "<1>a[1]\n", "unset: `a[1]': not a valid identifier\n", 0)]
+    [InlineData("function bad-name { :; }; unset -vn bad-name; printf '<%s>' \"$?\"; declare -F bad-name", "<1>bad-name\n", "line 1: unset: `bad-name': not a valid identifier\n", 0)]
+    [InlineData("function a[1] { :; }; unset -vn 'a[1]'; printf '<%s>' \"$?\"; declare -F 'a[1]'", "<1>a[1]\n", "line 1: unset: `a[1]': not a valid identifier\n", 0)]
     [InlineData("unset -n bad-name; printf '<%s>' \"$?\"", "<0>", "", 0)]
     [InlineData("function a[1] { :; }; a=(zero one); unset 'a[1]'; declare -p a; declare -F 'a[1]'", "declare -a a=([0]=\"zero\")\na[1]\n", "", 0)]
     [InlineData("function a[1] { :; }; unset 'a[1]'; declare -F 'a[1]'", "a[1]\n", "", 0)]
@@ -218,9 +240,9 @@ public sealed class UnsetFunctionTestsEndToEnd
     [InlineData("f(){ :; }; readonly f=value; unset f; printf 'status=%s\\n' \"$?\"; declare -F", "status=1\ndeclare -f f\n", "line 1: unset: f: cannot unset: readonly variable\n", 0)]
     [InlineData("f(){ :; }; unset -v f; declare -F; f=value; unset -v f; declare -F", "declare -f f\ndeclare -f f\n", "", 0)]
     [InlineData("f(){ :; }; target=value; declare -n f=target; unset -fn f; declare -F; declare -p f target", "declare -n f=\"target\"\ndeclare -- target=\"value\"\n", "", 0)]
-    [InlineData("f(){ :; }; f=value; unset -fv f; printf 'status=%s\\n' \"$?\"; declare -F; declare -p f", "status=1\ndeclare -f f\ndeclare -- f=\"value\"\n", "unset: cannot simultaneously unset a function and a variable\n", 0)]
-    [InlineData("f(){ :; }; unset -v -f f; printf 'status=%s\\n' \"$?\"; declare -F", "status=1\ndeclare -f f\n", "unset: cannot simultaneously unset a function and a variable\n", 0)]
-    [InlineData("f(){ :; }; unset -fz f; printf 'status=%s\\n' \"$?\"; declare -F", "status=2\ndeclare -f f\n", "unset: -z: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n", 0)]
+    [InlineData("f(){ :; }; f=value; unset -fv f; printf 'status=%s\\n' \"$?\"; declare -F; declare -p f", "status=1\ndeclare -f f\ndeclare -- f=\"value\"\n", "line 1: unset: cannot simultaneously unset a function and a variable\n", 0)]
+    [InlineData("f(){ :; }; unset -v -f f; printf 'status=%s\\n' \"$?\"; declare -F", "status=1\ndeclare -f f\n", "line 1: unset: cannot simultaneously unset a function and a variable\n", 0)]
+    [InlineData("f(){ :; }; unset -fz f; printf 'status=%s\\n' \"$?\"; declare -F", "status=2\ndeclare -f f\n", "line 1: unset: -z: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n", 0)]
     [InlineData("f(){ :; }; unset -f -- f; declare -F", "", "", 0)]
     [InlineData("f(){ :; }; g(){ :; }; unset -f f -v g; printf 'status=%s\\n' \"$?\"; declare -F", "status=0\n", "", 0)]
     [InlineData("f(){ :; }; g(){ :; }; names='f g'; unset -f $names; declare -F", "", "", 0)]

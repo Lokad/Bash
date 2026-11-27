@@ -1724,6 +1724,9 @@ bytes.
 `unset` follows the same help status and output rules. Leading option groups
 are scanned in order. An earlier invalid option reports usage, and `--`
 ends the option scan. Reached help preserves the operand bindings.
+Invalid options, conflicting namespace options and invalid `-v` operands
+report the reached line and any active source filename. The usage line
+after an invalid option carries just the builtin synopsis.
 `unset -v` accepts identifiers, valid array selectors and existing literal
 bindings. Invalid operands report their original bytes and set status 1 while
 later operands still run. An empty operand to plain `unset` has no effect.

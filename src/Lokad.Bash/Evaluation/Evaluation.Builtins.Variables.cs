@@ -25,6 +25,8 @@ public sealed partial class Evaluation
         bool negated)
     {
         var context = scope.Context;
+        var command = words[0];
+        var sourcePrefix = GetBuiltinDiagnosticPrefix(context);
         var functions = false;
         var variables = false;
         var namerefs = false;
@@ -43,7 +45,7 @@ public sealed partial class Evaluation
                 .ConfigureAwait(false);
         }
         if (options.RequestedHelp)
-            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Unset, "unset", negated)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Unset, "unset", negated)
                 .ConfigureAwait(false);
         if (functions && variables)
             return await FailAsync([ShellValue.FromText("cannot simultaneously unset a function and a variable")], 1).ConfigureAwait(false);
@@ -85,8 +87,8 @@ public sealed partial class Evaluation
             if (variables && !isIdentifier && !directSelector && !literalBinding)
             {
                 exitCode = 1;
-                await WriteInvalidIdentifierDiagnosticAsync(ShellValue.FromText("unset"), nameValue,
-                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite).ConfigureAwait(false);
+                await WriteInvalidIdentifierDiagnosticAsync(command, nameValue,
+                    _builtinDiagnostics, ClosedStderrHandling.AttemptWrite, sourcePrefix).ConfigureAwait(false);
                 continue;
             }
             if (name.IsEmpty)
@@ -167,7 +169,8 @@ public sealed partial class Evaluation
         }
 
         Task<EvaluationResult> FailAsync(ReadOnlySpan<ShellValue> message, int status) =>
-            FinishFailureAsync(ReportExpansionDiagnosticAsync([ShellValue.FromText("unset")], message), status);
+            FinishFailureAsync(WriteDiagnosticAsync([command], message, _builtinDiagnostics,
+                ClosedStderrHandling.AttemptWrite, sourcePrefix), status);
 
         async Task<EvaluationResult> FinishFailureAsync(Task diagnostic, int status)
         {

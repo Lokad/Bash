@@ -6,31 +6,15 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationVariableBuiltinsTestsEndToEnd
 {
-    [Fact]
-    public async Task Evaluation_UnsetBuiltin_RemovesVariable()
+    [Theory]
+    [InlineData("name=kept; ")]
+    [InlineData("")]
+    public async Task UnsetLeavesTheNameUnassignedAndReportsSuccess(string setup)
     {
-        // This test verifies that "unset" removes an assigned variable.
-        // With input "value\n", the script reads name, unsets it, and echoes a default.
-        // The output must be "unset\n".
-        // If unset fails, the output would be "value\n".
-        var script = @"read name; unset name; echo ${name:-unset}";
+        var script = setup + """unset name; printf '<%s><%s>' "$?" "${name-unset}" """;
         var result = await EvaluationTestHelper.RunAsync(script);
 
-        Assert.Equal("unset\n", result.StdOut);
-        Assert.Equal(string.Empty, result.StdErr);
-        Assert.Equal(0, result.ExitCode);
-    }
-
-    [Fact]
-    public async Task Evaluation_UnsetBuiltin_MissingVariableReturnsSuccess()
-    {
-        // This test verifies that unsetting a missing variable succeeds.
-        // The script unsets "missing" and echoes a default, which must output "unset\n" with exit code 0.
-        // If unset returns failure for missing variables, the exit code would be non-zero.
-        var script = @"unset missing; echo ${missing:-unset}";
-        var result = await EvaluationTestHelper.RunAsync(script);
-
-        Assert.Equal("unset\n", result.StdOut);
+        Assert.Equal("<0><unset>", result.StdOut);
         Assert.Equal(string.Empty, result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
