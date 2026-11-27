@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Accept explicit logical `cd -L`, including repeated options and grouped
+  forms that select logical navigation. Accept `-e` without changing logical
+  navigation.
+
 - Search CDPATH for eligible relative directory operands and announce
   destinations selected by nonempty components.
 

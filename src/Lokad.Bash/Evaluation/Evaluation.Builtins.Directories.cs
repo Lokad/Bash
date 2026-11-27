@@ -71,26 +71,27 @@ public sealed partial class Evaluation
         EvaluationContext context,
         bool negated)
     {
-        var first = 1;
-        if (first < words.Count)
+        var options = new ShortOptionCursor(words);
+        ReadOnlyMemory<byte> physicalFlag = default;
+        while (options.TryReadFlag(out var flag))
         {
-            var option = words[first].Bytes;
-            switch (ClassifyShortOptionField(option.Span))
+            switch (flag.Span[0])
             {
-                case ShortOptionField.Terminator:
-                    first++;
-                    break;
-                case ShortOptionField.Help:
-                    return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Cd, "cd", negated)
-                        .ConfigureAwait(false);
-                case ShortOptionField.Flags:
-                    await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromBytes(option[..1]),
-                            option.Slice(1, 1), BuiltinKind.Cd, "cd", GetBuiltinDiagnosticPrefix(context))
-                        .ConfigureAwait(false);
-                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+                case (byte)'L': physicalFlag = default; continue;
+                case (byte)'P': physicalFlag = flag; continue;
+                // Bash's -e checks only the physical working directory.
+                case (byte)'e': continue;
             }
+            return await RejectOptionAsync(flag).ConfigureAwait(false);
         }
 
+        if (options.RequestedHelp)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Cd, "cd", negated)
+                .ConfigureAwait(false);
+        if (!physicalFlag.IsEmpty)
+            return await RejectOptionAsync(physicalFlag).ConfigureAwait(false);
+
+        var first = options.ArgumentIndex;
         if (words.Count - first > 1)
             return await FailAsync("too many arguments").ConfigureAwait(false);
 
@@ -100,6 +101,13 @@ public sealed partial class Evaluation
                 DirectoryChangeKind.ChangeDirectory, destination, selection, variables, bindings, context)
             .ConfigureAwait(false);
         return await FinalizeResultAsync(result, negated).ConfigureAwait(false);
+
+        async Task<EvaluationResult> RejectOptionAsync(ReadOnlyMemory<byte> flag)
+        {
+            await WriteInvalidShortOptionUnlessStderrClosedAsync(words[0], ShellValue.FromText("-"), flag,
+                    BuiltinKind.Cd, "cd", GetBuiltinDiagnosticPrefix(context)).ConfigureAwait(false);
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
+        }
 
         async Task<EvaluationResult> FailAsync(string message)
         {

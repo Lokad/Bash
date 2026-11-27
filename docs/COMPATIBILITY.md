@@ -411,12 +411,13 @@ A valid index beyond the available frames returns 1. A leading
 `--help` requests help and returns 2 even with closed stdout. Frame output
 returns its selection status even if the write fails.
 
-`cd` accepts at most one expanded directory field after an optional `--`. Word
-splitting and pathname expansion apply as for ordinary arguments. With no
-field, `cd` uses HOME. A lone `-` uses OLDPWD and prints the selected spelling
-once the destination is reached. Missing HOME or OLDPWD is an error when
-selected. A spelling such as `./-` is an ordinary path. An empty destination
-revalidates the current directory when reached through the ordinary lookup.
+`cd` accepts at most one expanded directory field after leading options and
+an optional `--`. Word splitting and pathname expansion apply as for ordinary
+arguments. With no field, `cd` uses HOME. A lone `-` uses OLDPWD and prints
+the selected spelling once the destination is reached. Missing HOME or
+OLDPWD is an error when selected. A spelling such as `./-` is an ordinary
+path. An empty destination revalidates the current directory when reached
+through the ordinary lookup.
 Before a `..` component removes a directory supplied by the operand, that
 directory must exist and be a directory. This also applies to CDPATH
 candidates and deferred directory stack entries. A failed traversal reports
@@ -429,7 +430,11 @@ component tries cwd silently. A successful nonempty component announces the
 selected absolute directory. If all candidates fail, ordinary lookup supplies
 the result and any diagnostic. The same search applies to relative operands
 reached during stack navigation. The directory model uses one virtual absolute
-path. The logical and physical `cd -L`/`cd -P` modes remain outside this profile.
+path. `-L` explicitly selects the default logical navigation, including in an
+option group. The last `-L` or `-P` selects the mode. Bash's `-e` flag checks
+the physical working directory. Logical navigation treats it as a no-op.
+A final physical selection returns usage status 2 because the host lookup
+supplies directory information without the resolved directory spelling.
 
 Failed `cd`, `pushd` and `popd` lookups report the selected destination's
 spelling, including relative operands, values from OLDPWD and deferred

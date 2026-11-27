@@ -39,6 +39,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
 
     [Theory]
     [InlineData("CDPATH=missing:search cd target", "/search/target", "/search/target\n")]
+    [InlineData("CDPATH=missing:search cd -L target", "/search/target", "/search/target\n")]
     [InlineData("CDPATH=:search cd target", "/target", "")]
     [InlineData("CDPATH=.:search cd target", "/target", "/target\n")]
     [InlineData("CDPATH=search cd ./target", "/target", "")]
@@ -152,18 +153,20 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.True(host.StandardError.Content.IsEmpty);
     }
 
-    [Fact]
-    public async Task CdHelpUsesTheRedirectedOutputAndPreservesDirectoryState()
+    [Theory]
+    [InlineData("cd --help target")]
+    [InlineData("cd -LP --help target")]
+    public async Task CdHelpUsesTheRedirectedOutputAndPreservesDirectoryState(string command)
     {
         await using var host = EndToEndHarness.BuildTree(["/target"], []);
-        var result = await host.RunAsync("OLDPWD=marker; cd --help target >documentation; "
+        var result = await host.RunAsync("OLDPWD=marker; " + command + " >documentation; "
             + "printf '<%s><%s><%s>' \"$?\" \"$PWD\" \"$OLDPWD\"", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("<2></><marker>", host.StandardOutput.TextContent);
         Assert.True(host.StandardError.Content.IsEmpty);
         Assert.Equal(
-            "cd: cd [--] [dir]\n    Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD.\n",
+            "cd: cd [-Le] [--] [dir]\n    Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD.\n",
             host.ReadFile("/documentation"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -171,6 +174,9 @@ public sealed class EvaluationDirectoryTestsEndToEnd
     [Theory]
     [InlineData("cd -xyz --help", "-x")]
     [InlineData("cd --bogus target", "--")]
+    [InlineData("cd -LLx --help", "-x")]
+    [InlineData("cd -L -LP target", "-P")]
+    [InlineData("cd -Pe target", "-P")]
     public async Task CdReportsTheFirstRejectedFlagAndUsage(string command, string option)
     {
         await using var host = EndToEndHarness.BuildTree(["/target"], []);
@@ -181,7 +187,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.Equal(2, result.ExitCode);
         Assert.Equal("/", result.CurrentDirectory.Path);
         Assert.Equal("<2></><marker>", host.StandardOutput.TextContent);
-        Assert.Equal($"line 2: cd: {option}: invalid option\ncd: usage: cd [--] [dir]\n",
+        Assert.Equal($"line 2: cd: {option}: invalid option\ncd: usage: cd [-Le] [--] [dir]\n",
             host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -196,7 +202,7 @@ public sealed class EvaluationDirectoryTestsEndToEnd
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.TextContent);
-        Assert.Equal("/body: line 2: cd: -x: invalid option\ncd: usage: cd [--] [dir]\n",
+        Assert.Equal("/body: line 2: cd: -x: invalid option\ncd: usage: cd [-Le] [--] [dir]\n",
             host.ReadFile("/report"));
         Assert.Equal(0, host.OpenFileCount);
     }
@@ -356,20 +362,24 @@ public sealed class EvaluationDirectoryTestsEndToEnd
 
     [Theory]
     [InlineData("HOME=target cd", "/target", "", "", 0)]
+    [InlineData("HOME=target cd -LL -Pe -LL --", "/target", "", "", 0)]
     [InlineData("unset x; HOME=target cd -- $x", "/target", "", "", 0)]
     [InlineData("HOME=target cd \"\"", "/", "", "", 0)]
     [InlineData("HOME= cd", "/", "", "", 0)]
     [InlineData("OLDPWD=target; cd -", "/target", "target\n", "", 0)]
+    [InlineData("OLDPWD=target; cd -L -", "/target", "target\n", "", 0)]
     [InlineData("OLDPWD=/target; cd -- -", "/target", "/target\n", "", 0)]
     [InlineData("OLDPWD=; cd -", "/", "\n", "", 0)]
     [InlineData("OLDPWD=target; cd ./-", "/-", "", "", 0)]
     [InlineData("cd -- -x", "/-x", "", "", 0)]
+    [InlineData("cd -PL -- -x", "/-x", "", "", 0)]
+    [InlineData("cd -e target", "/target", "", "", 0)]
     [InlineData("x='one space'; cd \"$x\"", "/one space", "", "", 0)]
     [InlineData("cd first-*", "/first-hit", "", "", 0)]
     [InlineData("x='one space'; cd $x", "/", "", "line 1: cd: too many arguments\n", 1)]
     [InlineData("IFS=:; x=multi-a:multi-b; cd $x", "/", "", "line 1: cd: too many arguments\n", 1)]
     [InlineData("cd multi-*", "/", "", "line 1: cd: too many arguments\n", 1)]
-    [InlineData("cd -x", "/", "", "line 1: cd: -x: invalid option\ncd: usage: cd [--] [dir]\n", 2)]
+    [InlineData("cd -x", "/", "", "line 1: cd: -x: invalid option\ncd: usage: cd [-Le] [--] [dir]\n", 2)]
     [InlineData("unset OLDPWD; cd -", "/", "", "line 1: cd: OLDPWD not set\n", 1)]
     [InlineData("OLDPWD=target; cd - 1>&-", "/target", "", "line 1: cd: write error: Bad file descriptor\n", 1)]
     public async Task CdUsesExpandedOperandsAndReportsItsSelectedDestination(

@@ -12,6 +12,30 @@ namespace Lokad.Bash.Tests;
 public sealed class DirectoryNavigationHostTests
 {
     [Theory]
+    [InlineData("link", "/left/link", false)]
+    [InlineData("link/..", "/left", true)]
+    public async Task CdLogicalModeKeepsLinkSpellingThroughHostLookup(
+        string operand, string destination, bool checksParent)
+    {
+        var host = new TestOperationVisitor([]) { RecordAppends = true };
+        var directory = FilePathInfo.FromKind(FilePathKind.Directory);
+        host.EnqueuePathInfo(directory);
+        host.EnqueuePathInfo(directory);
+        if (checksParent)
+            host.EnqueuePathInfo(directory);
+
+        var result = await BashScript.RunAsync(host, "cd /left; cd -L " + operand,
+            EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(destination, result.CurrentDirectory.Path);
+        string[] requests = checksParent ? ["/left", "/left/link", "/left"] : ["/left", "/left/link"];
+        Assert.Equal(requests, host.PathInfoRequests.Select(path => path.Path));
+        Assert.All(host.PathInfoRequests, request => Assert.Equal(FileLinkFollowing.Follow, request.LinkFollowing));
+        Assert.Empty(host.Appends);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CdPathSettlesCandidatesInOrderAndReportsOnlyTheFinalOutcome(bool fallback)

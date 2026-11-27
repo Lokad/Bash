@@ -50,7 +50,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Let => new("arg [arg ...]", "Evaluate integer arithmetic expressions. Return success if the last value is nonzero."),
         BuiltinKind.Test => new("expression", "Evaluate string, integer and file predicates; return 0 for true, 1 for false, or 2 for invalid syntax."),
         BuiltinKind.Pwd => new("[-LP]", "Print the current working directory. Both -L and -P print the directory tracked by the host model."),
-        BuiltinKind.Cd => new("[--] [dir]", "Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD."),
+        BuiltinKind.Cd => new("[-Le] [--] [dir]", "Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD."),
         BuiltinKind.Echo => new("[-neE ...] [arg ...]",
             "Print arguments separated by spaces. Leading option groups may repeat or combine n, e and E.\n    -n omits the final newline. The last -e or -E enables or disables backslash escapes, which are disabled by default."),
         BuiltinKind.Printf => new("[-v var] format [arguments]", "Format and print arguments, or assign the result to var with -v."),
