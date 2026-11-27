@@ -213,14 +213,19 @@ internal readonly record struct CommandSubstitutionResult(ShellValue Output, int
     internal static CommandSubstitutionResult FromCapture(ReadOnlyMemory<byte> capture, int exitCode, EvaluationMemory memory)
     {
         var bytes = capture.Span;
-        var firstNul = bytes.IndexOf((byte)0);
-        // LFs separated from the end only by NULs are trailing after filtering.
-        var length = bytes.LastIndexOfAnyExcept((byte)0, (byte)'\n') + 1;
+        var length = bytes.LastIndexOfAnyExcept((byte)'\n') + 1;
+        var trailingNul = length != 0 && bytes[length - 1] == 0;
+        if (trailingNul)
+        {
+            // LFs separated from the end only by NULs are trailing after filtering.
+            length = bytes[..(length - 1)].LastIndexOfAnyExcept((byte)0, (byte)'\n') + 1;
+        }
         if (length == 0)
-            return new(ShellValue.Empty, exitCode, firstNul >= 0);
+            return new(ShellValue.Empty, exitCode, trailingNul);
 
         var trimmed = capture[..length];
-        if (firstNul >= 0 && firstNul < length)
+        var firstNul = trimmed.Span.IndexOf((byte)0);
+        if (firstNul >= 0)
         {
             var tail = trimmed[(firstNul + 1)..];
             var outputLength = length - 1 - tail.Span.Count((byte)0);
@@ -235,6 +240,6 @@ internal readonly record struct CommandSubstitutionResult(ShellValue Output, int
         var value = ShellValue.FromBytes(trimmed);
         if (!value.TryGetCompactArrayCapacity(out _))
             value = ShellValue.FromBytes(trimmed.ToArray());
-        return new(value, exitCode, firstNul >= 0);
+        return new(value, exitCode, trailingNul);
     }
 }

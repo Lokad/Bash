@@ -11,6 +11,40 @@ namespace Lokad.Bash.Tests;
 public sealed class CommandSubstitutionCaptureTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CaptureWithOnlyTrailingBytesWarnsOnlyForNuls(bool pipe, bool hasNuls)
+    {
+        var state = new Eval(Parser.Parse(pipe ? "value=$(cmd)" : "value=$(<input)"));
+        var content = hasNuls ? "\n\0\n\0\n"u8.ToArray() : "\n\n"u8.ToArray();
+        var host = QueueCapture(content, pipe, Task.CompletedTask);
+        if (hasNuls)
+            host.EnqueueAppendResult(DescriptorWriteResult.Open);
+        var governor = new MemoryGovernor(128 * 1024);
+        using var budget = governor.CreateScope();
+
+        await new Engine().RunAsync(state, host, budget, CancellationToken.None);
+
+        Assert.Equal(pipe ? 7 : 0, state.LastExitCode);
+        Assert.True(state.Variables["value"].IsEmpty);
+        if (hasNuls)
+        {
+            var warning = Assert.Single(host.Appends);
+            Assert.Equal(FileDescriptor.StdErr, warning.Descriptor);
+            Assert.Equal("line 1: warning: command substitution: ignored null byte in input\n"u8.ToArray(), warning.Content);
+        }
+        else
+            Assert.Empty(host.Appends);
+        Assert.Equal(pipe ? [new FileDescriptor(11), new FileDescriptor(10)] : new[] { new FileDescriptor(10) },
+            host.ClosedDescriptors);
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        budget.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task TrailingLfsAreTrimmedBeforeCaptureTransfer(bool pipe)
