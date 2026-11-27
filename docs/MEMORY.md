@@ -467,6 +467,10 @@ definitions or active users retain it; one early definition does not keep every
 later unit's scratch alive. Completed command units, deferred captures and imported
 definitions return prepaid capacity above the logical syntax estimate before
 execution or publication when the budget accepts the shrink.
+Startup owns each named child reader's bytes through execution and retained
+definitions. Imported functions use a shared diagnostic name. Import
+projection updates the parser's coordinate map before publication and admits
+the formatter work only through projection.
 Reached backtick substitutions in stable source
 reuse successful syntax under that source owner. This includes backticks reached
 directly in a here-document body. The first parse admits retained syntax and the

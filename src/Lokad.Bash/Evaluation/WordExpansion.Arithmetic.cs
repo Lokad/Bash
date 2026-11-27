@@ -425,6 +425,10 @@ internal static partial class WordExpansion
             ReadOnlySpan<ShellValue> detail = error.Token is { } token
                 ? [message, ShellValue.FromText(" (error token is \""), token, ShellValue.FromText("\")")]
                 : [message];
+            if (failureMode == ArithmeticFailureMode.Diagnostic
+                && scope.Context.SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction
+                && scope.Context.Coordinates.Line == 0)
+                return scope.Effects.ReportCommandDiagnosticAsync(subject, detail, scope);
             if (failureMode is ArithmeticFailureMode.Diagnostic or ArithmeticFailureMode.Promotion)
                 return scope.Effects.ReportBuiltinDiagnosticAsync(subject, detail, scope.Context);
             if (failureMode == ArithmeticFailureMode.IntegerAssignment)

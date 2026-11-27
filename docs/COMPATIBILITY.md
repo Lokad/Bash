@@ -1136,8 +1136,11 @@ and runs its script. The child uses Bash's function table order for these
 imports. The hosted function payload and accepted bindings retain their
 namespace order.
 The import diagnostic uses the invocation name. After that recovery,
-the child reader's diagnostic prefix preserves the bytes of its `$0`,
-including an empty name. A named `source` reader displays its own path.
+the child continues with its own reader identity. A same-host command string
+uses the bytes of its `$0`, including an empty name. Functions defined in a
+command string use `environment`. Named child scripts and sourced files use
+their path, which remains the origin of any functions they define. Imported
+functions use `environment` and count their compact definition's lines from zero.
 With the C locale, an explicitly quoted empty pattern matches in Lokad.Bash
 and the pinned Linux Bash build. The pinned MSYS build returns status 2.
 LF is accepted before a term or after a complete predicate. It cannot split

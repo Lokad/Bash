@@ -387,11 +387,9 @@ public sealed partial class Evaluation
         if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
 
-        var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
+        var sourceMemory = SourceMemory.CreateIndependentReader(Memory.Budget, scope.Context.SourceMemory);
         try
         {
-            if (scope.Context.DiagnosticName is { } path)
-                sourceMemory.OwnDiagnosticName(path);
             using var builder = new ByteMemoryBuilder((int)length, sourceMemory.Budget);
             builder.Append(action.Bytes).Append((byte)' ').Append(indexText[..digits]).Append((byte)' ');
             if (!ShellArgumentEscaping.TryAppendLiteralSingleQuoted(builder, record.Bytes.Span, quotedLength))

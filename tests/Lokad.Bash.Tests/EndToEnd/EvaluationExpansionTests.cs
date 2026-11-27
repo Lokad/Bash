@@ -148,9 +148,9 @@ public sealed class EvaluationExpansionTests
     }
 
     [Theory]
-    [InlineData("\"$1${MISSING:?first}\"", "line 1: MISSING: first\n")]
-    [InlineData("~/$1${MISSING:?first}", "line 1: MISSING: first\n")]
-    [InlineData("\"$1${OUTER:?${INNER:?first}}\"", "line 1: INNER: first\n")]
+    [InlineData("\"$1${MISSING:?first}\"", "sh: line 1: MISSING: first\n")]
+    [InlineData("~/$1${MISSING:?first}", "sh: line 1: MISSING: first\n")]
+    [InlineData("\"$1${OUTER:?${INNER:?first}}\"", "sh: line 1: INNER: first\n")]
     public async Task FatalExpansion_DiscardsUnfinishedWordsBeforeMaterialization(string word, string diagnostic)
     {
         var host = EndToEndHarness.WithMemoryBudget(EndToEndHarness.BuildTree([]), new Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.DefaultBytes));
@@ -184,7 +184,7 @@ public sealed class EvaluationExpansionTests
 
         Assert.Equal(1, result.ShellExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
-        Assert.Equal("line 1: MISSING: first\n", host.StandardError.TextContent);
+        Assert.Equal("sh: line 1: MISSING: first\n", host.StandardError.TextContent);
     }
 
     [Theory]
@@ -253,7 +253,7 @@ public sealed class EvaluationExpansionTests
 
         Assert.Equal(1, result.ShellExitCode);
         Assert.Empty(host.StandardOutput.TextContent);
-        Assert.Equal("line 1: MISSING: first\n", host.StandardError.TextContent);
+        Assert.Equal("sh: line 1: MISSING: first\n", host.StandardError.TextContent);
     }
 
     [Fact]

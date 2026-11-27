@@ -1,12 +1,70 @@
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 using Lokad.Bash.Syntax;
+using Lokad.Bash.Tests.EndToEnd;
 using ShellEvaluation = Lokad.Bash.Evaluation.Evaluation;
 
 namespace Lokad.Bash.Tests;
 
 public sealed class EvaluationStartupTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CommandStringAndItsFunctionsUseDifferentReaderNames(bool prepared)
+    {
+        const string source = "f(){ missing_body; }\nf\nmissing_top\n";
+        var argumentZero = ShellValue.FromByte(0xff);
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(source), argumentZero],
+            ShellPath.Root, [], null, null, null);
+        var script = prepared ? Parser.Parse(source) : new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]);
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, script, argumentZero, []);
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new TestHost { MemoryBudget = owner };
+
+        try
+        {
+            var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+            Assert.Equal(127, result.ExitCode);
+            byte[] diagnostics = [.. "environment: line 1: missing_body: command not found\n"u8,
+                0xff, .. ": line 3: missing_top: command not found\n"u8];
+            Assert.Equal(diagnostics, host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+        }
+        finally { evaluation.ReleaseFunctions(); }
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task NamedChildRetainsItsDefinitionPathThroughASourcedCaller()
+    {
+        await using var host = EndToEndHarness.BuildTree([
+            ("/definition", "f(){\n missing_body\n}\nsource ./caller\n"),
+            ("/caller", "\nf\n")
+        ]);
+
+        var result = await host.RunAsync("bash ./definition", CancellationToken.None);
+
+        Assert.Equal(127, result.ExitCode);
+        Assert.Equal("./definition: line 2: missing_body: command not found\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task CommandStringSyntaxErrorNamesTheCommandReader()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("bash -c ')' label", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("label: -c: line 1: syntax error near unexpected token `)'\nlabel: -c: line 1: `)'\n", host.StandardError.TextContent);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -34,6 +34,9 @@ public sealed partial class Evaluation
 
     private (string CommandName, IReadOnlyList<ExportedFunction> Functions,
         BashCommandInheritance.ImportEntry[]? ImportOrder)? _inheritedFunctions;
+    private (ShellValue Name, SourceMemory.ReaderKind Kind)? _inheritedReader;
+
+    internal void SetInheritedReader(ShellValue name, SourceMemory.ReaderKind kind) => _inheritedReader = (name, kind);
 
     internal void SetInheritedFunctions(string commandName, IReadOnlyList<ExportedFunction> functions) =>
         SetInheritedFunctions(commandName, functions, null);
@@ -61,7 +64,7 @@ public sealed partial class Evaluation
             {
                 CheckCancellation();
                 var entry = inherited.ImportOrder?[ordinal] ?? new BashCommandInheritance.ImportEntry(ordinal, null);
-                var owner = new SourceMemory(Memory.Budget.CreateScope());
+                var owner = new SourceMemory(Memory.Budget.CreateScope(), parent: null, SourceMemory.ReaderKind.ImportedFunction);
                 try
                 {
                     var source = inherited.Functions[entry.Index].Source;
@@ -96,7 +99,13 @@ public sealed partial class Evaluation
                         continue;
                     Memory.PrepareListCapacity(bindings, 1);
                     Memory.Charge(EvaluationState.FunctionPublicationBytes);
-                    var binding = new FunctionBinding(definition, FunctionAttributes.Exported, owner, Memory);
+                    if (parsed.Locations is { } locations)
+                        FunctionDefinitionFormatter.ProjectImportLocations(definition, locations, owner.Budget, _cancellationToken);
+                    var binding = new FunctionBinding(definition, FunctionAttributes.Exported, owner, Memory)
+                    {
+                        // The serialized function opens on the import reader's line zero.
+                        Coordinates = new CommandCoordinates(parsed.Locations, -1, 0, 0) { CompoundOpenLine = 0 }
+                    };
                     bindings.Add(new EvaluationState.FunctionImport(binding, entry.Index, 0));
                     binding.Retain();
                 }

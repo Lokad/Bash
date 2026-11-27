@@ -231,6 +231,52 @@ public sealed class HostedFunctionExportTests
     }
 
     [Fact]
+    public async Task ImportedFunctionUsesItsCompactEnvironmentLines()
+    {
+        const string script = """
+            f() {
+                printf '[%s]' "$LINENO"
+                missing_second
+                eval 'missing_eval'
+                g() {
+                    printf '[%s]' "$LINENO"
+                    missing_nested
+                }
+                g
+            }
+            export -f f
+            bash -c f label
+            """;
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(127, result.ExitCode);
+        Assert.Equal("[0][5]", host.StandardOutput.TextContent);
+        Assert.Equal("environment: line 1: missing_second: command not found\n"
+            + "environment: line 2: missing_eval: command not found\n"
+            + "environment: line 6: missing_nested: command not found\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ImportedLineZeroDistinguishesCommandLookupAndBuiltinUsage()
+    {
+        const string script = """
+            a(){ missing_a; }
+            b(){ unset -z; }
+            export -f a b
+            bash -c 'a; b' label
+            """;
+        await using var host = new TestHost();
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("environment: missing_a: command not found\n"
+            + "environment: line 0: unset: -z: invalid option\nunset: usage: unset [-f] [-v] [-n] [name ...]\n",
+            host.StandardError.TextContent);
+    }
+
+    [Fact]
     public async Task ReplacementExportListKeepsStrictStartupValidation()
     {
         var outer = new Eval(Parser.Parse("f(){ printf %s \"$(printf %s \"${v:-$'a\\0hidden'}\")\"; }; export -f f; inspect"));

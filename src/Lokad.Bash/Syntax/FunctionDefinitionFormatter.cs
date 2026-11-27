@@ -10,7 +10,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Renders retained syntax and its line layout without evaluation.</summary>
 internal static class FunctionDefinitionFormatter
 {
-    private enum Format { Display, Export, ImportValidation, BraceSource, SubstitutionSource, SubstitutionWord, SubstitutionDisplay, SubstitutionDiagnostic, CaptureCoordinates }
+    private enum Format { Display, Export, ImportValidation, ImportCoordinates, BraceSource, SubstitutionSource, SubstitutionWord, SubstitutionDisplay, SubstitutionDiagnostic, CaptureCoordinates }
     private enum CaptureSpelling { Source, Word, Display, Diagnostic }
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
@@ -29,6 +29,12 @@ internal static class FunctionDefinitionFormatter
     internal static bool TryAppendImportValidation(FunctionDefinition definition, BoundedByteMemoryBuilder output,
         CancellationToken cancellationToken) =>
         TryAppend(new Step.Function(definition, 0, Nested: false), output, output.Budget, Format.ImportValidation, cancellationToken);
+
+    /// <summary>Projects the compact environment spelling onto an admitted, unpublished import.</summary>
+    internal static void ProjectImportLocations(FunctionDefinition definition, CommandLocations locations,
+        IMemoryBudget budget, CancellationToken cancellationToken) =>
+        TryAppend(new Step.Function(definition, 0, Nested: false), new LineCounter(false, null), budget,
+            Format.ImportCoordinates, cancellationToken, locations);
 
     /// <summary>Renders the word's lexical structure, retaining its quotes and escapes.</summary>
     internal static bool TryAppendWordSource(Word word, IByteMemoryWriter output, IMemoryBudget budget,
@@ -161,11 +167,12 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken, CommandLocations? locations, ShellScanContext? captures, out bool hasDecodedNulCapture)
     {
         hasDecodedNulCapture = false;
-        var display = format == Format.Display;
+        var importCoordinates = format == Format.ImportCoordinates;
+        var display = format == Format.Display || importCoordinates;
         var importValidation = format == Format.ImportValidation;
         var captureSpelling = format switch
         {
-            Format.Display or Format.SubstitutionDisplay or Format.ImportValidation => CaptureSpelling.Display,
+            Format.Display or Format.SubstitutionDisplay or Format.ImportValidation or Format.ImportCoordinates => CaptureSpelling.Display,
             Format.SubstitutionDiagnostic => CaptureSpelling.Diagnostic,
             Format.SubstitutionWord => CaptureSpelling.Word,
             _ => CaptureSpelling.Source
@@ -176,7 +183,9 @@ internal static class FunctionDefinitionFormatter
         var displayHereDocumentDelimiters = display || format is Format.SubstitutionDisplay or Format.SubstitutionDiagnostic;
         var inlineSource = format == Format.BraceSource || substitutionSource;
         var lines = output as LineCounter;
-        var capture = lines != null;
+        var capture = format == Format.CaptureCoordinates;
+        var importedOuterGroup = importCoordinates && initial is Step.Function { Value.Body: var importedBody }
+            ? importedBody is RedirectedCommand rootRedirection ? rootRedirection.Body : importedBody : null;
         var functionDepth = 0;
         var readerDepth = 0;
         ICommand? unitFirstCommand = null;
@@ -218,7 +227,7 @@ internal static class FunctionDefinitionFormatter
                     break;
                 case Step.LeaveFunction(var completedFunction, var resetHereDocuments):
                     functionDepth--;
-                    if (lines != null && locations?.TryGet(completedFunction, out var definitionLocation) == true)
+                    if (capture && lines != null && locations?.TryGet(completedFunction, out var definitionLocation) == true)
                         locations.Update(completedFunction, definitionLocation with { FunctionBraceLine = lines.FunctionBraceLine });
                     if (resetHereDocuments) flushedHereDocuments = false;
                     break;
@@ -266,7 +275,7 @@ internal static class FunctionDefinitionFormatter
                     var followsFlushedDocuments = !pendingDocuments && flushedHereDocuments;
                     if ((capture || displayRedirections) && followsFlushedDocuments)
                         flushedHereDocuments = false;
-                    if (lines != null)
+                    if (capture && lines != null)
                     {
                         if (!FlushDocumentLine()) return false;
                         // A separator inside a compound still belongs to its enclosing reader unit.
@@ -466,7 +475,8 @@ internal static class FunctionDefinitionFormatter
                     if (((display || substitutionSource) && nested || function.Name.Syntax.HasFlag(FunctionNameSyntax.KeywordOnly))
                         && !Append("function ")) return false;
                     if (!output.TryAppend(function.Name.Value.Bytes.Span) || !Append(" () ")) return false;
-                    var body = !(display || substitutionSource) || function.Body is GroupCommand or RedirectedCommand { Body: GroupCommand }
+                    var body = importCoordinates && !nested || !(display || substitutionSource)
+                        || function.Body is GroupCommand or RedirectedCommand { Body: GroupCommand }
                         ? function.Body : new GroupCommand(function.Body);
                     if (capture)
                     {
@@ -479,6 +489,8 @@ internal static class FunctionDefinitionFormatter
                             new Step.LeaveFunction(function, body is not RedirectedCommand { Body: GroupCommand }),
                             new Step.Text(grouped ? "" : "\n}"));
                     }
+                    else if (importCoordinates && !nested)
+                        PushStep(new Step.Command(body, indent));
                     else if (substitutionSource || display && nested)
                         Push(new Step.Layout(indent), new Step.EnterFunction(), new Step.Command(body, indent),
                             new Step.LeaveFunction(function, body is not RedirectedCommand { Body: GroupCommand }));
@@ -487,11 +499,12 @@ internal static class FunctionDefinitionFormatter
                 case Step.IfArm(var conditional, var arm, var indent):
                     var condition = arm < 0 ? conditional.Condition : conditional.ElifClauses[arm].Condition;
                     var thenBody = arm < 0 ? conditional.ThenBody : conditional.ElifClauses[arm].Body;
-                    if (arm < 0 || capture || substitutionSource) PushStep(new Step.Text("fi"));
+                    var nestedElif = substitutionSource || importCoordinates;
+                    if (arm < 0 || capture || nestedElif) PushStep(new Step.Text("fi"));
                     if (arm + 1 < conditional.ElifClauses.Count)
                     {
                         // Capture layout nests elif as an if in the else body.
-                        if (substitutionSource)
+                        if (nestedElif)
                             Push(new Step.Text("else"), new Step.Layout(indent + 4), new Step.IfArm(conditional, arm + 1, indent + 4),
                                 new Step.Line(indent, Terminate: true));
                         else if (capture)
@@ -503,7 +516,7 @@ internal static class FunctionDefinitionFormatter
                         Push(new Step.Text("else"), new Step.Layout(indent + 4),
                             new Step.Command(elseBody, indent + 4), new Step.Line(indent, Terminate: true));
                     }
-                    Push(new Step.Text(arm < 0 || capture || substitutionSource ? "if " : "elif "), new Step.Command(condition, indent), new Step.Text("; then"),
+                    Push(new Step.Text(arm < 0 || capture || nestedElif ? "if " : "elif "), new Step.Command(condition, indent), new Step.Text("; then"),
                         new Step.Layout(indent + 4), new Step.Command(thenBody, indent + 4), new Step.Line(indent, Terminate: true));
                     break;
                 case Step.Command(var command, var indent) commandStep:
@@ -512,7 +525,7 @@ internal static class FunctionDefinitionFormatter
                     if (lines != null && locations?.TryGet(command, out var physical) == true)
                     {
                         locations.Update(command, new CommandLocation(lines.Line, lines.Line, lines.Line)
-                            { UnitReadLine = physical.UnitReadLine });
+                            { UnitReadLine = capture ? physical.UnitReadLine : 0 });
                         var opensReader = command is GroupCommand or SubshellCommand or IfCommand or CaseCommand
                             or ForCommand or ArithmeticForCommand or WhileCommand or UntilCommand;
                         if (opensReader)
@@ -532,9 +545,9 @@ internal static class FunctionDefinitionFormatter
                     switch (command)
                     {
                         case SimpleCommand simple:
-                            var trackLastWord = capture && simple.Redirections.Count != 0 && simple.Words.Count != 0;
+                            var trackLastWord = lines != null && simple.Redirections.Count != 0 && simple.Words.Count != 0;
                             PrepareWork(Math.Max(1, checked(2 * (simple.Words.Count + simple.Assignments.Count)))
-                                + (capture ? 1 : 0) + (trackLastWord ? 1 : 0));
+                                + (lines != null ? 1 : 0) + (trackLastWord ? 1 : 0));
                             var hasCommandElements = simple.Words.Count != 0 || simple.Assignments.Count != 0;
                             work.Push(new Step.Redirections(simple.Redirections, !displayRedirections || hasCommandElements,
                                 capture && !hasCommandElements ? simple : null));
@@ -543,7 +556,7 @@ internal static class FunctionDefinitionFormatter
                             {
                                 if (trackLastWord && index == simple.Words.Count - 1)
                                     work.Push(new Step.Location(simple, LocationEdge.LastWord));
-                                if (capture && index == commandLineWordIndex && simple.Assignments.Count == 0)
+                                if (lines != null && index == commandLineWordIndex && simple.Assignments.Count == 0)
                                     work.Push(new Step.Location(simple, LocationEdge.FirstElement));
                                 work.Push(simple.DeclarationAssignments.TryGetValue(simple.Words[index], out var assignment)
                                     ? new Step.Assignment(assignment) : new Step.Word(simple.Words[index]));
@@ -551,7 +564,7 @@ internal static class FunctionDefinitionFormatter
                             }
                             for (var index = simple.Assignments.Count - 1; index >= 0; index--)
                             {
-                                if (capture && index == 0)
+                                if (lines != null && index == 0)
                                     work.Push(new Step.Location(simple, LocationEdge.FirstElement));
                                 work.Push(new Step.Assignment(simple.Assignments[index]));
                                 if (index != 0) work.Push(new Step.Text(" "));
@@ -567,7 +580,10 @@ internal static class FunctionDefinitionFormatter
                                 new Step.Command(list.Right, indent));
                             break;
                         case GroupCommand group:
-                            if (capture)
+                            if (ReferenceEquals(importedOuterGroup, group))
+                                Push(new Step.Text("{ "), new Step.Command(group.Body, indent + 4),
+                                    new Step.Line(indent, Terminate: false), new Step.Text("}"));
+                            else if (capture)
                                 Push(new Step.Text(functionDepth == 0 ? "{ " : "{\n"), new Step.Command(group.Body, indent + 4),
                                     new Step.FlushDocuments(), new Step.Text(functionDepth == 0 ? "}" : "\n}"));
                             else if (substitutionSource && functionDepth == 0)
@@ -701,7 +717,7 @@ internal static class FunctionDefinitionFormatter
                     break;
             }
         }
-        if (lines != null)
+        if (capture && lines != null)
         {
             var pendingDocuments = hereDocuments.Count != 0;
             if (!FlushDocumentLine()) return false;
@@ -748,7 +764,7 @@ internal static class FunctionDefinitionFormatter
                     && !Append("\"\"")) return false;
                 if (quotedPart != doubleQuoted && !Append("\"")) return false;
                 doubleQuoted = quotedPart;
-                if (lines != null && part is SourceWordPart sourcePart)
+                if (capture && lines != null && part is SourceWordPart sourcePart)
                     CountWordFunctionBraces(sourcePart, lines);
                 var success = part.Kind switch
                 {
@@ -783,7 +799,7 @@ internal static class FunctionDefinitionFormatter
                     _ => throw new InvalidOperationException("A here-document body is not an ordinary word.")
                 };
                 if (!success) return false;
-                if (lines != null && part is SourceWordPart { RenderedLineAdjustment: var adjustment })
+                if (capture && lines != null && part is SourceWordPart { RenderedLineAdjustment: var adjustment })
                     lines.Adjust(adjustment);
                 if (part is SourceWordPart { EndsAtDecodedNul: true }
                     or CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { AdjacentSpelling.EndsAtDecodedNul: true } })

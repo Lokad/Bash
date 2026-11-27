@@ -734,7 +734,8 @@ internal sealed class EvaluationState
             Coordinates = coordinates with
             {
                 FunctionBodyLine = bodyLine,
-                CompoundOpenLine = coordinates.RedirectionOpenLine,
+                CompoundOpenLine = context.SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction
+                    ? bodyLine : coordinates.RedirectionOpenLine,
                 EnclosingExecutionLine = 0,
                 UnitReadLine = 0
             }

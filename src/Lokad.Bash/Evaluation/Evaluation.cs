@@ -179,7 +179,7 @@ public sealed partial class Evaluation : IFileTester
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var (variables, context) = scope.ForkBindings();
-        var line = Math.Max(1, scope.Context.Coordinates.Line);
+        var line = Math.Max(scope.Context.FirstReaderLine, scope.Context.Coordinates.Line);
         context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line)
         {
             CaptureFunctionDepth = context.FunctionContext?.Depth ?? 0,
@@ -477,16 +477,20 @@ public sealed partial class Evaluation : IFileTester
                     LoadedReaderIgnoresErrexit = _loadedReaderIgnoresErrexit,
                     PipelineExitReader = _state.ForkKind == ShellForkKind.PipelineSimpleCommand ? default : _pipelineExitBoundary
                 };
+                var reader = _inheritedReader;
+                _inheritedReader = null;
                 var startup = await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false);
                 if (!startup.Ready)
                     result = EvaluationResult.FromExitCode(2);
                 else
                 {
-                    if (startup.DiagnosticName is { } path && scope.Context.DiagnosticName == null)
+                    var parent = scope.Context.SourceMemory;
+                    if (reader == null && startup.DiagnosticName is { } recoveredName)
+                        reader = (recoveredName, parent?.Kind ?? SourceMemory.ReaderKind.Script);
+                    if (reader is { } origin && scope.Context.DiagnosticName == null)
                     {
-                        var parent = scope.Context.SourceMemory;
-                        startupSource = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent);
-                        startupSource.OwnDiagnosticName(path);
+                        startupSource = new SourceMemory((parent?.Budget ?? Memory.Budget).CreateScope(), parent, origin.Kind);
+                        startupSource.OwnDiagnosticName(origin.Name);
                         scope = scope with { Context = scope.Context.WithSourceMemory(startupSource) };
                     }
                     result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
@@ -4658,7 +4662,8 @@ public sealed partial class Evaluation : IFileTester
     {
         var coordinates = context.Coordinates;
         var line = coordinates.RedirectionOpenLine ?? coordinates.Line;
-        var prefix = path != null && error.Kind != OperationErrorKind.Unknown && coordinates.Locations != null
+        var prefix = path != null && error.Kind != OperationErrorKind.Unknown
+            && (coordinates.Locations != null || context.DiagnosticName.HasValue)
             ? new SyntaxDiagnosticPrefix(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line == 0 ? null : line) : default;
         return WriteOperationDiagnosticAsync(descriptor, ShellValue.Empty, string.Empty, path, error, prefix);
     }
@@ -5550,12 +5555,15 @@ public sealed partial class Evaluation : IFileTester
     {
         var coordinates = context.Coordinates;
         var line = coordinates.RedirectionDiagnosticLine is not 0 ? coordinates.RedirectionDiagnosticLine : coordinates.Line;
-        return GetCommandDiagnosticPrefix(context, line);
+        return context.SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction
+            ? new SyntaxDiagnosticPrefix(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line)
+            : GetCommandDiagnosticPrefix(context, line);
     }
 
     private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(EvaluationContext context, int line) =>
-        context.Coordinates.Locations == null ? default
-            : new SyntaxDiagnosticPrefix(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line);
+        new(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine,
+            context.Coordinates.Locations == null || (line == 0 && context.SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction)
+                ? null : line);
 
     private Task<DescriptorWriteResult> WriteDiagnosticAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope, ClosedStderrHandling closedStderr) =>
@@ -5677,7 +5685,7 @@ public sealed partial class Evaluation : IFileTester
             .ConfigureAwait(false);
     }
 
-    private enum SyntaxDiagnosticOrigin { Script, ScriptLine, Eval, ExitTrap, CommandSubstitution, ArrayAssignment }
+    private enum SyntaxDiagnosticOrigin { Script, ScriptLine, CommandString, Eval, ExitTrap, CommandSubstitution, ArrayAssignment }
     private enum SyntaxDiagnosticDetail { Complete, WithoutSourceLine, PrimaryOnly }
 
     private readonly struct SyntaxDiagnosticPrefix
@@ -5719,6 +5727,7 @@ public sealed partial class Evaluation : IFileTester
 
         private ReadOnlySpan<byte> GetOrigin() => _origin switch
         {
+            SyntaxDiagnosticOrigin.CommandString => "-c: "u8,
             SyntaxDiagnosticOrigin.Eval => "eval: "u8,
             SyntaxDiagnosticOrigin.ExitTrap => "exit trap: "u8,
             SyntaxDiagnosticOrigin.CommandSubstitution => "command substitution: "u8,
@@ -6455,7 +6464,8 @@ public sealed partial class Evaluation : IFileTester
             : new OperationError(directPath ? "No such file or directory\n" : exec ? "not found\n" : "command not found\n");
         var directExec = exec && directPath;
         var directory = directExec && !name.StartsWith('/') ? command.CurrentDirectory : null;
-        var sourcePrefix = GetCommandDiagnosticPrefix(scope);
+        var sourcePrefix = exec && scope.Context.SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction
+            ? GetBuiltinDiagnosticPrefix(scope.Context) : GetCommandDiagnosticPrefix(scope);
         var namedExec = exec && !directPath;
         var prefix = namedExec ? "exec: " : string.Empty;
         var detail = namedExec && error.Kind == OperationErrorKind.IsDirectory ? cannotExecute : string.Empty;
@@ -7085,7 +7095,8 @@ public sealed partial class Evaluation : IFileTester
         internal CommandCoordinates Coordinates { get; init; }
 
         /// <summary>The source that supplies the reached command's syntax and coordinates.</summary>
-        internal ShellValue? DiagnosticName => SourceMemory?.DiagnosticName;
+        internal ShellValue? DiagnosticName => SourceMemory?.GetDiagnosticName(ReturnTarget == ReturnTargetKind.Function);
+        internal int FirstReaderLine => SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction ? 0 : 1;
 
         public EvaluationContext WithErrexitIgnored() => this with { ErrexitIgnored = true };
 

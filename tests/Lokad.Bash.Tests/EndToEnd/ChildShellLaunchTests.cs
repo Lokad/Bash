@@ -31,9 +31,9 @@ public sealed class ChildShellLaunchTests
     }
 
     [Theory]
-    [InlineData("bash ./broken 2>errors")]
-    [InlineData("bash -c 'printf earlier >effect\nif\n' launcher 2>errors")]
-    public async Task ChildReportsLateSyntaxThroughItsDescriptorAfterEarlierEffects(string invocation)
+    [InlineData("bash ./broken 2>errors", "./broken: line 3: ")]
+    [InlineData("bash -c 'printf earlier >effect\nif\n' launcher 2>errors", "launcher: -c: line 3: ")]
+    public async Task ChildReportsLateSyntaxThroughItsDescriptorAfterEarlierEffects(string invocation, string diagnosticPrefix)
     {
         await using var host = new TestHost();
         host.AddFile("/sub/broken", "printf earlier >effect\nif\n");
@@ -44,7 +44,7 @@ public sealed class ChildShellLaunchTests
         Assert.Empty(host.StandardOutput.Content.ToArray());
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal("earlier", host.ReadFile("/sub/effect"));
-        Assert.Equal("line 3: syntax error: unexpected end of file\n", host.ReadFile("/sub/errors"));
+        Assert.Equal(diagnosticPrefix + "syntax error: unexpected end of file\n", host.ReadFile("/sub/errors"));
         Assert.Equal(0, host.OpenFileCount);
     }
 

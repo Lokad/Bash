@@ -604,9 +604,14 @@ evaluator-produced exports, an unclosed delimiter caused by decoded NUL in a
 capture is reported and the affected definition is skipped. A replacement
 export list supplied by the host follows strict startup validation. A definition
 supplied explicitly by the host takes precedence over a matching name.
-The recovered child's source owner keeps the reader name as bytes. Independent
-loaded readers that inherit the name own their copy, including when a function
-retains their source after the caller ends.
+A same-host child keeps its script operand or command-string reader name as
+bytes. A command string uses its reader name at top level and `environment`
+inside functions defined there. A named definition uses its file's path when
+invoked. An imported body uses `environment` and lines projected from the
+compact environment definition, beginning at zero. Accepted definitions keep
+these coordinates independently of the caller. Independent loaded readers that
+inherit the name own their copy, including when a function retains their source
+after the caller ends.
 New-host startup uses its own
 environment and descriptors. Child commands preserve captured descriptor bindings,
 exported functions and the working directory without taking ownership of borrowed

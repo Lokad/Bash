@@ -131,8 +131,9 @@ public sealed partial class Evaluation
                     return ApplyNegation(await EvaluateCommandUnitsAsync(scriptCommand.Source, scope,
                             scriptCommand.SourceReader == ScriptCommand.Reader.LegacyCapture
                                 ? ScriptExecutionKind.LegacyCapture : ScriptExecutionKind.Root,
-                            scriptCommand.SourceReader == ScriptCommand.Reader.Root
-                                ? SyntaxDiagnosticOrigin.Script : SyntaxDiagnosticOrigin.CommandSubstitution)
+                            scriptCommand.SourceReader != ScriptCommand.Reader.Root ? SyntaxDiagnosticOrigin.CommandSubstitution
+                                : scope.Context.SourceMemory?.Kind == SourceMemory.ReaderKind.CommandString ? SyntaxDiagnosticOrigin.CommandString
+                                : SyntaxDiagnosticOrigin.Script)
                         .ConfigureAwait(false), negated);
                 case ListCommand listCommand:
                     return await EvaluateListAsync(listCommand, scope, negated).ConfigureAwait(false);

@@ -12,6 +12,9 @@ namespace Lokad.Bash.Evaluation;
 /// <summary>A source or parsed-unit owner shared by execution and surviving function namespaces.</summary>
 internal sealed class SourceMemory
 {
+    internal enum ReaderKind { Script, CommandString, ImportedFunction }
+
+    private static readonly ShellValue EnvironmentDiagnosticName = ShellValue.FromText("environment");
     private const long LegacyCacheEntryBytes = 256;
     // The source reader/executor starts with one reference. Namespace copies and active
     // invocations retain this coarse owner, not individual syntax nodes or value objects.
@@ -21,17 +24,42 @@ internal sealed class SourceMemory
         ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
     public IMemoryScope Budget { get; }
     public MemoryCapacity SyntaxMemory { get; }
-    internal ShellValue? DiagnosticName { get; private set; }
+    private ShellValue? _diagnosticName;
+    internal ReaderKind Kind { get; }
 
     public SourceMemory(IMemoryScope budget) : this(budget, parent: null) { }
 
-    public SourceMemory(IMemoryScope budget, SourceMemory? parent)
+    public SourceMemory(IMemoryScope budget, SourceMemory? parent) : this(budget, parent, parent?.Kind ?? ReaderKind.Script) { }
+
+    internal SourceMemory(IMemoryScope budget, SourceMemory? parent, ReaderKind kind)
     {
         Budget = budget;
         SyntaxMemory = new MemoryCapacity(budget, 0);
         _parent = parent;
-        DiagnosticName = parent?.DiagnosticName;
+        Kind = kind;
+        _diagnosticName = parent?._diagnosticName;
         parent?.Retain();
+    }
+
+    internal ShellValue? GetDiagnosticName(bool inFunction) =>
+        Kind == ReaderKind.ImportedFunction || (inFunction && Kind == ReaderKind.CommandString)
+            ? EnvironmentDiagnosticName : _diagnosticName;
+
+    /// <summary>Copies a reader's identity without extending its source lifetime.</summary>
+    internal static SourceMemory CreateIndependentReader(IMemoryBudget budget, SourceMemory? reader)
+    {
+        var owner = new SourceMemory(budget.CreateScope(), parent: null, reader?.Kind ?? ReaderKind.Script);
+        try
+        {
+            if (reader?._diagnosticName is { } name)
+                owner.OwnDiagnosticName(name);
+            return owner;
+        }
+        catch
+        {
+            owner.Release();
+            throw;
+        }
     }
 
     /// <summary>Encodes and owns the reader's host path before publication.</summary>
@@ -44,14 +72,14 @@ internal sealed class SourceMemory
         var bytes = new byte[length];
         prefix.CopyTo(bytes);
         encoding.GetBytes(path.AsSpan(), bytes.AsSpan(prefix.Length));
-        DiagnosticName = ShellValue.FromBytes(bytes);
+        _diagnosticName = ShellValue.FromBytes(bytes);
     }
 
     /// <summary>Copies a shell reader name for a source whose lifetime is independent of its caller.</summary>
     internal void OwnDiagnosticName(ShellValue name)
     {
         SyntaxMemory.Grow(MemoryCapacity.ArrayBackingBytes<byte>(name.Bytes.Length));
-        DiagnosticName = ShellValue.FromBytes(name.Bytes.ToArray());
+        _diagnosticName = ShellValue.FromBytes(name.Bytes.ToArray());
     }
 
     /// <summary>The caller must already hold a live reference while acquiring another.</summary>

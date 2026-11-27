@@ -273,11 +273,9 @@ public sealed partial class Evaluation
         if (length > ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
 
-        var sourceMemory = new SourceMemory(Memory.Budget.CreateScope());
+        var sourceMemory = SourceMemory.CreateIndependentReader(Memory.Budget, scope.Context.SourceMemory);
         try
         {
-            if (scope.Context.DiagnosticName is { } diagnosticPath)
-                sourceMemory.OwnDiagnosticName(diagnosticPath);
             ShellSource source;
             if (words.Count - start == 1 && words[start].TryGetCompactArrayCapacity(out var capacity) && capacity == length)
             {
@@ -356,15 +354,16 @@ public sealed partial class Evaluation
                 LoadedReaderIgnoresErrexit = scope.Context.ErrexitIgnored
             };
         }
+        var minimumEvalLine = scope.Context.FirstReaderLine;
         var lineOffset = kind switch
         {
-            ScriptExecutionKind.Eval => Math.Max(1, scope.Context.Coordinates.Line) - 1,
+            ScriptExecutionKind.Eval => Math.Max(minimumEvalLine, scope.Context.Coordinates.Line) - 1,
             ScriptExecutionKind.ArrayReaderCallback => Math.Max(1, scope.Context.Coordinates.Line) - 1,
             ScriptExecutionKind.Source or ScriptExecutionKind.Trap => 0,
             _ => scope.Context.Coordinates.Offset
         };
         var readerLineOffset = kind == ScriptExecutionKind.Eval
-            ? Math.Max(1, scope.Context.Coordinates.LastWordLine) - 1 : lineOffset;
+            ? Math.Max(minimumEvalLine, scope.Context.Coordinates.LastWordLine) - 1 : lineOffset;
 
         var result = EvaluationResult.FromExitCode(0);
         var scanContext = new ShellScanContext
@@ -373,7 +372,8 @@ public sealed partial class Evaluation
             RetainCaptureEofDelimiter = sourceOrEval
         };
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
-        var streamedRoot = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.Script;
+        var streamedRoot = kind == ScriptExecutionKind.Root
+            && diagnosticOrigin is SyntaxDiagnosticOrigin.Script or SyntaxDiagnosticOrigin.CommandString;
         var usesImmediateParserExit = streamedRoot || sourceOrEval || kind == ScriptExecutionKind.Trap;
         while (true)
         {
@@ -391,7 +391,7 @@ public sealed partial class Evaluation
                 if (!commands.MoveNext())
                     break;
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
-                var path = unitMemory.DiagnosticName;
+                var path = scope.Context.DiagnosticName;
                 var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
                 var readDiagnostics = commands.Current.ReadDiagnostics;
                 var unitCoordinates = BeginCommandUnit(
