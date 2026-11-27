@@ -27,12 +27,13 @@ public sealed partial class Evaluation
         if (first < words.Count)
         {
             var option = words[first].Bytes;
-            if (option.Span.SequenceEqual("--"u8))
+            var field = ClassifyShortOptionField(option.Span);
+            if (field == ShortOptionField.Terminator)
                 first++;
-            else if (option.Span.SequenceEqual("--help"u8))
+            else if (field == ShortOptionField.Help)
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Caller, "caller", negated)
                     .ConfigureAwait(false);
-            else if (option.Span is [(byte)'-', _, ..])
+            else if (field == ShortOptionField.Flags)
                 return await ReportUsageAsync(ShellValue.FromBytes(option[..2]), ": invalid option").ConfigureAwait(false);
         }
 
@@ -109,12 +110,13 @@ public sealed partial class Evaluation
         if (first < words.Count)
         {
             var option = words[first].Bytes;
-            if (option.Span.SequenceEqual("--"u8))
+            var field = ClassifyShortOptionField(option.Span);
+            if (field == ShortOptionField.Terminator)
                 first++;
-            else if (option.Span.SequenceEqual("--help"u8))
+            else if (field == ShortOptionField.Help)
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, kind, commandName, negated)
                     .ConfigureAwait(false);
-            else if (option.Span is [(byte)'-', _, ..])
+            else if (field == ShortOptionField.Flags)
                 return await ReportUsageAsync(ShellValue.FromBytes(option[..2]), ": invalid option").ConfigureAwait(false);
         }
 

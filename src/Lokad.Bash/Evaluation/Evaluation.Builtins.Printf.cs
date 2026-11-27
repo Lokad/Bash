@@ -28,16 +28,17 @@ public sealed partial class Evaluation
         while (operandIndex < operands.Count)
         {
             var optionBytes = operands[operandIndex].Bytes;
-            if (optionBytes.Length < 2 || optionBytes.Span[0] != (byte)'-')
+            var option = ClassifyShortOptionField(optionBytes.Span);
+            if (option == ShortOptionField.Operand)
                 break;
 
-            if (optionBytes.Span.SequenceEqual("--"u8))
+            if (option == ShortOptionField.Terminator)
             {
                 operandIndex++;
                 break;
             }
 
-            if (optionBytes.Span.SequenceEqual("--help"u8))
+            if (option == ShortOptionField.Help)
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(ShellValue.FromText("printf"), BuiltinKind.Printf,
                     "printf", negated).ConfigureAwait(false);
 

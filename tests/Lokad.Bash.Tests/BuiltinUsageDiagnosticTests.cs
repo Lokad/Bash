@@ -80,6 +80,16 @@ public sealed class BuiltinUsageDiagnosticTests
     }
 
     [Fact]
+    public async Task PrintfConsumesTheHelpSpellingAsAnOptionArgument()
+    {
+        var result = await EvaluationTestHelper.RunAsync("printf -v --help '%s' text");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("line 1: printf: `--help': not a valid identifier\n", result.StdErr);
+    }
+
+    [Fact]
     public async Task PrintfPositionsTheOptionErrorThroughTheSourcedRedirection()
     {
         const string source = "source ./loaded\nprintf '<%s>' \"$?\"";

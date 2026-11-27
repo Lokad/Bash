@@ -17,11 +17,12 @@ public sealed partial class Evaluation
         if (words.Count > operand)
         {
             var first = words[operand].Bytes;
-            if (first.Span.SequenceEqual("--help"u8))
+            var field = ClassifyShortOptionField(first.Span);
+            if (field == ShortOptionField.Help)
                 return await WriteControlHelpAsync(words[0], BuiltinKind.Getopts, "getopts", negated).ConfigureAwait(false);
-            if (first.Span.SequenceEqual("--"u8))
+            if (field == ShortOptionField.Terminator)
                 operand++;
-            else if (first.Length > 1 && first.Span[0] == (byte)'-')
+            else if (field == ShortOptionField.Flags)
             {
                 await WriteDiagnosticUnlessStderrClosedAsync([command], [ShellValue.FromBytes(first[..2]), ShellValue.FromText(": invalid option")],
                     diagnostics, GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
