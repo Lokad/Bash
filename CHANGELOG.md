@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep grouped colons and their original spelling in `GLOBIGNORE` patterns.
 - Match `GLOBIGNORE` patterns using Bash's pathname separator rules and
   retain colons inside bracket expressions.
 - Support `shopt -s globstar` and hosted `bash -O globstar` for recursive

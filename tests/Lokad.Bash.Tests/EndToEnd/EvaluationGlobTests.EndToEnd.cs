@@ -196,6 +196,33 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("'left:middle:right':drop", "drop")]
+    [InlineData("'left:middle:drop", "")]
+    [InlineData("'[left':middle", "middle")]
+    [InlineData("'name*':drop", "'name1'|drop")]
+    [InlineData("\"left:middle:right\":drop", "drop")]
+    [InlineData("`left:middle:right`:drop", "drop")]
+    [InlineData("\"left:$(printf \"middle:right\"):right\":drop", "drop")]
+    [InlineData("$(printf left:middle:right):drop", "drop")]
+    [InlineData("$(echo left # ):middle:right):drop", "")]
+    [InlineData("${a[one}middle]:-two:right}:drop", "drop")]
+    [InlineData("${a:-[one}:middle:right]:drop", "middle|drop")]
+    [InlineData("$(echo ${a:-some)text}:middle:right):drop", "middle|drop")]
+    [InlineData(">(left:middle:right):drop", "drop")]
+    public async Task GlobIgnoreSplitsOnlyAtUngroupedColons(string ignore, string excluded)
+    {
+        string[] names = ["'left", "'name1'", "[left", "drop", "keep", "middle", "name1", "right'"];
+        var host = EndToEndHarness.BuildTree(names.Select(name => ("/" + name, "")));
+        var result = await EvaluationTestHelper.RunAsync(
+            $"GLOBIGNORE={ShellArgumentEscaping.EscapeArgument(ignore)}\nprintf '<%s>' *", tree: host);
+
+        var expected = string.Concat(names.Except(excluded.Split('|'), StringComparer.Ordinal).Select(name => $"<{name}>"));
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Fact]
     public async Task ShellWordPatternsCanMatchSlashWithGlobIgnoreSet()
     {

@@ -457,6 +457,33 @@ public sealed class GlobPatternTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void GlobIgnoreSettlesDeepListGroups(bool fits)
+    {
+        const int Depth = 4096;
+        var governor = new MemoryGovernor(fits ? 64 * 1024 : 1024);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        var spelling = new string('[', Depth) + "keep:middle" + new string(']', Depth) + ":drop";
+        using (var filter = new GlobIgnorePatterns(ShellValue.FromText(spelling), false, memory))
+        {
+            if (fits)
+            {
+                Assert.True(filter.Excludes("drop", CancellationToken.None));
+                Assert.True(governor.PeakBytes - governor.ReservedBytes >= Depth);
+            }
+            else
+            {
+                Assert.Throws<MemoryBudgetExceededException>(() => filter.Excludes("drop", CancellationToken.None));
+                Assert.True(governor.ReservedBytes < 512);
+            }
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task GlobSortAdmitsItsResultArrayAfterAllCandidates(bool canAdmitResult)
     {
         var governor = new MemoryGovernor(4 * 1024 * 1024);

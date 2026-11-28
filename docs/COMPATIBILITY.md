@@ -999,8 +999,9 @@ hosted launch can enable it with `-O globstar` or an exported `BASHOPTS`.
 
 `GLOBIGNORE` filters the full paths returned by pathname expansion before
 the no-match policy runs. Its shell patterns use Bash's pathname separator
-rules on the published spelling and honor `nocaseglob`. Colons inside a
-bracket expression stay in the pattern. For example, `dir/*/leaf` filters
+rules on the published spelling and honor `nocaseglob`. Colons inside
+brackets, quotes, or substitution spelling stay in the pattern. The
+grouping characters remain part of the pattern text. For example, `dir/*/leaf` filters
 `dir/sub/leaf`, and a terminal `dir/*` can also filter deeper paths.
 A nonempty assignment enables `dotglob` and excludes path spellings ending
 in `.` or `..` as a complete component. A trailing slash leaves those

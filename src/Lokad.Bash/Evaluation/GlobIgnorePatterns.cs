@@ -48,20 +48,12 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
         List<TextGlobMatcher.Utf8PathMatcher> patterns = [];
         var bytes = value.Bytes.Span;
         var start = 0;
-        var brackets = 0;
+        using var groups = new PatternListGroups(stackalloc byte[32], memory.Budget);
         for (var index = 0; index <= bytes.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (index < bytes.Length && (bytes[index] != (byte)':' || brackets != 0))
-            {
-                switch (bytes[index])
-                {
-                    case (byte)'\\' when index + 1 < bytes.Length: index++; break;
-                    case (byte)'[': brackets++; break;
-                    case (byte)']' when brackets != 0: brackets--; break;
-                }
+            if (index < bytes.Length && groups.Consumes(bytes, ref index, cancellationToken))
                 continue;
-            }
             if (index > start && AllActive.TryUnescape(ShellValue.FromBytes(value.Bytes[start..index]), memory, owner,
                     cancellationToken, out var pattern, out var mask))
             {
@@ -71,6 +63,125 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
             start = index + 1;
         }
         return patterns;
+    }
+
+    /// <summary>Locates list separators in the stored pattern spelling without interpreting the groups.</summary>
+    private ref struct PatternListGroups(Span<byte> inline, IMemoryBudget budget)
+    {
+        private readonly Span<byte> _inline = inline;
+        private ByteMemoryBuilder? _overflow;
+        private int _inlineCount;
+        private Group _group;
+
+        private enum Group : byte
+        {
+            None, SingleQuote = (byte)'\'', DoubleQuote = (byte)'"', Backquote = (byte)'`',
+            Bracket = (byte)']', Parentheses = (byte)')', ParameterName = (byte)'}',
+            ParameterWord = 1, NestedCommand = 2
+        }
+
+        public bool Consumes(ReadOnlySpan<byte> bytes, ref int index, CancellationToken cancellationToken)
+        {
+            var value = bytes[index];
+            var group = _group;
+            if (group == Group.SingleQuote)
+            {
+                if (value == (byte)'\'')
+                    Pop();
+                return true;
+            }
+
+            var following = index < bytes.Length - 1 ? bytes[index + 1] : (byte)0;
+            if (value == (byte)'\\' && index < bytes.Length - 1)
+            {
+                index++;
+                return true;
+            }
+            if (ClosesGroup(group, value))
+            {
+                Pop();
+                return true;
+            }
+            if (group == Group.Backquote)
+                return true;
+
+            switch (value)
+            {
+                case (byte)':' when group == Group.None:
+                    return false;
+                case (byte)'"' or (byte)'`':
+                case (byte)'\'' when group != Group.DoubleQuote:
+                    Push((Group)value);
+                    break;
+                case (byte)'[' when group is Group.None or Group.Bracket or Group.ParameterName:
+                    Push(Group.Bracket);
+                    break;
+                case (byte)'(' when group is Group.Parentheses or Group.NestedCommand:
+                    Push(group);
+                    break;
+                case (byte)'$' when group != Group.Bracket && following == (byte)'(':
+                    Push(group == Group.None ? Group.Parentheses : Group.NestedCommand);
+                    index++;
+                    break;
+                case (byte)'$' when group is not (Group.Bracket or Group.Parentheses) && following == (byte)'{':
+                    Push(Group.ParameterName);
+                    index++;
+                    break;
+                case (byte)'<' or (byte)'>' when (group is Group.None or Group.ParameterName or Group.ParameterWord)
+                    && following == (byte)'(':
+                    Push(Group.Parentheses);
+                    index++;
+                    break;
+                case (byte)'#' when (group is Group.Parentheses or Group.NestedCommand)
+                    && bytes[index - 1] is (byte)' ' or (byte)'\t' or (byte)'\n':
+                    // A comment inside a parenthesized shell spelling ends at physical LF.
+                    while (index < bytes.Length - 1 && bytes[index + 1] != (byte)'\n')
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        index++;
+                    }
+                    break;
+                case (byte)'#' or (byte)'%' or (byte)'^' or (byte)',' or (byte)'~' or (byte)':' or (byte)'-'
+                    or (byte)'=' or (byte)'?' or (byte)'+' or (byte)'/' when group == Group.ParameterName:
+                    // A bracket in the parameter name groups a subscript. An operator starts its word.
+                    _group = Group.ParameterWord;
+                    break;
+            }
+            return true;
+
+            static bool ClosesGroup(Group group, byte value) => group switch
+            {
+                Group.None => false,
+                Group.ParameterWord => value == (byte)'}',
+                Group.NestedCommand => value == (byte)')',
+                _ => value == (byte)group
+            };
+        }
+
+        private void Push(Group delimiter)
+        {
+            if (_group != Group.None)
+            {
+                if (_inlineCount < _inline.Length)
+                    _inline[_inlineCount++] = (byte)_group;
+                else
+                    (_overflow ??= new ByteMemoryBuilder(0, budget)).Append((byte)_group);
+            }
+            _group = delimiter;
+        }
+
+        private void Pop()
+        {
+            if (_overflow is { Length: > 0 } overflow)
+            {
+                _group = (Group)overflow.ToMemory().Span[^1];
+                overflow.Truncate(overflow.Length - 1);
+            }
+            else
+                _group = _inlineCount == 0 ? Group.None : (Group)_inline[--_inlineCount];
+        }
+
+        public void Dispose() => _overflow?.Dispose();
     }
 
     public void Dispose()
