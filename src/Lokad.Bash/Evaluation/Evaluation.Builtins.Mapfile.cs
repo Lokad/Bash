@@ -90,6 +90,7 @@ public sealed partial class Evaluation
         var attributes = target.AssignmentAttributes;
         var integer = (attributes & BindingAttributes.Integer) != 0;
         var convertCase = (attributes & BindingAttributes.Case) != 0;
+        var callbackScratch = callback.HasValue ? Memory.CaptureScratchBytes(scope) : (long?)null;
         // Arithmetic consumes borrowed records after input settles. Ordinary records can
         // outlive their batch independently after publication.
         using var integerInputMemory = integer && callback == null ? Memory.Budget.CreateScope() : null;
@@ -226,8 +227,13 @@ public sealed partial class Evaluation
             borrowedBatches = null;
             inputMemory?.Dispose();
             integerInputMemory?.Dispose();
-            Memory.Workspace.Resize(Memory.Workspace.Bytes - stagedBytes);
-            Memory.ReleaseUnusedCapacity();
+            if (callbackScratch is { } scratch)
+                Memory.ReleaseAbandonedWorkspace(scope, scratch);
+            else
+            {
+                Memory.Workspace.Resize(Memory.Workspace.Bytes - stagedBytes);
+                Memory.ReleaseUnusedCapacity();
+            }
             return await RejectInputAsync().ConfigureAwait(false);
         }
         finally { callbackAssignment?.Dispose(); }

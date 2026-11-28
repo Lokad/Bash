@@ -79,6 +79,20 @@ internal sealed class EvaluationMemory
 
     public void ReleaseUnusedCapacity() => _memory.ReleaseUnusedCapacity();
 
+    /// <summary>Captures the live scratch to keep when an operation abandons its staged result.</summary>
+    internal long CaptureScratchBytes(ScopedEvaluation scope) =>
+        Math.Max(0, _memory.Bytes - RetainedBytes(scope));
+
+    /// <summary>Refunds abandoned scratch after the operation has restored its live bindings.</summary>
+    internal void ReleaseAbandonedWorkspace(ScopedEvaluation scope, long scratchBytes)
+    {
+        var retained = RetainedBytes(scope);
+        var required = checked(retained + scratchBytes);
+        if (required <= _memory.Bytes)
+            ResizeWorkspace(retained, required);
+        ReleaseUnusedCapacity();
+    }
+
     /// <summary>Admits retained storage using scratch capacity released at command completion.</summary>
     internal void PrepareRetainedStorage(long bytes)
     {
@@ -104,6 +118,12 @@ internal sealed class EvaluationMemory
         return retained <= initial
             ? retained
             : initial + (1L << BitOperations.Log2((ulong)(retained - initial)));
+    }
+
+    private void ResizeWorkspace(long retained, long bytes)
+    {
+        _memory.ResizeWithRetainedBaseline(bytes, GrowthBaseline(retained));
+        _retainedBytes = retained;
     }
 
     private static long RetainedBytes(ScopedEvaluation scope)
@@ -140,8 +160,7 @@ internal sealed class EvaluationMemory
         internal void ResetWorkspace(long liveWorkspaceBytes)
         {
             var retained = RetainedBytes(scope);
-            owner._memory.ResizeWithRetainedBaseline(checked(baseline + retained + liveWorkspaceBytes),
-                owner.GrowthBaseline(retained));
+            owner.ResizeWorkspace(retained, checked(baseline + retained + liveWorkspaceBytes));
             if (owner._refused)
             {
                 owner._memory.ReleaseUnusedCapacity();
@@ -149,7 +168,6 @@ internal sealed class EvaluationMemory
             }
             else
                 owner._memory.TrimExcess();
-            owner._retainedBytes = retained;
         }
 
         public void Dispose()

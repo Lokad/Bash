@@ -291,6 +291,71 @@ public partial class EvaluationTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MapfileRefundsRolledBackCallbackStorageBeforeItsDiagnostic(bool invokesCallback)
+    {
+        var early = await ObserveRefusalAsync(completeCallback: false);
+        var late = await ObserveRefusalAsync(completeCallback: true);
+        Assert.InRange(late.Workspace - early.Workspace, -4096, 4096);
+        Assert.InRange(late.Reserved - early.Reserved, -4096, 4096);
+
+        async Task<(long Workspace, long Reserved)> ObserveRefusalAsync(bool completeCallback)
+        {
+            var state = new Eval(Parser.Parse("mark() { seen=$2; }; mapfile -tc2 -C mark arr"));
+            var variables = Assert.IsType<Variables>(typeof(Eval)
+                .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
+            var saved = ShellValue.FromText("old");
+            Assert.True(variables.TryAssignArray("arr", Enumerable.Repeat(saved, 1024).ToArray(), ArrayKind.Indexed));
+            Assert.True(variables.TrySetScalar("seen", ShellValue.FromText("x")));
+            var original = variables.IndexedArrays["arr"];
+            var budget = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = budget.CreateScope();
+            state.Memory.Budget = owner;
+            var read = await NextReadAsync(state);
+            state.Memory.ReleaseUnusedCapacity();
+            var workspaceBefore = state.Memory.Workspace.Bytes;
+            var reservedBefore = budget.ReservedBytes;
+
+            if (completeCallback)
+            {
+                read.SetResult(invokesCallback
+                    ? ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false)
+                    : ReadResult.Success(Utf8Bytes("first\n"), [], reachedEoF: false));
+                read = await NextReadAsync(state);
+                var expected = invokesCallback ? new[] { ShellValue.FromText("first"), ShellValue.FromText("second") }
+                    : new[] { ShellValue.FromText("first") };
+                Assert.Equal(expected, variables.IndexedArrays["arr"].PresentValues);
+            }
+
+            state.Memory.ReleaseUnusedCapacity();
+            using var held = budget.Reserve(budget.LimitBytes - budget.ReservedBytes - 2048);
+            read.SetResult(ReadResult.Success(Utf8Bytes(new string('x', 4096) + "\n"), [], reachedEoF: true));
+            var diagnostic = await NextWriteAsync(state);
+            var workspace = state.Memory.Workspace.Bytes - workspaceBefore;
+            var reserved = budget.ReservedBytes - held.Bytes - reservedBefore;
+            var coversLiveBindings = state.Memory.Workspace.Bytes >= variables.EstimatedMemoryBytes;
+            var error = Text(diagnostic.Content);
+            var target = variables.IndexedArrays["arr"];
+            var seen = variables.Scalars["seen"];
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+            Assert.Null(await NextStepAsync(state));
+
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Equal("mapfile: shared memory budget exhausted\n", error);
+            Assert.Equal(2, state.LastExitCode);
+            Assert.Same(original, target);
+            Assert.Equal(1024, original.Count);
+            Assert.Equal(ShellValue.FromText(completeCallback && invokesCallback ? "second" : "x"), seen);
+            Assert.True(coversLiveBindings);
+            owner.Dispose();
+            held.Dispose();
+            Assert.Equal(0, budget.ReservedBytes);
+            return (workspace, reserved);
+        }
+    }
+
     [Fact]
     public async Task MapfileRestoresTheArrayWhenBorrowedRecordConversionIsRefused()
     {
