@@ -2109,29 +2109,42 @@ public sealed partial class Evaluation : IFileTester
 
         async Task ExpandArgumentTailAsync(CommandWords words, int start, bool scanPwdOptions)
         {
-            if (start >= words.Count)
-                return;
-
-            using var fieldMemory = new MemoryCapacity(Memory.Budget, 0);
-            var fields = new List<ShellValue>();
-            for (var index = start; index < words.Count; index++)
+            MemoryCapacity? fieldMemory = null;
+            List<ShellValue>? fields = null;
+            try
             {
-                await AppendOperandValuesAsync(words[index], scope, fields, fieldMemory).ConfigureAwait(false);
-                if (_state.HasPendingExpansionError)
-                    break;
-                if (fields.Count != 0)
-                    lastArgument = fields[^1];
-                if (scanPwdOptions && !pwdOptions.Finished)
+                for (var index = start; index < words.Count && scope.CanExpand; index++)
                 {
-                    foreach (var field in fields)
+                    CheckCancellation();
+                    var word = words[index];
+                    if (GetLiteralWithoutGlob(word) is { } literal)
                     {
-                        pwdOptions.Read(field);
-                        if (pwdOptions.Finished)
-                            break;
+                        lastArgument = literal.ToValue(Memory);
+                        if (scanPwdOptions && !pwdOptions.Finished)
+                            pwdOptions.Read(lastArgument);
+                        continue;
                     }
+
+                    fieldMemory ??= new MemoryCapacity(Memory.Budget, 0);
+                    fields ??= [];
+                    await AppendOperandValuesAsync(word, scope, fields, fieldMemory).ConfigureAwait(false);
+                    if (_state.HasPendingExpansionError)
+                        break;
+                    if (fields.Count != 0)
+                        lastArgument = fields[^1];
+                    if (scanPwdOptions && !pwdOptions.Finished)
+                    {
+                        foreach (var field in fields)
+                        {
+                            pwdOptions.Read(field);
+                            if (pwdOptions.Finished)
+                                break;
+                        }
+                    }
+                    fields.Clear();
                 }
-                fields.Clear();
             }
+            finally { fieldMemory?.Dispose(); }
         }
 
         // Applies or inspects prepared declarations without replaying expansion effects.

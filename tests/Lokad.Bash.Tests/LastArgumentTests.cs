@@ -12,6 +12,8 @@ public sealed class LastArgumentTests
     [InlineData("v='first last'; : $v; printf '<%s>' \"$_\"", "<last>", 0)]
     [InlineData("v='first last'; : \"$v\"; printf '<%s>' \"$_\"", "<first last>", 0)]
     [InlineData("unset missing; true $missing; printf '<%s>' \"$_\"", "<true>", 0)]
+    [InlineData("unset missing; builtin : 'quoted*' $missing; printf '<%s>' \"$_\"", "<quoted*>", 0)]
+    [InlineData("pwd -LP -- \"$(printf -- -z)\" ''; printf '<%s:%s>' \"$?\" \"$_\"", "/\n<0:>", 0)]
     [InlineData(": first ''; printf '<%s>' \"$_\"; _=manual; printf '<%s>' \"$_\"", "<><>", 0)]
     [InlineData("f(){ printf '<%s>' \"$_\"; : body; }; : earlier; f call; printf '<%s>' \"$_\"", "<earlier><call>", 0)]
     [InlineData(": outer; (: inner); : first | : last; printf '<%s>' \"$_\"", "<outer>", 0)]
@@ -41,6 +43,31 @@ public sealed class LastArgumentTests
             Assert.Equal(0, host.OpenFileCount);
             owner.Dispose();
             Assert.Equal(0, governor.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task LiteralOnlyFixedStatusTailDoesNotNeedOperandStorage()
+    {
+        var withoutOperand = await PeakAsync(":");
+        var withOperand = await PeakAsync(": ':'");
+
+        Assert.Equal(withoutOperand, withOperand);
+
+        static async Task<long> PeakAsync(string source)
+        {
+            var governor = new MemoryGovernor(256 * 1024);
+            using var owner = governor.CreateScope();
+            await using var host = new TestHost { MemoryBudget = owner };
+            var evaluation = new Eval(Parser.Parse(source));
+            var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(ShellValue.FromText(":"), evaluation.Variables["_"]);
+            Assert.Empty(host.StandardError.TextContent);
+            owner.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return governor.PeakBytes;
         }
     }
 
