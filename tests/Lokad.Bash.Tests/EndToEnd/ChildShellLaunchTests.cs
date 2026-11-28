@@ -3,6 +3,25 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task ShiftVerboseLaunchUsesExplicitAndExportedSettings()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            bash -O shift_verbose -c 'shift 003; printf "explicit:%s\n" "$?"'
+            shopt -s shift_verbose
+            bash -c 'shift 004; printf "unexported:%s\n" "$?"'
+            export BASHOPTS
+            bash +O shift_verbose -c 'shift 005; printf "imported:%s\n" "$?"'
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("explicit:1\nunexported:1\nimported:1\n", host.StandardOutput.TextContent);
+        Assert.Equal("bash: line 1: shift: 003: shift count out of range\nbash: line 1: shift: 005: shift count out of range\n",
+            host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task SourcePathStartsEnabledAndCanBeClearedBeforeImport()
     {
         await using var host = EndToEndHarness.BuildTree([

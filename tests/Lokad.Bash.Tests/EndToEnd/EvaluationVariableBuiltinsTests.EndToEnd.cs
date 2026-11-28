@@ -166,6 +166,58 @@ public sealed class EvaluationVariableBuiltinsTestsEndToEnd
         Assert.Equal(1, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("", "", "<1:0>", "shift count out of range")]
+    [InlineData("--", "", "<1:0>", "--: shift count out of range")]
+    [InlineData("' +003\t'", "a b", "<1:2><a><b>", " +003\t: shift count out of range")]
+    [InlineData("-- 3", "a b", "<1:2><a><b>", "--: shift count out of range")]
+    [InlineData("2", "a b", "<0:0>", "")]
+    public async Task ShiftVerboseReportsTheFirstOperandAndPreservesTheFrameOnFailure(
+        string operands, string positionals, string output, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"shopt -s shift_verbose; set -- {positionals}; shift {operands}; "
+            + "printf '<%s:%s>' \"$?\" \"$#\"; for arg; do printf '<%s>' \"$arg\"; done");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Equal(diagnostic.Length == 0 ? "" : "line 1: shift: " + diagnostic + "\n", result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("local -; ", "")]
+    [InlineData("", "line 3: shift: 3: shift count out of range\n")]
+    public async Task ShiftVerboseIsRestoredByLocalOptionSnapshots(string snapshot, string callerDiagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            report() { {{snapshot}}shopt -s shift_verbose; shift 3; }
+            report one
+            shift 3
+            """);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("line 1: shift: 3: shift count out of range\n" + callerDiagnostic, result.StdErr);
+    }
+
+    [Fact]
+    public async Task ShiftVerboseUsesTheActiveStderrThroughNegation()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            shopt -s shift_verbose
+            set -- one
+            ! shift 3 2>note
+            printf '%s:%s\n' "$?" "$1"
+            shift 3 2>&-
+            """, CancellationToken.None);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("0:one\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal("line 3: shift: 3: shift count out of range\n", host.ReadFile("/note"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task Evaluation_ShiftBuiltin_InvalidCountReturnsFailure()
     {

@@ -22,7 +22,8 @@ internal enum ShellOption
     Pipefail = 1024,
     Noglob = 2048,
     XpgEcho = 4096,
-    SourcePath = 8192
+    SourcePath = 8192,
+    ShiftVerbose = 16384
 }
 
 internal static class ShellOptions
@@ -31,7 +32,8 @@ internal static class ShellOptions
     private const ShellOption DefaultBashFlags = ShellOption.GlobSkipDots | ShellOption.SourcePath;
     internal const ShellOption Default = Fixed | ShellOption.BraceExpand | DefaultBashFlags;
     internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.BraceExpand;
-    internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.SourcePath;
+    internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.ShiftVerbose
+        | ShellOption.SourcePath;
     internal const byte ErrexitFlag = (byte)'e';
     internal const byte NoglobFlag = (byte)'f';
     internal const byte BraceExpandFlag = (byte)'B';
@@ -58,6 +60,7 @@ internal static class ShellOptions
         new(ShellValue.FromText("nocaseglob"), ShellOption.NoCaseGlob),
         new(ShellValue.FromText("nocasematch"), ShellOption.NoCaseMatch),
         new(ShellValue.FromText("nullglob"), ShellOption.Nullglob),
+        new(ShellValue.FromText("shift_verbose"), ShellOption.ShiftVerbose),
         new(ShellValue.FromText("sourcepath"), ShellOption.SourcePath),
         new(ShellValue.FromText("xpg_echo"), ShellOption.XpgEcho)
     ];

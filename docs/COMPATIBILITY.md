@@ -920,7 +920,7 @@ during application, preserving any changes already applied. After `-`,
 
 `shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`,
 `inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, `nullglob`,
-`sourcepath`, and `xpg_echo`.
+`shift_verbose`, `sourcepath`, and `xpg_echo`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -1173,8 +1173,13 @@ error and empty-table write failure reports the reached source location.
 `shift` uses expanded fields and accepts a leading `--`. Its count defaults to
 one. Explicit counts accept signed 64-bit ASCII decimal with leading ASCII
 whitespace and trailing space or tab. A count larger than the remaining
-positional window returns 1 silently. Negative or invalid counts return 1 with
-a diagnostic.
+positional window returns 1 and preserves the arguments. It reports a
+diagnostic when `shopt -s shift_verbose` is active. The diagnostic includes
+the original first operand, including a leading `--`, when present.
+Negative or invalid counts return 1 with a diagnostic regardless of the
+option. `shift_verbose` starts off, is inherited by subshells, and is saved
+and restored by `local -`. Hosted Bash launches can set it with
+`-O shift_verbose` or through exported `BASHOPTS`.
 
 Implicit `for name; do ...; done` iterates a snapshot of quoted positional
 parameters, preserving empty arguments and bytes. Explicit `in` lists retain

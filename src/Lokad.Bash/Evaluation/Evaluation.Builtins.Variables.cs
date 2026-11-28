@@ -273,26 +273,33 @@ public sealed partial class Evaluation
         if (words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--help"u8))
             return await WriteControlHelpAsync(words[0], BuiltinKind.Shift, "shift", negated).ConfigureAwait(false);
 
+        const string outOfRange = "shift count out of range";
         var first = words.Count > 1 && words[1].Bytes.Span.SequenceEqual("--"u8) ? 2 : 1;
         var count = 1L;
         if (first < words.Count)
         {
             if (!TryParseControlNumber(words[first], out count))
-                return await ReportCountErrorAsync(words[first], ": numeric argument required").ConfigureAwait(false);
+                return await ReportCountErrorAsync(words[first], "numeric argument required").ConfigureAwait(false);
             if (words.Count - first > 1)
                 return await DiscardForExtraControlArgumentsAsync(ShellValue.FromText("shift"), scope.Context).ConfigureAwait(false);
             // Bash reports the original first operand for a negative count, including a leading --.
             if (count < 0)
-                return await ReportCountErrorAsync(words[1], ": shift count out of range").ConfigureAwait(false);
+                return await ReportCountErrorAsync(words[1], outOfRange).ConfigureAwait(false);
         }
 
-        var exitCode = scope.Variables.TryShiftPositionalParameters(count) ? 0 : 1;
-        return await FinalizeResultAsync(EvaluationResult.FromExitCode(exitCode), negated).ConfigureAwait(false);
+        var shifted = scope.Variables.TryShiftPositionalParameters(count);
+        if (!shifted && _state.HasOption(ShellOption.ShiftVerbose))
+            return await ReportCountErrorAsync(words.Count > 1 ? words[1] : null, outOfRange).ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(shifted ? 0 : 1), negated).ConfigureAwait(false);
 
-        async Task<EvaluationResult> ReportCountErrorAsync(ShellValue operand, string message)
+        async Task<EvaluationResult> ReportCountErrorAsync(ShellValue? operand, string message)
         {
-            await ReportBuiltinDiagnosticAsync([ShellValue.FromText("shift")],
-                [operand, ShellValue.FromText(message)], scope.Context).ConfigureAwait(false);
+            var name = ShellValue.FromText("shift");
+            if (operand is { } value)
+                await ReportBuiltinDiagnosticAsync([name], [value, ShellValue.FromText(": "), ShellValue.FromText(message)],
+                    scope.Context).ConfigureAwait(false);
+            else
+                await ReportBuiltinDiagnosticAsync(name, message, scope.Context).ConfigureAwait(false);
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
     }
