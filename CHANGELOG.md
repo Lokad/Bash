@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `shopt -s xpg_echo` and hosted `bash -O xpg_echo` to enable
+  backslash escapes by default in `echo`, with `-e` and `-E` overrides.
 - Support `-B`, `+B` and named `braceexpand` options for brace expansion
   and its argument syntax pass.
 

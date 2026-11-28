@@ -10,11 +10,12 @@ public static class EchoFormatting
 {
     /// <summary>Resolves option handling and calculates the bytes to reserve before formatting.</summary>
     public static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments) =>
-        GetOutputFormat(arguments, out _);
+        GetOutputFormat(arguments, escapesByDefault: false, out _);
 
-    private static OutputFormat GetOutputFormat(IReadOnlyList<ShellValue> arguments, out bool needsEscaping)
+    private static OutputFormat GetOutputFormat(
+        IReadOnlyList<ShellValue> arguments, bool escapesByDefault, out bool needsEscaping)
     {
-        var firstArgument = ReadOptions(arguments, arguments.Count, detectNewlineSuppression: true,
+        var firstArgument = ReadOptions(arguments, arguments.Count, escapesByDefault, detectNewlineSuppression: true,
             out var suppressNewline, out var expandEscapes);
         if (expandEscapes)
         {
@@ -32,11 +33,11 @@ public static class EchoFormatting
     }
 
     private static int ReadOptions(
-        IReadOnlyList<ShellValue> arguments, int limit, bool detectNewlineSuppression,
+        IReadOnlyList<ShellValue> arguments, int limit, bool escapesByDefault, bool detectNewlineSuppression,
         out bool suppressNewline, out bool expandEscapes)
     {
         suppressNewline = false;
-        expandEscapes = false;
+        expandEscapes = escapesByDefault;
         var firstArgument = 0;
         while (firstArgument < limit)
         {
@@ -59,16 +60,17 @@ public static class EchoFormatting
     public static ReadOnlyMemory<byte> Format(
         IReadOnlyList<ShellValue> arguments, OutputFormat format, IMemoryScope memory)
     {
-        ReadOptions(arguments, Math.Min(format.FirstArgument, arguments.Count), detectNewlineSuppression: false,
-            out _, out var expandEscapes);
+        ReadOptions(arguments, Math.Min(format.FirstArgument, arguments.Count), escapesByDefault: false,
+            detectNewlineSuppression: false, out _, out var expandEscapes);
         return Format(arguments, format, expandEscapes, memory);
     }
 
     /// <summary>Formats output, borrowing an unchanged operand when no bytes need to be added.</summary>
     /// <remarks>The caller retains the expanded operands and their owners through the write.</remarks>
-    internal static ReadOnlyMemory<byte> Format(IReadOnlyList<ShellValue> arguments, IMemoryScope memory)
+    internal static ReadOnlyMemory<byte> Format(
+        IReadOnlyList<ShellValue> arguments, bool escapesByDefault, IMemoryScope memory)
     {
-        var format = GetOutputFormat(arguments, out var needsEscaping);
+        var format = GetOutputFormat(arguments, escapesByDefault, out var needsEscaping);
         if (!needsEscaping && format.SuppressNewline && format.FirstArgument == arguments.Count - 1)
             return arguments[format.FirstArgument].Bytes;
 

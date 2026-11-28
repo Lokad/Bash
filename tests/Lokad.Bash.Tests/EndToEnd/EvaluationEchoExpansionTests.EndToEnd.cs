@@ -6,6 +6,58 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationEchoExpansionTestsEndToEnd
 {
+    [Theory]
+    [InlineData("", "a\nb\n")]
+    [InlineData("-nn -n", "a\nb")]
+    [InlineData("-eE", "a\\nb\n")]
+    [InlineData("-E -e", "a\nb\n")]
+    [InlineData("-- -E", "-- -E a\nb\n")]
+    [InlineData("-nQ -E", "-nQ -E a\nb\n")]
+    public async Task XpgEchoChangesTheDefaultBeforeLeadingOptionsAreRead(string options, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync("shopt -s xpg_echo; command echo " + options + " 'a\\nb'");
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task XpgEchoPersistsAcrossFunctionReturnButChildChangesStayLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            enable() { local -; shopt -s xpg_echo; }
+            shopt -q xpg_echo; printf 'initial:%s\n' "$?"
+            enable
+            printf '<%s>\n' "$(echo 'child\nline'; shopt -u xpg_echo; echo 'literal\nline')"
+            printf 'options:%s/%s\n' "$BASHOPTS" "$SHELLOPTS"
+            shopt -u xpg_echo
+            echo 'parent\nline'
+            """);
+
+        Assert.Equal("initial:1\n<child\nline\nliteral\\nline>\n"
+            + "options:globskipdots:xpg_echo/braceexpand:pipefail\nparent\\nline\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task XpgEchoWritesEscapedBytesAndStopsAtTheReachedOperand()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            shopt -s xpg_echo
+            builtin echo 'a\0b\xFFc\cignored' "$(printf reached >effect; printf ignored)" >value
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(new byte[] { (byte)'a', 0, (byte)'b', 0xff, (byte)'c' }, host.ReadFileBytes("/value"));
+        Assert.Equal("reached", host.ReadFile("/effect"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task EchoOptionsFromExpandedArgumentsAffectCapturedOutput()
     {

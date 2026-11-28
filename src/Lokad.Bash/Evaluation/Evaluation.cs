@@ -1420,7 +1420,7 @@ public sealed partial class Evaluation : IFileTester
         {
             try
             {
-                echoContent = EchoFormatting.Format(byteOperands, echoMemory);
+                echoContent = EchoFormatting.Format(byteOperands, _state.HasOption(ShellOption.XpgEcho), echoMemory);
             }
             catch (MemoryBudgetExceededException)
             {

@@ -20,7 +20,8 @@ internal enum ShellOption
     GlobSkipDots = 256,
     BraceExpand = 512,
     Pipefail = 1024,
-    Noglob = 2048
+    Noglob = 2048,
+    XpgEcho = 4096
 }
 
 internal static class ShellOptions
@@ -54,7 +55,8 @@ internal static class ShellOptions
         new(ShellValue.FromText("localvar_inherit"), ShellOption.LocalVariableInheritance),
         new(ShellValue.FromText("nocaseglob"), ShellOption.NoCaseGlob),
         new(ShellValue.FromText("nocasematch"), ShellOption.NoCaseMatch),
-        new(ShellValue.FromText("nullglob"), ShellOption.Nullglob)
+        new(ShellValue.FromText("nullglob"), ShellOption.Nullglob),
+        new(ShellValue.FromText("xpg_echo"), ShellOption.XpgEcho)
     ];
 
     private static readonly ShellOption BashMask = CollectBashFlags();

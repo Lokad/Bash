@@ -3,6 +3,26 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task XpgEchoLaunchUsesExplicitAndExportedSettings()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            bash -O xpg_echo -c 'echo "explicit:a\nb"'
+            shopt -s xpg_echo
+            bash -c 'echo "unexported:a\nb"'
+            export BASHOPTS
+            bash +O xpg_echo -c 'echo "imported:a\nb"'
+            exec -c bash -c 'echo "empty:a\nb"'
+            """, CancellationToken.None);
+
+        Assert.Equal("explicit:a\nb\nunexported:a\\nb\nimported:a\nb\nempty:a\\nb\n",
+            host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task BraceStartupSelectsTheFlagThenImportsAnEnabledOption()
     {
         await using var host = new TestHost();

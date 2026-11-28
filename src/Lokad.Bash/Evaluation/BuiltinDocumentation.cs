@@ -52,7 +52,9 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Pwd => new("[-LP]", "Print the current working directory. Both -L and -P print the directory tracked by the host model."),
         BuiltinKind.Cd => new("[-Le] [--] [dir]", "Change the working directory to dir, or to HOME when omitted. A lone '-' selects and prints OLDPWD."),
         BuiltinKind.Echo => new("[-neE ...] [arg ...]",
-            "Print arguments separated by spaces. Leading option groups may repeat or combine n, e and E.\n    -n omits the final newline. The last -e or -E enables or disables backslash escapes, which are disabled by default."),
+            "Print arguments separated by spaces. Leading option groups may repeat or combine n, e and E.\n"
+            + "    -n omits the final newline. The last -e or -E enables or disables backslash escapes.\n"
+            + "    Enable escapes by default with shopt -s xpg_echo."),
         BuiltinKind.Printf => new("[-v var] format [arguments]", "Format and print arguments, or assign the result to var with -v."),
         BuiltinKind.Read => new("[-ers] [-a array] [-d delim] [-i text] [-n count] [-N count] [-p prompt] [-u fd] [name ...]",
             "Read one record. With no destination, assign the whole record to REPLY.\n"
@@ -81,7 +83,9 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Shift => new("[--] [n]", "Remove the first n positional parameters. With no count, remove one."),
         BuiltinKind.Set => new("[-efB|+efB] [-o name|+o name] [-|+|--] [arg ...]", "Change braceexpand, errexit and noglob, or replace positional parameters. A lone + is consumed while scanning options. -o/+o alone inspect the supported mutable options. With no arguments, list variable assignments and function definitions."),
         BuiltinKind.Shopt => new("[-pqsu] [-o] [optname ...]",
-            "Inspect or change shell options. Supported options are dotglob, failglob, globskipdots,\n    inherit_errexit, localvar_inherit, nocaseglob, nocasematch, and nullglob. -s enables,\n    -u disables, -p prints reusable settings, and -q suppresses listings.\n    -o inspects set options or changes errexit."),
+            "Inspect or change shell options. With no arguments, list the supported shell options.\n"
+            + "    -s enables, -u disables, -p prints reusable settings, and -q suppresses listings.\n"
+            + "    -o selects the set option namespace."),
         BuiltinKind.Exec => new("[-cl] [-a name] [command [argument ...]] [redirection ...]",
             "Replace this evaluation with a command, or preserve redirections without a command."),
         BuiltinKind.Declare => new("[-aAcfFgiIlnprux] [name[=value] ...]",

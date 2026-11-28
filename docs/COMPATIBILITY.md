@@ -919,7 +919,8 @@ during application, preserving any changes already applied. After `-`,
 `--`, or the first positional operand, `--help` is a positional argument.
 
 `shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`,
-`inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, and `nullglob`.
+`inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, `nullglob`,
+and `xpg_echo`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -930,6 +931,14 @@ they list enabled and disabled options respectively. `-o` selects the
 `braceexpand` is enabled by default. `set +B` preserves authored braces
 as fields proceed through the remaining expansion stages. The setting
 also controls the brace pass over damaged capture spelling.
+
+`xpg_echo` is off at default startup. When enabled, `echo` decodes
+backslash escapes unless a leading `-E` takes precedence. The last `e`
+or `E` among the leading option groups selects escape handling. `-n`
+still suppresses the final newline. The option persists across function
+return, including after `local -`. An inherited subshell starts with the
+parent's setting, and a fresh hosted Bash launch can enable it with
+`-O xpg_echo` or through an exported `BASHOPTS`.
 
 `noglob` bypasses pathname expansion for command operands, array fields,
 loop items and redirection targets. Those fields still undergo their

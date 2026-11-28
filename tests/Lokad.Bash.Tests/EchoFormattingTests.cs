@@ -62,23 +62,24 @@ public sealed class EchoFormattingTests
         var governor = new MemoryGovernor(0);
         using var output = governor.CreateScope();
 
-        Assert.True(payload.Equals(EchoFormatting.Format(operands, output)));
+        Assert.True(payload.Equals(EchoFormatting.Format(operands, escapesByDefault: false, output)));
         Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Theory]
-    [InlineData("410DFF")]
-    [InlineData("415C7A5C78475C315C")]
-    [InlineData("")]
-    public void EnabledEscapesCanLeaveOneOperandBorrowed(string operandHex)
+    [InlineData("-nne", false, "410DFF")]
+    [InlineData("-nne", false, "415C7A5C78475C315C")]
+    [InlineData("-nne", false, "")]
+    [InlineData("-n", true, "415C7AFF")]
+    public void EnabledEscapesCanLeaveOneOperandBorrowed(string option, bool escapesByDefault, string operandHex)
     {
         var raw = Convert.FromHexString("00" + operandHex + "00");
         ReadOnlyMemory<byte> operand = raw.AsMemory(1, raw.Length - 2);
-        ShellValue[] arguments = [ShellValue.FromText("-nne"), ShellValue.FromBytes(operand)];
+        ShellValue[] arguments = [ShellValue.FromText(option), ShellValue.FromBytes(operand)];
         var governor = new MemoryGovernor(0);
         using var owner = governor.CreateScope();
 
-        Assert.True(operand.Equals(EchoFormatting.Format(arguments, owner)));
+        Assert.True(operand.Equals(EchoFormatting.Format(arguments, escapesByDefault, owner)));
         Assert.Equal(0, governor.ReservedBytes);
     }
 
@@ -92,7 +93,7 @@ public sealed class EchoFormattingTests
         var governor = new MemoryGovernor(expected.Length);
         using var owner = governor.CreateScope();
 
-        Assert.Equal(expected, EchoFormatting.Format(arguments, owner).ToArray());
+        Assert.Equal(expected, EchoFormatting.Format(arguments, escapesByDefault: false, owner).ToArray());
         Assert.Equal(expected.Length, governor.ReservedBytes);
     }
 
@@ -135,7 +136,8 @@ public sealed class EchoFormattingTests
         var governor = new MemoryGovernor(payload.Length + 1);
         using (var owner = governor.CreateScope())
         {
-            Assert.Equal(payload, ShellValue.FromBytes(EchoFormatting.Format(operands, owner)).ToUtf8String());
+            var formatted = EchoFormatting.Format(operands, escapesByDefault: false, owner);
+            Assert.Equal(payload, ShellValue.FromBytes(formatted).ToUtf8String());
         }
         Assert.Equal(0, governor.ReservedBytes);
 
