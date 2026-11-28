@@ -59,7 +59,7 @@ internal struct RedirectionState
     /// <remarks>The parent retains the referenced handles through all stage completions.</remarks>
     internal readonly PipelineExitRedirections? CaptureForPipelineExit(int depth, bool useInherited, EvaluationMemory memory)
     {
-        var local = CaptureRestoration(depth, Depth, keepChangedFrames: false, memory);
+        var local = CaptureRestoration(depth, keepChangedFrames: false, memory);
         var inherited = useInherited ? _inheritedExitBindings : null;
         return local == null && inherited == null ? null
             : new PipelineExitRedirections(local?.Bindings, local?.RestoresInput == true, local?.RestoresOutput == true, inherited);
@@ -69,7 +69,7 @@ internal struct RedirectionState
     /// <remarks>The parent retains the committed change sets and handles until the child settles.</remarks>
     internal readonly InheritedExitBindings? CaptureInheritedExitBindings(int depth, EvaluationMemory memory)
     {
-        var local = CaptureRestoration(depth, Depth, keepChangedFrames: true, memory);
+        var local = CaptureRestoration(depth, keepChangedFrames: true, memory);
         return local is { } restore
             ? new InheritedExitBindings(restore.Bindings, restore.ChangedFrames, _inheritedExitBindings)
             : _inheritedExitBindings;
@@ -113,49 +113,60 @@ internal struct RedirectionState
         }
     }
 
-    private readonly CapturedRedirections? CaptureRestoration(int depth, int endDepth, bool keepChangedFrames, EvaluationMemory memory)
+    private readonly CapturedRedirections? CaptureRestoration(int depth, bool keepChangedFrames, EvaluationMemory memory)
     {
-        if ((uint)depth > (uint)endDepth || (uint)endDepth > (uint)Depth)
+        if ((uint)depth > (uint)Depth)
             throw new InvalidOperationException("The reader's redirection boundaries must be active.");
-        var remaining = endDepth - depth;
+        var remaining = Depth - depth;
         if (remaining == 0)
             return null;
 
-        var newer = _frames.Count - endDepth;
-        var changed = _changedDescriptors;
+        var frames = _frames;
+        var newestChanged = _changedDescriptors;
+        var changed = newestChanged;
         var restoresMappings = false;
         var restoresInput = false;
         var restoresOutput = false;
-        IReadOnlySet<LogicalDescriptor>[]? changedFrames = null;
-        var count = 0;
-        foreach (var frame in _frames)
+        var changedCount = 0;
+        foreach (var frame in frames)
         {
-            if (newer > 0)
-            {
-                newer--;
-                changed = frame.Changed;
-                continue;
-            }
             restoresMappings |= changed.Count != 0;
             restoresInput |= changed.Contains(LogicalDescriptor.StdIn);
             restoresOutput |= changed.Contains(LogicalDescriptor.StdOut);
             if (keepChangedFrames && changed.Count != 0)
-            {
-                if (changedFrames == null)
-                {
-                    memory.Charge(MemoryCapacity.ArrayBackingBytes<IReadOnlySet<LogicalDescriptor>>(remaining));
-                    changedFrames = new IReadOnlySet<LogicalDescriptor>[remaining];
-                }
-                changedFrames[count++] = changed;
-            }
+                changedCount++;
             if (--remaining == 0)
-                return restoresMappings && frame.Table is { } table
-                    ? new CapturedRedirections(table.Capture(), restoresInput, restoresOutput,
-                        changedFrames == null ? default : new ArraySegment<IReadOnlySet<LogicalDescriptor>>(changedFrames, 0, count))
-                    : null;
+            {
+                if (!restoresMappings || frame.Table is not { } table)
+                    return null;
+                var changedFrames = CaptureChangedFrames();
+                return new CapturedRedirections(table.Capture(), restoresInput, restoresOutput, changedFrames);
+            }
             changed = frame.Changed;
         }
         throw new InvalidOperationException("The reader's redirection boundary must be active.");
+
+        IReadOnlySet<LogicalDescriptor>[] CaptureChangedFrames()
+        {
+            if (changedCount == 0)
+                return [];
+            // Seek only through the oldest retained change. Untouched scopes contribute no entries.
+            memory.Charge(MemoryCapacity.ArrayBackingBytes<IReadOnlySet<LogicalDescriptor>>(changedCount));
+            var result = new IReadOnlySet<LogicalDescriptor>[changedCount];
+            var next = newestChanged;
+            var index = 0;
+            foreach (var frame in frames)
+            {
+                if (next.Count != 0)
+                {
+                    result[index++] = next;
+                    if (index == changedCount)
+                        break;
+                }
+                next = frame.Changed;
+            }
+            return result;
+        }
     }
 
     /// <summary>Restores borrowed bindings at child completion while retaining the child's handle ownership.</summary>
@@ -167,7 +178,7 @@ internal struct RedirectionState
     }
 
     private readonly record struct CapturedRedirections(DescriptorTable.Snapshot Bindings, bool RestoresInput, bool RestoresOutput,
-        ArraySegment<IReadOnlySet<LogicalDescriptor>> ChangedFrames);
+        IReadOnlySet<LogicalDescriptor>[] ChangedFrames);
 
     internal sealed class PipelineExitRedirections(DescriptorTable.Snapshot? local, bool restoresInput, bool restoresOutput,
         InheritedExitBindings? inherited)
@@ -185,7 +196,7 @@ internal struct RedirectionState
     }
 
     internal sealed class InheritedExitBindings(DescriptorTable.Snapshot bindings,
-        ArraySegment<IReadOnlySet<LogicalDescriptor>> changedFrames, InheritedExitBindings? enclosing)
+        IReadOnlySet<LogicalDescriptor>[] changedFrames, InheritedExitBindings? enclosing)
     {
         internal InheritedExitBindings? Enclosing { get; } = enclosing;
 
@@ -194,7 +205,7 @@ internal struct RedirectionState
     }
 
     private static void RestoreChangedDescriptors(DescriptorTable active, DescriptorTable.Snapshot bindings,
-        ArraySegment<IReadOnlySet<LogicalDescriptor>> changedFrames, EvaluationMemory memory)
+        IReadOnlySet<LogicalDescriptor>[] changedFrames, EvaluationMemory memory)
     {
         foreach (var changed in changedFrames)
             foreach (var descriptor in changed)

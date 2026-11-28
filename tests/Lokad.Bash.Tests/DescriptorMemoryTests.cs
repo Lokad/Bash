@@ -243,6 +243,68 @@ public sealed class DescriptorMemoryTests
         Assert.Equal(FileDescriptor.DevNull, redirected.Resolve(descriptor));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InheritedExitCaptureAdmitsOnlyChangedFrames(bool includeStandardError)
+    {
+        var descriptor = new LogicalDescriptor(10);
+        var outside = new LogicalDescriptor(15);
+        var root = new DescriptorTable();
+        root.Set(descriptor, FileDescriptor.StdOut);
+        var state = new RedirectionState(root);
+        var boundary = root.Clone();
+        boundary.Set(outside, FileDescriptor.DevNull);
+        state.Push(boundary, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor> { outside }, memory: null);
+
+        for (var index = 0; index < 256; index++)
+            state.Push(boundary.Clone(), new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), memory: null);
+        var reached = boundary.Clone();
+        reached.Set(descriptor, FileDescriptor.DevNull);
+        state.Push(reached, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor> { descriptor }, memory: null);
+        if (includeStandardError)
+        {
+            reached = reached.Clone();
+            reached.Set(LogicalDescriptor.StdErr, FileDescriptor.DevNull);
+            state.Push(reached, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor> { LogicalDescriptor.StdErr }, memory: null);
+        }
+
+        var expected = MemoryCapacity.ArrayBackingBytes<IReadOnlySet<LogicalDescriptor>>(includeStandardError ? 2 : 1);
+        var governor = new MemoryGovernor(expected);
+        var captureMemory = new EvaluationMemory(governor);
+        var inherited = Assert.IsType<RedirectionState.InheritedExitBindings>(state.CaptureInheritedExitBindings(1, captureMemory));
+        Assert.Equal(expected, governor.ReservedBytes);
+
+        var child = state.ForkForSubshell(inherited);
+        var childMemory = new EvaluationMemory(new MemoryGovernor(64 * 1024));
+        var restoration = Assert.IsType<RedirectionState.PipelineExitRedirections>(
+            child.CaptureForPipelineExit(0, useInherited: true, childMemory));
+        child.RestoreForPipelineExit(restoration, childMemory);
+
+        Assert.Equal(FileDescriptor.StdOut, child.CurrentTable?.Resolve(descriptor));
+        Assert.Equal(FileDescriptor.StdErr, child.CurrentTable?.StdErr);
+        Assert.Equal(FileDescriptor.DevNull, child.CurrentTable?.Resolve(outside));
+        Assert.Equal(FileDescriptor.DevNull, reached.Resolve(descriptor));
+        childMemory.Finish(retainVariables: false);
+        captureMemory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public void InheritedExitCaptureOfUntouchedFramesUsesNoAllowance()
+    {
+        var table = new DescriptorTable();
+        var state = new RedirectionState(table);
+        for (var index = 0; index < 128; index++)
+            state.Push(table.Clone(), new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), memory: null);
+        var governor = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(governor);
+
+        Assert.Null(state.CaptureInheritedExitBindings(0, memory));
+        Assert.Equal(0, governor.PeakBytes);
+        memory.Finish(retainVariables: false);
+    }
+
     [Fact]
     public void PreserveRefusalLeavesTheScopeActiveForOrdinaryRestoration()
     {
