@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `shopt -s globstar` and hosted `bash -O globstar` for recursive
+  pathname expansion through host directory listings.
 - Support `set -a`, `set -o allexport`, and hosted launch flags for automatic
   export of reached shell assignments and function definitions.
 - Support `shopt -u patsub_replacement` and hosted `bash +O patsub_replacement`

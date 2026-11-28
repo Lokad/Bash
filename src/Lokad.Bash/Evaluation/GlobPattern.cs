@@ -184,6 +184,15 @@ internal sealed class GlobPattern
 
     public GlobMaskSpan GetMask(Range component) => new(GetMaskMemory(component).Span);
 
+    /// <summary>Only two active stars forming an entire pathname component select recursive expansion.</summary>
+    internal bool IsRecursiveComponent(Range component)
+    {
+        if (!Pattern.AsSpan(component).SequenceEqual("**"))
+            return false;
+        var mask = GetMask(component);
+        return mask[0] == GlobMask.Active && mask[1] == GlobMask.Active;
+    }
+
     internal ReadOnlyMemory<byte> GetMaskMemory(Range component) =>
         MetaMask.Memory.IsEmpty ? default : MetaMask.Memory[component];
 }

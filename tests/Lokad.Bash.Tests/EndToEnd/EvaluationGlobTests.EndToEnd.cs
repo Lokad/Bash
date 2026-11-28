@@ -6,6 +6,75 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationGlobTestsEndToEnd
 {
+    [Theory]
+    [InlineData("**/leaf", "<a/b/b/leaf><a/b/leaf><a/leaf><leaf>")]
+    [InlineData("**//leaf", "<a/b/b/leaf><a/b/leaf><a/leaf>")]
+    [InlineData("**/", "<a/><a/b/><a/b/b/><empty/>")]
+    [InlineData("empty/**", "<empty/>")]
+    [InlineData("a/**/**", "<a><a/b><a/b/b><a/b/b/leaf><a/b/leaf><a/leaf>")]
+    [InlineData("a/**/b/**/leaf", "<a/b/b/leaf><a/b/b/leaf><a/b/leaf>")]
+    [InlineData("a/**//**/", "<a/><a/b/><a/b/><a/b/b/><a/b/b/><a/b/b/>")]
+    [InlineData("a//**//leaf", "<a//b/b/leaf><a//b/leaf><a//leaf>")]
+    [InlineData("a/\"*\"*/leaf", "<a/**/leaf>")]
+    [InlineData("$wild/leaf", "<a/b/b/leaf><a/b/leaf><a/leaf><leaf>")]
+    [InlineData("\"$wild\"/leaf", "<**/leaf>")]
+    [InlineData("***/leaf", "<a/leaf>")]
+    public async Task GlobstarUsesActiveComponentsAndPreservesBashSpellings(string pattern, string expected)
+    {
+        var host = EndToEndHarness.BuildTree(["/a", "/a/b", "/a/b/b", "/empty"],
+            [("/leaf", ""), ("/a/leaf", ""), ("/a/b/leaf", ""), ("/a/b/b/leaf", "")]);
+        var result = await EvaluationTestHelper.RunAsync(
+            "shopt -s globstar\nwild='**'\nprintf '<%s>' " + pattern, tree: host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task GlobstarSharesSuffixLookupsAndUsesReachedOptions()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/a", "/a/b", "/a/.hidden"],
+            [("/a/leaf.txt", ""), ("/a/b/leaf.txt", ""), ("/a/.hidden/leaf.txt", ""), ("/leaf.txt", "")]);
+        var directories = new List<ShellPath>();
+        host.BeforeListDirectory = directories.Add;
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s globstar
+            GLOBIGNORE='a/b/leaf.txt'
+            printf '<%s>' **/*.txt
+            """, tree: host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<a/.hidden/leaf.txt><a/leaf.txt><leaf.txt>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(new[] { "/", "/a", "/a/.hidden", "/a/b" },
+            directories.Select(path => path.ToString()).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task GlobstarUsesShellStateInFunctionsSubshellsAndFreshLaunches()
+    {
+        var host = EndToEndHarness.BuildTree([("/leaf", ""), ("/a/b/leaf", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -p globstar
+            shopt -s globstar
+            ( shopt -u globstar; printf 'child:<%s>\n' **/leaf )
+            printf 'parent:<%s>\n' **/leaf
+            f() { local -; shopt -u globstar; }
+            f
+            shopt -p globstar
+            bash -O globstar -c 'printf "launch:<%s>\n" **/leaf'
+            shopt -s globstar
+            export BASHOPTS
+            bash +O globstar -c 'printf "import:<%s>\n" **/leaf'
+            """, tree: host);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("shopt -u globstar\nchild:<**/leaf>\nparent:<a/b/leaf>\nparent:<leaf>\nshopt -u globstar\n"
+            + "launch:<a/b/leaf>\nlaunch:<leaf>\nimport:<a/b/leaf>\nimport:<leaf>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task NoglobSkipsPathnameLookupsAndKeepsWordAndPatternExpansion()
     {

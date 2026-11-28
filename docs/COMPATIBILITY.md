@@ -918,7 +918,7 @@ followed by usage. It returns status 2 during validation or status 1
 during application, preserving any changes already applied. After `-`,
 `--`, or the first positional operand, `--help` is a positional argument.
 
-`shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`,
+`shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`, `globstar`,
 `inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, `nullglob`,
 `patsub_replacement`, `shift_verbose`, `sourcepath`, and `xpg_echo`.
 `-p` prints reusable settings and `-q` suppresses listing output.
@@ -988,6 +988,14 @@ target. `failglob` takes precedence, reports the unmatched pattern, and ends
 the reached command unit. With errexit off, the surrounding script reader
 can resume with status 1. The pathname options persist across a function
 return, including after `local -`.
+
+`globstar` is off at startup. With it enabled, a pathname component of
+two unquoted stars can match across directories, including zero intervening
+directories before the next component. A trailing slash selects directories.
+Traversal uses host directory listings and does not recursively descend
+through discovered symbolic links. `dotglob` controls traversal into hidden
+directories. An inherited subshell starts with the parent's setting. A fresh
+hosted launch can enable it with `-O globstar` or an exported `BASHOPTS`.
 
 `GLOBIGNORE` filters the full paths returned by pathname expansion before
 the no-match policy runs. Its colon-delimited shell patterns match the

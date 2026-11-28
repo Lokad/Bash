@@ -229,6 +229,76 @@ public sealed class GlobPatternTests
         }
     }
 
+    [Theory]
+    [InlineData("**/leaf", "a/leaf|a/sub/leaf|leaf")]
+    [InlineData("a/**/leaf", "a/leaf|a/link/leaf|a/sub/back/leaf|a/sub/leaf")]
+    [InlineData("**//leaf", "a/leaf|a/link/leaf|a/sub/back/leaf|a/sub/leaf|link/leaf")]
+    [InlineData("**/", "a/|a/link/|a/sub/|a/sub/back/|link/")]
+    [InlineData("**/link/leaf", "a/link/leaf|link/leaf")]
+    [InlineData("link/**/leaf", "link/leaf|link/link/leaf|link/sub/back/leaf|link/sub/leaf")]
+    public async Task GlobstarListsLinkTargetsOnlyForReachedSuffixes(string spelling, string expected)
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(spelling), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        using (var globMemory = new MemoryCapacity(scope, 0))
+        {
+            var glob = new GlobEvaluation(pattern, ShellPath.Root, globMemory, CancellationToken.None,
+                ShellOptions.Default | ShellOption.Globstar);
+            Assert.Equal(expected.Split('|'), await glob.EvaluateAsync(new RecursiveLinkListing()));
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class RecursiveLinkListing : IFileTester
+    {
+        private static readonly IReadOnlyList<DirectoryEntry> Root =
+            [new("a", FilePathKind.Directory), new("leaf", FilePathKind.File), new("link", FilePathKind.SymbolicLink)];
+
+        private static readonly IReadOnlyList<DirectoryEntry> Branch =
+            [new("sub", FilePathKind.Directory), new("leaf", FilePathKind.File), new("link", FilePathKind.SymbolicLink)];
+
+        private static readonly IReadOnlyList<DirectoryEntry> Subdirectory =
+            [new("leaf", FilePathKind.File), new("back", FilePathKind.SymbolicLink)];
+
+        public Task<DirectoryListingResult> ListDirectoryAsync(string path) =>
+            Task.FromResult(DirectoryListingResult.Success(path switch
+            {
+                "/" => Root,
+                "/a" or "/link" or "/a/sub/back" or "/link/sub/back" => Branch,
+                "/a/sub" or "/a/link" or "/link/sub" or "/link/link" => Subdirectory,
+                _ => throw new InvalidOperationException("Unexpected recursive listing: " + path)
+            }));
+
+        public Task<bool> IsDirectoryAsync(string path) =>
+            Task.FromResult(path is "/link" or "/a/link" or "/a/sub/back");
+    }
+
+    [Fact]
+    public async Task GlobstarChargesPendingPathsBeforeListingThem()
+    {
+        var governor = new MemoryGovernor(16 * 1024);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText("**/leaf"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        var entries = Enumerable.Range(0, 4096)
+            .Select(index => new DirectoryEntry($"branch_{index:D4}", FilePathKind.Directory)).ToArray();
+        var listing = new GlobListing(path => path == "/" ? entries
+            : throw new InvalidOperationException("A pending path was listed before admission."));
+        using (var globMemory = new MemoryCapacity(scope, 0))
+        {
+            var glob = new GlobEvaluation(pattern, ShellPath.Root, globMemory, CancellationToken.None,
+                ShellOptions.Default | ShellOption.Globstar);
+            await Assert.ThrowsAsync<MemoryBudgetExceededException>(() => glob.EvaluateAsync(listing));
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Fact]
     public async Task LongLiteralPrefixUsesOneLookupWithinLinearAllowance()
     {

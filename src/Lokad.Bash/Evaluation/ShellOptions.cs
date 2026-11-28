@@ -29,7 +29,8 @@ internal enum ShellOption
     ShiftVerbose = 16384,
     LocalVariableInheritance = 32768,
     PatsubReplacement = 65536,
-    Failglob = 131072
+    Failglob = 131072,
+    Globstar = 262144
 }
 
 internal static class ShellOptions
@@ -60,6 +61,7 @@ internal static class ShellOptions
         new(ShellValue.FromText("dotglob"), ShellOption.Dotglob),
         new(ShellValue.FromText("failglob"), ShellOption.Failglob),
         new(ShellValue.FromText("globskipdots"), ShellOption.GlobSkipDots),
+        new(ShellValue.FromText("globstar"), ShellOption.Globstar),
         new(ShellValue.FromText("inherit_errexit"), ShellOption.InheritErrexit),
         new(ShellValue.FromText("localvar_inherit"), ShellOption.LocalVariableInheritance),
         new(ShellValue.FromText("nocaseglob"), ShellOption.NoCaseGlob),

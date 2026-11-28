@@ -92,14 +92,42 @@ internal sealed class GlobEvaluation
         List<Candidate> candidates = [];
         List<Candidate> matches = [];
         var firstWildcardStart = component.Start.Value;
+        var sortPrefixLength = firstWildcardStart;
         var prefix = PreparePrefix(firstWildcardStart, out var candidatePathBytes);
         _memory.PrepareListCapacity(candidates, 1);
         candidates.Add(prefix);
         var trailingSlash = text.EndsWith('/');
+        var globstar = (_options & ShellOption.Globstar) != 0;
+        var dotglob = (_options & ShellOption.Dotglob) != 0;
         while (true)
         {
             _cancellationToken.ThrowIfCancellationRequested();
             var hasNext = _pattern.TryReadPathComponent(ref cursor, out var next);
+            var recursive = globstar && _pattern.IsRecursiveComponent(component);
+            var leadingRecursion = recursive && component.Start.Value == 0;
+            var adjacentRecursion = false;
+            while (recursive && hasNext && _pattern.IsRecursiveComponent(next)
+                && (leadingRecursion || next.Start.Value == component.End.Value + 1))
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                adjacentRecursion = true;
+                component = next;
+                hasNext = _pattern.TryReadPathComponent(ref cursor, out next);
+            }
+
+            // Use the same directory listing for recursive descent and the following ordinary component.
+            var terminalRecursion = recursive && !hasNext;
+            var separateRecursion = recursive && hasNext && _pattern.IsRecursiveComponent(next);
+            // A leading **// uses the directory results without a current-directory placeholder.
+            var includeRecursiveRoot = !leadingRecursion || !hasNext || next.Start.Value == component.End.Value + 1;
+            var matchLinkContents = recursive && !terminalRecursion && (!leadingRecursion || !includeRecursiveRoot);
+            var collectDirectories = recursive && hasNext
+                && (separateRecursion || text.AsSpan(next) is "." or "..");
+            if (recursive && hasNext && !collectDirectories)
+            {
+                component = next;
+                hasNext = _pattern.TryReadPathComponent(ref cursor, out next);
+            }
             var markDirectory = !hasNext && trailingSlash;
             var finalFilter = hasNext ? null : ignorePatterns;
 
@@ -136,7 +164,7 @@ internal sealed class GlobEvaluation
             {
                 var requireDirectory = hasNext || markDirectory;
                 var startsWithDot = name.Span[0] == '.';
-                var matchDot = startsWithDot || (_options & ShellOption.Dotglob) != 0;
+                var matchDot = startsWithDot || dotglob;
                 var hasWildcard = component.Start.Value == firstWildcardStart
                     || GlobPattern.RequiresExpansion(name.Span, _pattern.GetMask(component));
                 var matchSpecialEntries = startsWithDot && hasWildcard && (_options & ShellOption.GlobSkipDots) == 0;
@@ -146,51 +174,108 @@ internal sealed class GlobEvaluation
                 {
                     var matchCurrent = matchSpecialEntries && matcher.Matches(".", _cancellationToken);
                     var matchParent = matchSpecialEntries && matcher.Matches("..", _cancellationToken);
-                    foreach (var parent in candidates)
+                    using var traversalMemory = recursive ? new MemoryCapacity(_memory.Budget, 0) : null;
+                    var pending = recursive ? new List<PendingDirectory>() : null;
+                    foreach (var root in candidates)
                     {
-                        _cancellationToken.ThrowIfCancellationRequested();
-                        var listing = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
-                        _cancellationToken.ThrowIfCancellationRequested();
-                        if (listing.Error != null)
-                            continue;
-
-                        // A successful listing establishes the directory even when the host omits dot entries.
-                        if (matchCurrent)
-                            matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, ".",
-                                hasNext ? AppendPath(parent.ListPath, ".", markDirectory: false) : string.Empty,
-                                markDirectory, finalFilter));
-                        if (matchParent)
-                            matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, "..",
-                                hasNext ? AppendPath(parent.ListPath, "..", markDirectory: false) : string.Empty,
-                                markDirectory, finalFilter));
-                        foreach (var entry in listing.Entries)
+                        var parent = root;
+                        long parentOwnedBytes = 0;
+                        var startsAtRoot = true;
+                        var canDescend = recursive;
+                        if (adjacentRecursion && terminalRecursion && !markDirectory && root.OutputPath.Length > 1
+                            && root.OutputPath.EndsWith('/'))
+                        {
+                            var length = root.OutputPath.Length - 1;
+                            parentOwnedBytes = TextBytes(length);
+                            _memory.Grow(parentOwnedBytes);
+                            parent = parent with { OutputPath = root.OutputPath[..length] };
+                            sortPrefixLength = Math.Min(sortPrefixLength, length);
+                        }
+                        while (true)
                         {
                             _cancellationToken.ThrowIfCancellationRequested();
-                            var entryName = entry.Name.AsSpan();
-                            if (entryName.IsEmpty || entryName[0] == '.' && (!matchDot || entryName is "." or ".."))
-                                continue;
-                            if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
-                                continue;
-                            var matchesName = hasWildcard ? matcher.Matches(entryName, _cancellationToken) : name.Span.SequenceEqual(entryName);
-                            if (!matchesName)
-                                continue;
-
-                            var checkLink = requireDirectory && entry.Kind == FilePathKind.SymbolicLink;
-                            var lookupPath = hasNext || checkLink
-                                ? AppendPath(parent.ListPath, entry.Name, markDirectory: false) : string.Empty;
-                            if (checkLink)
+                            var listing = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
+                            _cancellationToken.ThrowIfCancellationRequested();
+                            if (listing.Error == null)
                             {
-                                var isDirectory = await tester.IsDirectoryAsync(lookupPath).ConfigureAwait(false);
-                                if (!hasNext || !isDirectory)
+                                var matchHere = !startsAtRoot || includeRecursiveRoot;
+                                if (collectDirectories && matchHere
+                                    || terminalRecursion && startsAtRoot && parent.OutputPath.Length != 0)
                                 {
-                                    _memory.Resize(_memory.Bytes - TextBytes(lookupPath.Length));
-                                    lookupPath = string.Empty;
+                                    var current = RetainCurrentDirectory(parent, collectDirectories, markDirectory || separateRecursion);
+                                    matchPathBytes = checked(matchPathBytes + AddCandidate(matches, current, finalFilter));
                                 }
-                                if (!isDirectory)
-                                    continue;
+
+                                // A successful listing establishes the directory even when the host omits dot entries.
+                                if (matchHere && matchCurrent)
+                                    matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, ".",
+                                        hasNext ? AppendPath(parent.ListPath, ".", markDirectory: false) : string.Empty,
+                                        markDirectory, finalFilter));
+                                if (matchHere && matchParent)
+                                    matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, "..",
+                                        hasNext ? AppendPath(parent.ListPath, "..", markDirectory: false) : string.Empty,
+                                        markDirectory, finalFilter));
+
+                                foreach (var entry in listing.Entries)
+                                {
+                                    _cancellationToken.ThrowIfCancellationRequested();
+                                    var entryName = entry.Name.AsSpan();
+                                    if (entryName.IsEmpty || entryName is "." or "..")
+                                        continue;
+                                    string? walkedOutput = null;
+                                    if (canDescend && (entryName[0] != '.' || dotglob) && pending != null
+                                        && (entry.Kind == FilePathKind.Directory
+                                            || matchLinkContents && entry.Kind == FilePathKind.SymbolicLink))
+                                    {
+                                        traversalMemory?.PrepareListCapacity(pending, 1);
+                                        var walkedLookup = AppendPath(parent.ListPath, entry.Name, markDirectory: false);
+                                        walkedOutput = AppendPath(parent.OutputPath, entry.Name, markDirectory: false);
+                                        pending.Add(new PendingDirectory(new Candidate(walkedLookup, walkedOutput),
+                                            entry.Kind == FilePathKind.Directory));
+                                    }
+                                    if (!matchHere || collectDirectories || entryName[0] == '.' && !matchDot)
+                                        continue;
+                                    if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
+                                        continue;
+                                    var matchesName = terminalRecursion || (hasWildcard
+                                        ? matcher.Matches(entryName, _cancellationToken) : name.Span.SequenceEqual(entryName));
+                                    if (!matchesName)
+                                        continue;
+
+                                    var checkLink = requireDirectory && entry.Kind == FilePathKind.SymbolicLink;
+                                    var lookupPath = hasNext || checkLink
+                                        ? AppendPath(parent.ListPath, entry.Name, markDirectory: false) : string.Empty;
+                                    if (checkLink)
+                                    {
+                                        var isDirectory = await tester.IsDirectoryAsync(lookupPath).ConfigureAwait(false);
+                                        if (!hasNext || !isDirectory)
+                                        {
+                                            _memory.Resize(_memory.Bytes - TextBytes(lookupPath.Length));
+                                            lookupPath = string.Empty;
+                                        }
+                                        if (!isDirectory)
+                                            continue;
+                                    }
+                                    var outputPath = markDirectory ? null : walkedOutput;
+                                    if (outputPath == null)
+                                        outputPath = AppendPath(parent.OutputPath, entry.Name, markDirectory);
+                                    else
+                                        _memory.Grow(TextBytes(outputPath.Length));
+                                    matchPathBytes = checked(matchPathBytes
+                                        + AddCandidate(matches, new Candidate(lookupPath, outputPath), finalFilter));
+                                }
                             }
-                            matchPathBytes = checked(matchPathBytes
-                                + AddMatch(matches, parent.OutputPath, entry.Name, lookupPath, markDirectory, finalFilter));
+
+                            if (parentOwnedBytes != 0)
+                                _memory.Resize(_memory.Bytes - parentOwnedBytes);
+                            if (pending is not { Count: > 0 })
+                                break;
+                            var reached = pending[^1];
+                            pending.RemoveAt(pending.Count - 1);
+                            parent = reached.Path;
+                            parentOwnedBytes = parent.PathBytes;
+                            canDescend = reached.CanDescend;
+                            startsAtRoot = false;
                         }
                     }
                 }
@@ -218,7 +303,7 @@ internal sealed class GlobEvaluation
                     outputPathBytes = checked(outputPathBytes + TextBytes(path.Length));
                 }
                 // Skip the shared literal prefix, which is empty or ends at a path separator.
-                result.AsSpan().Sort(new OutputPathOrder(firstWildcardStart));
+                result.AsSpan().Sort(new OutputPathOrder(sortPrefixLength));
                 _cancellationToken.ThrowIfCancellationRequested();
                 ReleaseCandidateLists();
                 _memory.Resize(checked(baseline + outputPathBytes + resultBytes));
@@ -245,9 +330,22 @@ internal sealed class GlobEvaluation
     }
 
     private long AddMatch(List<Candidate> matches, string outputPrefix, string name, string lookupPath, bool markDirectory,
-        GlobIgnorePatterns? filter)
+        GlobIgnorePatterns? filter) => AddCandidate(matches, new Candidate(lookupPath, AppendPath(outputPrefix, name, markDirectory)), filter);
+
+    private Candidate RetainCurrentDirectory(Candidate parent, bool hasNext, bool markDirectory)
     {
-        var match = new Candidate(lookupPath, AppendPath(outputPrefix, name, markDirectory));
+        var lookup = hasNext ? parent.ListPath : string.Empty;
+        var output = parent.OutputPath;
+        _memory.Grow(TextBytes(lookup.Length));
+        if (markDirectory && !output.EndsWith('/'))
+            output = AppendPath(output, string.Empty, markDirectory: false);
+        else
+            _memory.Grow(TextBytes(output.Length));
+        return new Candidate(lookup, output);
+    }
+
+    private long AddCandidate(List<Candidate> matches, Candidate match, GlobIgnorePatterns? filter)
+    {
         if (filter?.Excludes(match.OutputPath, _cancellationToken) == true)
         {
             _memory.Resize(_memory.Bytes - match.PathBytes);
@@ -309,6 +407,8 @@ internal sealed class GlobEvaluation
     }
 
     private static long TextBytes(int length) => length == 0 ? 0 : 32L + 2L * length;
+
+    private readonly record struct PendingDirectory(Candidate Path, bool CanDescend);
 
     private readonly record struct Candidate(string ListPath, string OutputPath)
     {
