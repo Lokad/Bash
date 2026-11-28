@@ -407,9 +407,24 @@ internal sealed class EvaluationState
     internal void SetOption(ShellOption option, bool enabled) =>
         EnabledOptions = enabled ? EnabledOptions | option : EnabledOptions & ~option;
 
+    private readonly record struct BashOptionProjection(ShellOption Flags, ShellValue Value, long OwnedBytes);
+    private BashOptionProjection _bashOptionProjection;
+
+    /// <summary>Reads the current shopt values and formats the projection only when its flags change.</summary>
+    internal ShellValue ReadBashOptions()
+    {
+        var flags = ShellOptions.SelectBashFlags(EnabledOptions);
+        if (_bashOptionProjection.Flags != flags)
+        {
+            var value = ShellOptions.FormatBashBinding(flags, _shellMemory, out var ownedBytes);
+            _bashOptionProjection = new(flags, value, ownedBytes);
+        }
+        return _bashOptionProjection.Value;
+    }
+
     internal ShellValue GlobIgnore { get; private set; }
 
-    internal long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore);
+    private long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore);
 
     internal void RefreshGlobIgnore(ShellValue? selected)
     {
@@ -456,6 +471,8 @@ internal sealed class EvaluationState
     internal long RetainedDirectoryStackBytes => checked(EstimateDirectoryStackBytes(_directoryStack.Capacity)
         + _ownedDirectoryPathBytes + (_directoryListing?.EstimatedMemoryBytes ?? 0)
         + 24L * (_directoryListingChangedSlots?.EnsureCapacity(0) ?? 0));
+    internal long RetainedShellStorageBytes =>
+        checked(RetainedDirectoryStackBytes + RetainedGlobIgnoreBytes + _bashOptionProjection.OwnedBytes);
 
     private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
     private int DirectoryStackSlot(int index) => _directoryStack.Count - 1 - index;
@@ -845,6 +862,8 @@ internal sealed class EvaluationState
             FunctionBraceLine = FunctionBraceLine,
             EnabledOptions = kind == ShellForkKind.CommandSubstitution && !InheritErrexit
                 ? EnabledOptions & ~ShellOption.Errexit : EnabledOptions,
+            // The enclosing evaluation retains the immutable value through this fork.
+            _bashOptionProjection = _bashOptionProjection with { OwnedBytes = 0 },
             GlobIgnore = GlobIgnore,
             UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,

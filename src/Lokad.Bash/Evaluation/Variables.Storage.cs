@@ -171,7 +171,13 @@ public sealed partial class Variables
     {
         public override ShellValue Value
         {
-            get => ShellOptions.FormatBinding(Shell.VisibleShellState?.EnabledOptions ?? ShellOptions.Default, setOptions);
+            get
+            {
+                var state = Shell.VisibleShellState;
+                return setOptions
+                    ? ShellOptions.SetBinding(state?.EnabledOptions ?? ShellOptions.Default)
+                    : state?.ReadBashOptions() ?? ShellOptions.DefaultBashBinding;
+            }
             set { } // Startup interprets imported option lists separately from scalar assignment.
         }
 

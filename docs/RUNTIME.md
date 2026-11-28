@@ -404,9 +404,14 @@ snapshots alongside the ordinary shell state.
 operand preparation and dispatch. It belongs to the shell state and persists
 on ordinary function return.
 The two readonly option bindings project immutable renderings of the
-same enabled-option flags. Forks bind them to the child shell state.
-An exported list is captured with the other command environment values
-and applies recognized flags when the host constructs an inherited shell.
+same enabled-option flags. Each shell retains its most recently read
+`BASHOPTS` projection and formats a new value on demand after a change
+to those flags. Empty projections use the shared empty value, and
+single-option projections borrow the registry's bytes. A fork can
+borrow its parent's immutable projection until it
+reads a different set of flags. An exported list is captured with the
+other command environment values and applies recognized flags when the
+host constructs an inherited shell.
 
 Loop flow is settled at the loop that owns its remaining level. In while/until
 conditions, the condition gate precedes body suppression: a closed gate retains

@@ -34,8 +34,7 @@ public sealed partial class Evaluation : IFileTester
     private long _savedShellStateBytes;
 
     internal long RetainedDescriptorMemoryBytes => checked(_savedDescriptorMemoryBytes + _state.RetainedDescriptorMemoryBytes);
-    internal long RetainedShellStateBytes =>
-        checked(_savedShellStateBytes + _state.RetainedDirectoryStackBytes + _state.RetainedGlobIgnoreBytes);
+    internal long RetainedShellStateBytes => checked(_savedShellStateBytes + _state.RetainedShellStorageBytes);
     /// <summary> Holds the active variable state; temporarily replaced while evaluating subshells. </summary>
     private Variables _vars;
     /// <summary> Stores the base STDIN descriptor for command invocations. </summary>
@@ -901,7 +900,7 @@ public sealed partial class Evaluation : IFileTester
         OperationError? closeError = null;
 
         var savedDescriptorBytes = parentState.RetainedDescriptorMemoryBytes;
-        var savedShellStateBytes = checked(parentState.RetainedDirectoryStackBytes + parentState.RetainedGlobIgnoreBytes);
+        var savedShellStateBytes = parentState.RetainedShellStorageBytes;
         _savedDescriptorMemoryBytes = checked(_savedDescriptorMemoryBytes + savedDescriptorBytes);
         _savedShellStateBytes = checked(_savedShellStateBytes + savedShellStateBytes);
         _state = childState;

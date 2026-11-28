@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -25,9 +25,6 @@ internal static class ShellOptions
 {
     internal const ShellOption Fixed = ShellOption.BraceExpand | ShellOption.Pipefail;
     internal const ShellOption Default = Fixed | ShellOption.GlobSkipDots;
-    private const ShellOption BashMask = ShellOption.InheritErrexit | ShellOption.LocalVariableInheritance
-        | ShellOption.Dotglob | ShellOption.Failglob | ShellOption.Nullglob | ShellOption.NoCaseGlob | ShellOption.NoCaseMatch
-        | ShellOption.GlobSkipDots;
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
@@ -52,10 +49,11 @@ internal static class ShellOptions
         new(ShellValue.FromText("nullglob"), ShellOption.Nullglob)
     ];
 
+    private static readonly ShellOption BashMask = CollectBashFlags();
     private static readonly ShellValue[] SetValues =
-        [Format(SetOptions, Fixed), Format(SetOptions, Fixed | ShellOption.Errexit)];
+        [Format(SetOptions, Fixed, memory: null, out _), Format(SetOptions, Fixed | ShellOption.Errexit, memory: null, out _)];
 
-    private static readonly ShellValue[] BashValues = BuildBashValues();
+    internal static ShellValue DefaultBashBinding { get; } = FormatBashBinding(SelectBashFlags(Default), memory: null, out _);
 
     internal static IReadOnlyList<Entry> Names(bool setOptions) => setOptions ? SetOptions : BashOptions;
 
@@ -67,9 +65,12 @@ internal static class ShellOptions
         return ShellOption.None;
     }
 
-    internal static ShellValue FormatBinding(ShellOption enabled, bool setOptions) => setOptions
-        ? SetValues[(int)(enabled & ShellOption.Errexit)]
-        : BashValues[(int)(enabled & BashMask) >> 1];
+    internal static ShellValue SetBinding(ShellOption enabled) => SetValues[(int)(enabled & ShellOption.Errexit)];
+
+    internal static ShellOption SelectBashFlags(ShellOption enabled) => enabled & BashMask;
+
+    internal static ShellValue FormatBashBinding(ShellOption enabled, EvaluationMemory? memory, out long ownedBytes) =>
+        Format(BashOptions, enabled, memory, out ownedBytes);
 
     internal static ShellOption ParseImported(ReadOnlySpan<byte> value, bool setOptions)
     {
@@ -79,16 +80,46 @@ internal static class ShellOptions
         return enabled;
     }
 
-    private static ShellValue Format(Entry[] entries, ShellOption enabled) =>
-        ShellValue.FromText(string.Join(':', entries.Where(entry => (enabled & entry.Option) != 0)
-            .Select(entry => entry.Name.ToUtf8String())));
-
-    private static ShellValue[] BuildBashValues()
+    private static ShellValue Format(Entry[] entries, ShellOption enabled, EvaluationMemory? memory, out long ownedBytes)
     {
-        // The mutable shopt flags occupy consecutive bits above errexit.
-        var values = new ShellValue[((int)BashMask >> 1) + 1];
-        for (var index = 0; index < values.Length; index++)
-            values[index] = Format(BashOptions, (ShellOption)(index << 1));
-        return values;
+        ownedBytes = 0;
+        var first = ShellValue.Empty;
+        var length = 0;
+        foreach (var entry in entries)
+        {
+            if ((enabled & entry.Option) == 0)
+                continue;
+            if (length == 0)
+                first = entry.Name;
+            else
+                length++;
+            length += entry.Name.Bytes.Length;
+        }
+        if (length == first.Bytes.Length)
+            return first;
+
+        ownedBytes = MemoryCapacity.ArrayBackingBytes<byte>(length);
+        if (memory is { HasCommand: true })
+            memory.PrepareRetainedStorage(ownedBytes);
+        var bytes = new byte[length];
+        var offset = 0;
+        foreach (var entry in entries)
+        {
+            if ((enabled & entry.Option) == 0)
+                continue;
+            if (offset != 0)
+                bytes[offset++] = (byte)':';
+            entry.Name.Bytes.Span.CopyTo(bytes.AsSpan(offset));
+            offset += entry.Name.Bytes.Length;
+        }
+        return ShellValue.FromBytes(bytes);
+    }
+
+    private static ShellOption CollectBashFlags()
+    {
+        var options = ShellOption.None;
+        foreach (var entry in BashOptions)
+            options |= entry.Option;
+        return options;
     }
 }

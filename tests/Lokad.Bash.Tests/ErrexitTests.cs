@@ -125,6 +125,70 @@ public sealed class ErrexitTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BashOptionsProjectionReusesReadsAndDoesNotBorrowAChangedChildValue(bool inlineSubshell)
+    {
+        var script = Parser.Parse(":");
+        var parent = new EvaluationState(script, ShellPath.Root, inheritedDescriptorTable: null);
+        var memory = new EvaluationMemory(new MemoryGovernor(16 * 1024));
+        var parentBaseline = parent.RetainedShellStorageBytes;
+
+        parent.SetOption(ShellOption.Dotglob, true);
+        Assert.Equal(parentBaseline, parent.RetainedShellStorageBytes);
+        var initial = parent.ReadBashOptions();
+        var owned = MemoryCapacity.ArrayBackingBytes<byte>(initial.Bytes.Length);
+        Assert.Equal("dotglob:globskipdots"u8.ToArray(), initial.Bytes.ToArray());
+        Assert.Equal(owned, parent.RetainedShellStorageBytes - parentBaseline);
+
+        var child = inlineSubshell ? parent.CloneForSubshell(memory, inheritedExitBindings: null)
+            : parent.CloneForNestedEvaluation(script, EvaluationDescriptorSetup.Standard, ShellForkKind.CommandSubstitution,
+                memory, inheritedExitBindings: null);
+        var childBaseline = child.RetainedShellStorageBytes;
+        Assert.True(initial.Bytes.Equals(child.ReadBashOptions().Bytes));
+        Assert.Equal(childBaseline, child.RetainedShellStorageBytes);
+
+        child.SetOption(ShellOption.Nullglob, true);
+        var changed = child.ReadBashOptions();
+        child.SetOption(ShellOption.Errexit, true);
+        Assert.True(changed.Bytes.Equals(child.ReadBashOptions().Bytes));
+        Assert.Equal("dotglob:globskipdots:nullglob"u8.ToArray(), changed.Bytes.ToArray());
+        Assert.Equal(MemoryCapacity.ArrayBackingBytes<byte>(changed.Bytes.Length), child.RetainedShellStorageBytes - childBaseline);
+        Assert.True(initial.Bytes.Equals(parent.ReadBashOptions().Bytes));
+        Assert.Equal(owned, parent.RetainedShellStorageBytes - parentBaseline);
+        memory.Finish(retainVariables: false);
+    }
+
+    [Fact]
+    public async Task ExportedBashOptionsKeepTheBytesCapturedBeforeLaterOptionChanges()
+    {
+        var evaluation = new Eval(Parser.Parse("""
+            shopt -s dotglob
+            export BASHOPTS
+            inspect
+            shopt -u dotglob
+            shopt -s failglob
+            inspect
+            shopt -s nullglob
+            """));
+
+        var first = Assert.IsType<RunCommand>(await evaluation.GetNextStep());
+        var firstOptions = Assert.Single(first.Command.Environment, entry => entry.Name == "BASHOPTS").Value;
+        first.SetResult(new CommandExecutionResult.Completed(0));
+
+        var second = Assert.IsType<RunCommand>(await evaluation.GetNextStep());
+        var secondOptions = Assert.Single(second.Command.Environment, entry => entry.Name == "BASHOPTS").Value;
+        second.SetResult(new CommandExecutionResult.Completed(0));
+
+        Assert.Null(await evaluation.GetNextStep());
+        var lastOptions = evaluation.Variables["BASHOPTS"];
+        Assert.Equal("dotglob:globskipdots", firstOptions.ToUtf8String());
+        Assert.Equal("failglob:globskipdots", secondOptions.ToUtf8String());
+        Assert.Equal("failglob:globskipdots:nullglob", lastOptions.ToUtf8String());
+        Assert.True(lastOptions.Bytes.Equals(evaluation.Variables["BASHOPTS"].Bytes));
+    }
+
+    [Theory]
     [InlineData("set", "BASHOPTS=dotglob:globskipdots", "SHELLOPTS=braceexpand:pipefail")]
     [InlineData("declare -p", "declare -r BASHOPTS=\"dotglob:globskipdots\"", "declare -r SHELLOPTS=\"braceexpand:pipefail\"")]
     public async Task OperandFreeVariableListingsIncludeTheLiveOptions(string command, string bashOptions, string setOptions)
