@@ -71,17 +71,35 @@ public static partial class ArithmeticEvaluation
 
     private static bool IsArithmeticBlank(byte value) => value is (byte)' ' or (byte)'\t' or (byte)'\n';
 
+    private static int SkipArithmeticBlanks(ReadOnlySpan<byte> bytes, int start, CancellationToken cancellationToken)
+    {
+        const int MaximumScanBytes = 4096;
+        if (start >= bytes.Length || !IsArithmeticBlank(bytes[start]))
+            return start;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        start++;
+        while (start < bytes.Length && IsArithmeticBlank(bytes[start]))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = Math.Min(bytes.Length - start, MaximumScanBytes);
+            var next = bytes.Slice(start, length).IndexOfAnyExcept((byte)' ', (byte)'\t', (byte)'\n');
+            if (next >= 0)
+                return start + next;
+            start += length;
+        }
+        return start;
+    }
+
     /// <summary>Checks that an operand has only numeric and operator tokens, with no shell expansions or bindings.</summary>
     internal static bool IsReferenceFree(ReadOnlySpan<byte> expression, CancellationToken cancellationToken)
     {
         while (!expression.IsEmpty)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (IsArithmeticBlank(expression[0]))
-            {
-                expression = expression[1..];
-                continue;
-            }
+            expression = expression[SkipArithmeticBlanks(expression, 0, cancellationToken)..];
+            if (expression.IsEmpty)
+                return true;
             var token = ReadTokenShape(expression, cancellationToken);
             if (token.Kind is not (ArithmeticTokenKind.Number or ArithmeticTokenKind.Operator))
                 return false;
@@ -99,12 +117,7 @@ public static partial class ArithmeticEvaluation
         if (token is [(byte)'+', (byte)'+'] or [(byte)'-', (byte)'-'])
         {
             // A doubled sign before a name stays a mutation token in infix position.
-            var next = 0;
-            while (next < following.Length && IsArithmeticBlank(following[next]))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                next++;
-            }
+            var next = SkipArithmeticBlanks(following, 0, cancellationToken);
             if (next < following.Length && VariableNames.IsNameStart((char)following[next]))
                 return default;
         }
@@ -225,7 +238,7 @@ public static partial class ArithmeticEvaluation
             var previousEnd = 0;
             while (true)
             {
-                var index = SkipBlanks(bytes, previousEnd);
+                var index = SkipArithmeticBlanks(bytes, previousEnd, CancellationToken.None);
                 if (index == bytes.Length)
                 {
                     if (tokens == null)
@@ -246,7 +259,7 @@ public static partial class ArithmeticEvaluation
                 var next = end;
                 if (tokens == null && shape.Kind == ArithmeticTokenKind.Number && numberError == null)
                 {
-                    next = SkipBlanks(bytes, end);
+                    next = SkipArithmeticBlanks(bytes, end, CancellationToken.None);
                     if (next == bytes.Length)
                     {
                         LiteralValue = value;
@@ -285,13 +298,6 @@ public static partial class ArithmeticEvaluation
             _tokens = tokens;
             _references = references;
             _blanks = blanks;
-
-            static int SkipBlanks(ReadOnlySpan<byte> bytes, int start)
-            {
-                while (start < bytes.Length && IsArithmeticBlank(bytes[start]))
-                    start++;
-                return start;
-            }
 
             void RememberBlanks(int start, int end)
             {

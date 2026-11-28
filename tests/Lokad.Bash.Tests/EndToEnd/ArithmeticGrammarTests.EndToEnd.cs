@@ -45,4 +45,29 @@ public sealed class ArithmeticGrammarTestsEndToEnd
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
+
+    [Theory]
+    [InlineData("let -- '{0}27{0}'", "<0:0>")]
+    [InlineData("let -- 'sum=3++{0}1'", "<0:4>")]
+    [InlineData("(( sum=3++{0}1 ))", "<0:4>")]
+    public async Task ArithmeticBlankRunsPreserveTheReachedNumberAndSign(string command, string expected)
+    {
+        var blanks = new string(' ', 4095) + "\t\n";
+        var result = await EvaluationTestHelper.RunAsync("sum=0\n" + string.Format(command, blanks)
+            + "\nprintf '<%s:%s>' \"$?\" \"$sum\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ArithmeticDiagnosticKeepsLeadingLineFeed()
+    {
+        var result = await EvaluationTestHelper.RunAsync("let $' \\t\\n2++'");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("line 1: let: \n2++: syntax error: operand expected (error token is \"+\")\n", result.StdErr);
+    }
 }

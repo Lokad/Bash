@@ -297,12 +297,7 @@ public static partial class ArithmeticEvaluation
             if (_operand.Syntax == null && Span[_index] is >= (byte)'0' and <= (byte)'9')
             {
                 var length = ReadTokenShape(Span[_index..], _cancellationToken).Length;
-                var tail = _index + length;
-                while (tail < Span.Length && IsArithmeticBlank(Span[tail]))
-                {
-                    _cancellationToken.ThrowIfCancellationRequested();
-                    tail++;
-                }
+                var tail = SkipArithmeticBlanks(Span, _index + length, _cancellationToken);
                 if (tail == Span.Length)
                 {
                     var valid = TryReadNumberToken(Span.Slice(_index, length), out var value);
@@ -454,13 +449,13 @@ public static partial class ArithmeticEvaluation
 
         private ArithmeticError CreateError(ArithmeticErrorKind kind, int tokenStart, int end)
         {
-            return new ArithmeticError(kind, ShellValue.FromBytes(_expression.Bytes[SkipBlanks(0)..end]))
+            return new ArithmeticError(kind, ShellValue.FromBytes(_expression.Bytes[SkipDiagnosticBlanks(0)..end]))
             {
                 Token = ShellValue.FromBytes(_expression.Bytes[tokenStart..end]),
             };
         }
 
-        private int SkipBlanks(int start)
+        private int SkipDiagnosticBlanks(int start)
         {
             while (start < Span.Length && Span[start] is (byte)' ' or (byte)'\t')
             {
@@ -478,11 +473,7 @@ public static partial class ArithmeticEvaluation
                 _index = end;
                 return;
             }
-            while (_index < Span.Length && IsArithmeticBlank(Span[_index]))
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                _index++;
-            }
+            _index = SkipArithmeticBlanks(Span, _index, _cancellationToken);
         }
 
         private IEnumerable<ParseStep> TryParseExpression()
@@ -715,7 +706,7 @@ public static partial class ArithmeticEvaluation
                         if (parser.IsNextTokenValid())
                             parser.Error = token.Operator == BinaryOperator.Power
                                 ? parser.CreateError(ArithmeticErrorKind.NegativeExponent, parser.CurrentTokenStart())
-                                : parser.CreateError(ArithmeticErrorKind.DivisionByZero, parser.SkipBlanks(rhsStart));
+                                : parser.CreateError(ArithmeticErrorKind.DivisionByZero, parser.SkipDiagnosticBlanks(rhsStart));
                         parser._parsed = default;
                         yield break;
                     }
