@@ -20,7 +20,10 @@ internal abstract record CommandUnitParseResult
     internal int UnitReadLine { get; init; }
 
     /// <summary>A complete unit whose syntax and here-document bodies have been parsed.</summary>
-    internal sealed record Parsed(ICommand Command) : CommandUnitParseResult;
+    internal sealed record Parsed(ICommand Command) : CommandUnitParseResult
+    {
+        internal bool ReachesInputEnd { get; init; }
+    }
 
     /// <summary>A syntax diagnostic with any complete prefix recognized at end of input.</summary>
     internal sealed record Failed(ParserFailure Failure) : CommandUnitParseResult

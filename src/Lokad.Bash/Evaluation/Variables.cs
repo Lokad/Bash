@@ -2380,14 +2380,14 @@ public sealed partial class Variables
     /// Builds the exported environment list.
     /// </summary>
     public IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment() =>
-        BuildExportedEnvironment(ExportedBindings, resultOwner: null, selectionMemory: null, CancellationToken.None);
+        BuildExportedEnvironment(ExportedBindings, resultOwner: null, selectionMemory: null, CancellationToken.None, replacement: null);
 
     /// <summary>Projects a unique name sequence or selects the first assigned export from overlapping scopes.</summary>
     /// <remarks>Overlapping scopes supply an owner for the name selection backing.</remarks>
     internal static IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
         IEnumerable<VariableBinding> bindings, (EvaluationMemory Memory, MemoryCapacity Capacity)? resultOwner,
         MemoryCapacity? selectionMemory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, EnvironmentVariable? replacement)
     {
         const long EnvironmentEntryBytes = 40;
         const long ArrayHeaderBytes = 32;
@@ -2398,6 +2398,13 @@ public sealed partial class Variables
             cancellationToken.ThrowIfCancellationRequested();
             var name = binding.Name;
             var scope = binding.Owner;
+            if (replacement is { } entry && entry.Name == name)
+            {
+                Select(name);
+                Add(entry);
+                replacement = null;
+                continue;
+            }
             if (selected?.Contains(name) == true || !scope.TryGetBinding(name, detachBorrowed: false, out var slot)) continue;
             ShellValue value;
             switch (slot)
@@ -2416,6 +2423,15 @@ public sealed partial class Variables
                     continue;
             }
             Select(name);
+            Add(new EnvironmentVariable(name, value));
+        }
+
+        if (replacement is { } extra)
+            Add(extra);
+        return results;
+
+        void Add(EnvironmentVariable entry)
+        {
             if (resultOwner is { } owner && results.Count == results.Capacity)
             {
                 var previous = results.Capacity;
@@ -2425,10 +2441,8 @@ public sealed partial class Variables
                 if (previous != 0)
                     owner.Capacity.Resize(owner.Capacity.Bytes - (ArrayHeaderBytes + EnvironmentEntryBytes * previous));
             }
-            results.Add(new EnvironmentVariable(name, value));
+            results.Add(entry);
         }
-
-        return results;
 
         void Select(BindingName name)
         {

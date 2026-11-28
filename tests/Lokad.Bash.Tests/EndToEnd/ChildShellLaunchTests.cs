@@ -31,6 +31,44 @@ public sealed class ChildShellLaunchTests
     }
 
     [Theory]
+    [InlineData("SHLVL=7 exec bash -c 'printf \"%s\\n\" \"$SHLVL\"'", "7\n")]
+    [InlineData("(SHLVL=7 exec bash -c 'printf \"%s\\n\" \"$SHLVL\"')", "8\n")]
+    [InlineData("SHLVL=7 exec -c bash -c 'printf \"%s\\n\" \"$SHLVL\"'", "1\n")]
+    [InlineData("bash -c 'SHLVL=7 command bash -c \"echo \\$SHLVL\"' fixture", "2\n")]
+    [InlineData("unset SHLVL; OTHER=7; declare -n SHLVL=OTHER; exec bash -c 'printf \"%s:%s\\n\" \"$SHLVL\" \"$OTHER\"'", "1:6\n")]
+    [InlineData("f(){ bash -c 'printf \"%s\\n\" \"$SHLVL\"'; }; row=$(f); printf '%s\\n' \"$row\"", "1\n")]
+    public async Task ReplacementProjectsTheReachedLaunchLevel(string source, string expected)
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("readonly SHLVL=7; exec bash -c 'printf \"%s\\n\" \"$SHLVL\"' 2>&1",
+        "line 1: SHLVL: readonly variable\n8\n", "")]
+    [InlineData("SHLVL=1001; exec bash -c 'printf \"%s\\n\" \"$SHLVL\"' 2>&1",
+        "line 1: warning: shell level (1000) too high, resetting to 1\n2\n", "")]
+    [InlineData("trap 'printf \"%s\\n\" \"$SHLVL\"' EXIT; SHLVL=1001; exec missing",
+        "1001\n", "line 1: exec: missing: not found\n")]
+    public async Task ReplacementDiagnosticsFollowLookupAndPrecedeChildOutput(string source, string output, string diagnostic)
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(diagnostic.Length == 0 ? 0 : 127, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("tail\\", "[tail]", "[tail\\]")]
     [InlineData("\"tail\"\\", "[tail]", "[tail\\]")]
     [InlineData("tail\\\\", "[tail\\]", "[tail\\]")]

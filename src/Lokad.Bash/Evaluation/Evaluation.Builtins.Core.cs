@@ -520,7 +520,7 @@ public sealed partial class Evaluation
 
                 // Return unused command credit before admitting the lookup-owned environment.
                 Memory.ReleaseUnusedCapacity();
-                var environment = BuildExportedEnvironment(vars, context, lookupMemory);
+                var environment = BuildExportedEnvironment(vars, context, lookupMemory, replacement: null);
                 lookupMemory.ReleaseUnusedCapacity();
                 CheckCancellation();
                 var results = await ResolveCommandsOperation.AsTask(PublishOperation, hostNames, _state.CurrentDirectory, environment)

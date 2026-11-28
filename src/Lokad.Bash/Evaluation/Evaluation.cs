@@ -81,6 +81,7 @@ public sealed partial class Evaluation : IFileTester
     // A |& stage may replace its root command to append a redirection while borrowing the original locations.
     private ICommand? _pipelineStageSource;
     private SimpleCommand? _finalCaptureInput;
+    private bool _captureUsesRenderedReader;
     /// <summary>
     /// Tracks descriptors inherited by a nested evaluator and therefore not owned by it.
     /// </summary>
@@ -180,7 +181,8 @@ public sealed partial class Evaluation : IFileTester
         ParsedScript script,
         FileDescriptor output,
         int hereDocumentWarningLine,
-        SimpleCommand? finalInput)
+        SimpleCommand? finalInput,
+        bool captureUsesRenderedReader)
     {
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
@@ -207,6 +209,7 @@ public sealed partial class Evaluation : IFileTester
             outer._preparedSyntaxRoot)
         {
             _finalCaptureInput = finalInput,
+            _captureUsesRenderedReader = captureUsesRenderedReader,
             _pipelineExitBoundary = new PipelineExitBoundary(0, context.FunctionContext?.Depth ?? 0, context.CallerSource)
         };
     }
@@ -639,6 +642,14 @@ public sealed partial class Evaluation : IFileTester
         RootFlowHandling rootFlowHandling)
     {
         var exitCode = 0;
+        if (_state.CommandLaunchEnvironment != EvaluationState.LaunchEnvironment.Pipeline && script.Commands is [var unit]
+            && (_captureUsesRenderedReader || script.FinalUnitReachesInputEnd
+                && (_state.UsesCommandStringExpansionExit || _state.ForkKind == ShellForkKind.CommandSubstitution)))
+        {
+            if (unit is ListCommand list && (list.StartsCommandUnit || list.StartsReaderUnit))
+                unit = list.Right;
+            scope = scope with { TerminalLaunch = SelectTerminalLaunch(unit, allowDirectRedirections: false) };
+        }
         foreach (var command in script.Commands)
         {
             CheckCancellation();
@@ -904,7 +915,9 @@ public sealed partial class Evaluation : IFileTester
                 InNestedCommandUnits = false,
                 InnerReaderRedirectionDepth = null,
                 CaptureReader = null,
-                InDirectPipelineReader = false
+                InDirectPipelineReader = false,
+                TerminalLaunch = ReferenceEquals(scope.Timing?.Subshell, subshellCommand)
+                    ? null : SelectTerminalLaunch(subshellCommand.Body, allowDirectRedirections: true)
             };
             if (redirections != null)
             {
@@ -1229,6 +1242,8 @@ public sealed partial class Evaluation : IFileTester
         ScopedEvaluation scope)
     {
         var directPipelineStage = IsPipelineStageCommand(simpleCommand);
+        var terminalLaunch = ReferenceEquals(scope.TerminalLaunch, simpleCommand)
+            && _state.Traps?.PreventsTerminalReplacement != true;
         var reachedCommand = !simpleCommand.IsEmpty || simpleCommand.IsBarePipelinePrefix;
         var publishStatus = reachedCommand;
         if (publishStatus)
@@ -1654,6 +1669,7 @@ public sealed partial class Evaluation : IFileTester
                         invocationScope,
                         commandVars,
                         prefixNames,
+                        terminalLaunch && executable.ExecutionOptions == null && _state.ForkKind == ShellForkKind.CommandSubstitution,
                         false)
                     .ConfigureAwait(false);
                 return CompleteCommandResult(functionResult, executable.Completion, commandInvoked: true);
@@ -1820,13 +1836,21 @@ public sealed partial class Evaluation : IFileTester
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false);
             }
             var inheritedDescriptors = CollectDescriptorsAvailable();
+            (BindingName ReadonlyName, int ExcessiveLevel) levelDiagnostic = default;
+            EnvironmentVariable? launchLevel = executable.ExecutionOptions switch
+            {
+                null when terminalLaunch => PrepareReplacementShellLevel(scope.Variables, prefixNames, out levelDiagnostic),
+                { ClearEnvironment: false } when _state.CommandLaunchEnvironment != EvaluationState.LaunchEnvironment.Parenthesized
+                    => PrepareReplacementShellLevel(commandVars, prefixes: null, out levelDiagnostic),
+                _ => null
+            };
             var commandInvocation = BashCommandInheritance.CreateInheritedCommand(
                 commandName,
                 argumentZero,
                 byteOperands,
                 _state.CurrentDirectory,
                 executable.ExecutionOptions is { ClearEnvironment: true }
-                    ? [] : BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace),
+                    ? [] : BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace, launchLevel),
                 GetStdInDescriptor(),
                 GetStdOutDescriptor(),
                 GetStdErrDescriptor(),
@@ -1835,7 +1859,7 @@ public sealed partial class Evaluation : IFileTester
                 functions,
                 functionImports);
             var execution = await ExecuteRunCommandAsync(commandInvocation, invocationScope,
-                executable.Completion == CommandCompletion.ExitEvaluation).ConfigureAwait(false);
+                executable.Completion == CommandCompletion.ExitEvaluation, levelDiagnostic).ConfigureAwait(false);
             var commandResult = await FinalizeResultAsync(
                     EvaluationResult.FromExitCode(execution.ShellExitCode),
                     false)
@@ -5502,13 +5526,13 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
-        Variables variables, EvaluationContext context, MemoryCapacity resultMemory)
+        Variables variables, EvaluationContext context, MemoryCapacity resultMemory, EnvironmentVariable? replacement)
     {
         using var selectionMemory = context.FunctionContext == null && context.GlobalPrefixes == null
             ? null : new MemoryCapacity(Memory.Budget, 0);
         var exports = selectionMemory == null ? variables.ExportedBindings : ExportBindings(selectionMemory);
         return global::Lokad.Bash.Evaluation.Variables.BuildExportedEnvironment(
-            exports, (Memory, resultMemory), selectionMemory, _cancellationToken);
+            exports, (Memory, resultMemory), selectionMemory, _cancellationToken, replacement);
 
         IEnumerable<VariableBinding> ExportBindings(MemoryCapacity selection)
         {
@@ -7027,13 +7051,37 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>
     /// Emits a run-command operation and renders any negotiated launch diagnostic.
     /// </summary>
-    private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command, ScopedEvaluation scope, bool exec)
+    private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command, ScopedEvaluation scope, bool exec,
+        (BindingName ReadonlyName, int ExcessiveLevel) levelDiagnostic)
     {
         CheckCancellation();
+        var reportLevel = !command.StdErr.IsClosed && (!levelDiagnostic.ReadonlyName.IsEmpty || levelDiagnostic.ExcessiveLevel != 0);
+        if (reportLevel)
+        {
+            // A direct path reaches a launch attempt even when it is absent. A bare name first needs a lookup.
+            var reachesLaunch = command.CommandName.Contains('/');
+            if (!reachesLaunch)
+            {
+                Memory.Charge(MemoryCapacity.ArrayBackingBytes<string>(1));
+                var lookup = await ResolveCommandsOperation.AsTask(PublishOperation, [command.CommandName],
+                    command.CurrentDirectory, command.Environment).ConfigureAwait(false);
+                CheckCancellation();
+                if (lookup.Count != 1)
+                    throw new InvalidOperationException("Host returned an unexpected number of command lookup results.");
+                reachesLaunch = lookup[0] is CommandLookupResult.Found;
+            }
+            if (reachesLaunch)
+            {
+                await ReportLevelAsync().ConfigureAwait(false);
+                reportLevel = false;
+            }
+        }
         // The current redirection frame retains stderr until the command and any launch diagnostic settle.
         var result = await RunCommand.AsTask(PublishOperation, command, canReportLaunchFailure: true, out var request)
             .ConfigureAwait(false);
         CheckCancellation();
+        if (reportLevel && result is CommandExecutionResult.Completed)
+            await ReportLevelAsync().ConfigureAwait(false);
         if (!request.CallerReportsLaunchFailure || command.StdErr.IsClosed || result is CommandExecutionResult.Completed)
             return result;
 
@@ -7058,6 +7106,18 @@ public sealed partial class Evaluation : IFileTester
                 directory, cannotExecute).ConfigureAwait(false);
         }
         return result;
+
+        async Task ReportLevelAsync()
+        {
+            var prefix = GetBuiltinDiagnosticPrefix(scope.Context);
+            if (levelDiagnostic.ExcessiveLevel != 0)
+                await WriteDiagnosticUnlessStderrClosedAsync([WarningSubject],
+                    [ShellLevelWarningMessage, ShellValue.FromInteger(levelDiagnostic.ExcessiveLevel), ShellLevelReset],
+                    scope: null, prefix).ConfigureAwait(false);
+            if (!levelDiagnostic.ReadonlyName.IsEmpty)
+                await WriteDiagnosticUnlessStderrClosedAsync([levelDiagnostic.ReadonlyName.ToValue()],
+                    [ShellValue.FromText("readonly variable")], scope: null, prefix).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

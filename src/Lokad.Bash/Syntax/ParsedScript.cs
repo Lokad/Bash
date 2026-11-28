@@ -34,6 +34,8 @@ public sealed class ParsedScript
     internal bool HasReadAheadHereDocuments { get; set; }
     /// <summary>End of the final command before its delimiter and trailing trivia in a whole-source parse.</summary>
     internal int LastCommandEnd { get; set; }
+    /// <summary>The final command unit consumes the input through its own terminator.</summary>
+    internal bool FinalUnitReachesInputEnd { get; set; }
 
     /// <summary>Preserves the printer's input when an omitted separator changed the executable tree.</summary>
     internal IReadOnlyList<ICommand>? AuthoredCaptureCommands { get; set; }

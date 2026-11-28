@@ -389,6 +389,8 @@ internal sealed class EvaluationState
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
     public bool ErrexitEnabled { get; set; }
     internal bool UsesCommandStringExpansionExit { get; set; }
+    internal LaunchEnvironment CommandLaunchEnvironment { get; private set; }
+    internal enum LaunchEnvironment { Ordinary, Pipeline, Parenthesized }
     internal ShellForkKind? ForkKind { get; private init; }
     internal bool KeepsLocalsOnErrexit => ForkKind is ShellForkKind.Subshell or ShellForkKind.PipelineSimpleCommand;
 
@@ -757,6 +759,7 @@ internal sealed class EvaluationState
         // Keep the parent's saved handlers admitted through restoration if the child clears them.
         memory.Charge(checked(EstimateForkBytes() + (Traps?.EstimatedMemoryBytes ?? 0)));
         var clone = CloneShellState(Script, _redirections.ForkForSubshell(inheritedExitBindings), ShellForkKind.Subshell);
+        clone.CommandLaunchEnvironment = LaunchEnvironment.Parenthesized;
         clone._pendingExpansionError = _pendingExpansionError;
         clone.FatalExpansion = FatalExpansion;
         return clone;
@@ -773,7 +776,11 @@ internal sealed class EvaluationState
         RedirectionState.InheritedExitBindings? inheritedExitBindings)
     {
         memory.Charge(EstimateForkBytes());
-        return CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings, inheritedExitBindings), kind);
+        var clone = CloneShellState(script, _redirections.ForkForNestedEvaluation(descriptors.Bindings, inheritedExitBindings), kind);
+        // Pipeline forks mark the environment. A capture keeps that flag, and explicit parentheses clear it.
+        clone.CommandLaunchEnvironment = kind == ShellForkKind.CommandSubstitution
+            ? CommandLaunchEnvironment : LaunchEnvironment.Pipeline;
+        return clone;
     }
 
     private long EstimateForkBytes() => checked(EstimateFunctionMemoryBytes(_functions.Count, _functions.Count)

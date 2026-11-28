@@ -27,6 +27,19 @@ internal sealed class ShellTraps
 
     internal bool HasInheritedPipelineExitAction => !_exitHandled && !_inheritedPipelineExitAction.IsEmpty;
 
+    internal bool PreventsTerminalReplacement
+    {
+        get
+        {
+            if (ExitTrapStatus.HasValue)
+                return true;
+            foreach (var (condition, action) in _handlers)
+                if (condition == TrapCondition.Exit || !action.IsEmpty)
+                    return true;
+            return false;
+        }
+    }
+
     // Retain the EXIT latch and saved status even if the action clears all registrations.
     internal bool CanRetire => !_exitHandled && _handlers.Count == 0 && ListedHandlers.Count == 0;
 

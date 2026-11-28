@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -13,8 +14,10 @@ public sealed partial class Evaluation
 {
     private static readonly BindingName ExecutionStringName = "BASH_EXECUTION_STRING";
     private static readonly BindingName ShellLevelName = "SHLVL";
-    private static readonly ShellValue ShellLevelWarning = ShellValue.FromText("warning: shell level (");
+    private static readonly ShellValue WarningPrefix = ShellValue.FromText("warning: ");
     private static readonly ShellValue ShellLevelReset = ShellValue.FromText(") too high, resetting to 1");
+    private static readonly ShellValue WarningSubject = ShellValue.FromText("warning");
+    private static readonly ShellValue ShellLevelWarningMessage = ShellValue.FromText("shell level (");
 
     /// <summary>Initializes evaluation from captured interpreter values, independently of command hosting.</summary>
     /// <remarks>
@@ -40,15 +43,11 @@ public sealed partial class Evaluation
             else
                 SetExportedVariable(variable.Name, variable.Value);
         }
-        if (Integers.TryParseBuiltinNumber(inheritedLevel.Bytes.Span, out var previous))
-        {
-            // Bash stores the adjusted value in a signed C int before checking the range.
-            var level = unchecked((int)previous + 1);
-            if (level >= 1000)
-                _startupShellLevelWarning = (invocationName, level);
-            else if (level != 1)
-                SetExportedVariable(ShellLevelName, ShellValue.FromInteger(Math.Max(0, level)));
-        }
+        var level = AdjustShellLevel(inheritedLevel, 1, CancellationToken.None, out var excessiveLevel);
+        if (excessiveLevel != 0)
+            _startupShellLevelWarning = (invocationName, excessiveLevel);
+        else if (level != 1)
+            SetExportedVariable(ShellLevelName, ShellValue.FromInteger(level));
         _vars.ArgumentZero = argumentZero;
         _vars.SubshellLevel = 0;
         ReplacePositionalParameters(positionalParameters);
@@ -59,6 +58,49 @@ public sealed partial class Evaluation
     private (ShellValue Name, SourceMemory.ReaderKind Kind)? _inheritedReader;
     private (string InvocationName, int Level)? _startupShellLevelWarning;
 
+    private static int AdjustShellLevel(ShellValue value, int change, CancellationToken cancellationToken, out int excessiveLevel)
+    {
+        if (!Integers.TryParseBuiltinNumber(value.Bytes.Span, cancellationToken, out var previous))
+            previous = 0;
+        // Bash stores the adjusted value in a signed C int before checking the range.
+        var level = unchecked((int)previous + change);
+        excessiveLevel = level >= 1000 ? level : 0;
+        return excessiveLevel != 0 ? 1 : Math.Max(0, level);
+    }
+
+    private static SimpleCommand? SelectTerminalLaunch(ICommand command, bool allowDirectRedirections) => command switch
+    {
+        SimpleCommand simple when allowDirectRedirections || simple.Redirections.Count == 0 => simple,
+        ListCommand { Right: SimpleCommand { Redirections.Count: 0 } simple } => simple,
+        _ => null
+    };
+
+    private EnvironmentVariable? PrepareReplacementShellLevel(Variables variables, IReadOnlySet<BindingName>? prefixes,
+        out (BindingName ReadonlyName, int ExcessiveLevel) diagnostic)
+    {
+        diagnostic = default;
+        if (!variables.TryResolveBinding(ShellLevelName, selectOwner: null, out var binding))
+            return null;
+
+        var (reference, owner) = binding;
+        var name = reference.Name;
+        var isReadonly = owner.IsReadonlyBinding(name);
+        var hasValue = owner.TryReadResolvedExpansionValue(name, out var previous);
+        var level = AdjustShellLevel(previous, -1, _cancellationToken, out var excessiveLevel);
+        diagnostic = (isReadonly ? name : default, excessiveLevel);
+        var hasPrefix = prefixes?.Contains(name) == true;
+        // A terminal simple command adjusts the caller's level. A temporary assignment to
+        // a nameref's referent still takes precedence when the environment is projected.
+        if (reference.Kind != VariableReferenceKind.Name || owner.TryGetNameref(name, out _)
+            || (hasPrefix ? name != ShellLevelName : owner.GetArrayMetadata(name) != null))
+            return null;
+        if (isReadonly)
+            return hasValue ? new EnvironmentVariable(name, previous) : null;
+        if (level > 9)
+            Memory.Charge(MemoryCapacity.ArrayBackingBytes<byte>(level < 100 ? 2 : 3));
+        return new EnvironmentVariable(name, level == 0 ? ShellValue.FromByte((byte)'0') : ShellValue.FromInteger(level));
+    }
+
     private Task ReportStartupShellLevelAsync()
     {
         if (_startupShellLevelWarning is not { } warning)
@@ -68,7 +110,7 @@ public sealed partial class Evaluation
         return descriptor.IsClosed
             ? Task.CompletedTask
             : WriteDiagnosticAsync(descriptor, [ShellValue.FromText(warning.InvocationName)],
-                [ShellLevelWarning, ShellValue.FromInteger(warning.Level), ShellLevelReset], scope: null);
+                [WarningPrefix, ShellLevelWarningMessage, ShellValue.FromInteger(warning.Level), ShellLevelReset], scope: null);
     }
 
     internal void SetInheritedReader(ShellValue name, SourceMemory.ReaderKind kind)

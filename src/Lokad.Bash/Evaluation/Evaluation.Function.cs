@@ -18,6 +18,7 @@ public sealed partial class Evaluation
         ScopedEvaluation scope,
         Variables commandVars,
         HashSet<BindingName>? prefixNames,
+        bool terminalCapture,
         bool negated)
     {
         // Command entry checks the CLR's stack estimate. A periodic continuation
@@ -47,6 +48,10 @@ public sealed partial class Evaluation
         functionContext.CallerPositionals = positionalParametersScope;
         var functionScope = scope with
         {
+            TerminalLaunch = terminalCapture
+                ? SelectTerminalLaunch(functionDefinition.Body is GroupCommand group ? group.Body : functionDefinition.Body,
+                    allowDirectRedirections: false)
+                : null,
             // A function can only break/continue its own loops, not the caller's loops.
             Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
             {

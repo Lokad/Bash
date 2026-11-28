@@ -1742,7 +1742,12 @@ inherited launch increments the incoming decimal value, treating a missing
 or invalid value as zero. Negative results become zero. A level of 1000
 or more produces a startup warning and resets the binding to one.
 Subshells, command substitutions and pipeline stages retain the launch
-level.
+level. External shell replacement adjusts the outgoing level down before
+launch. Explicit `exec` in parentheses keeps the outgoing level, and
+`exec -c` clears the environment. Implicit replacement applies to eligible
+terminal simple commands in command strings, captures and parentheses.
+The reached command unit, timing, redirections and active traps affect
+eligibility. Ordinary file readers continue to increment nested launches.
 
 The supported inherited `bash -c` launch initializes `BASH_EXECUTION_STRING`
 from the original command argument bytes. It is an ordinary writable scalar.

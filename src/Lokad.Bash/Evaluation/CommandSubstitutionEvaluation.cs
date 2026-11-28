@@ -89,7 +89,8 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
             {
                 var warningLine = script is CommandSubstitutionSyntax.Deferred { ReadWarnings: not null }
                     ? scope.Context.Coordinates.HereDocumentWarningLine : 0;
-                var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine, finalInput);
+                var nested = Evaluation.CreateCommandSubstitution(scope, parsed, pipe.Write, warningLine, finalInput,
+                    script is CommandSubstitutionSyntax.Parsed);
                 CapturedEvaluationResult result;
                 Exception? captureFailure = null;
                 try

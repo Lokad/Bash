@@ -218,8 +218,12 @@ public sealed partial class Evaluation
                     ? coordinates.EnclosingExecutionLine : coordinates.UnitReadLine;
                 if (line == 0)
                     line = coordinates.FunctionBodyLine != 0 ? coordinates.FunctionBodyLine : coordinates.Line;
+                var inner = timed.Inner;
+                while (inner is NegatedCommand negation)
+                    inner = negation.Inner;
+                var timedSubshell = inner as SubshellCommand ?? (inner as RedirectedCommand)?.Body as SubshellCommand;
                 var timing = new ActiveTiming(started, timed.Portable, scope.Variables, scope.Timing,
-                    scope.Context.DiagnosticName, coordinates.Locations == null ? 0 : line);
+                    scope.Context.DiagnosticName, coordinates.Locations == null ? 0 : line, timedSubshell);
                 var result = await EvaluateCommandAsync(timed.Inner, scope with { Timing = timing }, negated).ConfigureAwait(false);
                 // Bash's return unwinds past the timer; the calling function's timer still reports.
                 if (!_state.ExitedThroughExec && result.Flow != FlowControlKind.Return)
@@ -313,7 +317,7 @@ public sealed partial class Evaluation
 
     internal sealed class ActiveTiming(
         ShellTimingSnapshot started, bool portable, Variables variables, ActiveTiming? enclosing,
-        ShellValue? diagnosticName, int diagnosticLine)
+        ShellValue? diagnosticName, int diagnosticLine, SubshellCommand? subshell)
     {
         internal ShellTimingSnapshot Started { get; } = started;
         internal bool Portable { get; } = portable;
@@ -321,6 +325,7 @@ public sealed partial class Evaluation
         internal ActiveTiming? Enclosing { get; } = enclosing;
         internal ShellValue? DiagnosticName { get; } = diagnosticName;
         internal int DiagnosticLine { get; } = diagnosticLine;
+        internal SubshellCommand? Subshell { get; } = subshell;
         internal bool Settled { get; set; }
     }
 

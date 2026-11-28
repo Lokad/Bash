@@ -508,10 +508,17 @@ public sealed partial class Evaluation
 
                 // The completed unit can outlive this reader through a function definition.
                 unitMemory.SyntaxMemory.ReleaseUnusedCapacityOnPublication();
+                var terminal = commands.Current is CommandUnitParseResult.Parsed { ReachesInputEnd: true }
+                    && _state.CommandLaunchEnvironment != EvaluationState.LaunchEnvironment.Pipeline
+                    && (kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.CommandString
+                        || _state.ForkKind == ShellForkKind.CommandSubstitution
+                            && (kind == ScriptExecutionKind.LegacyCapture || kind == ScriptExecutionKind.Root
+                                && diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution));
                 result = await EvaluateCommandAsync(command,
                     scope with
                     {
-                        Context = scope.Context.WithSourceMemory(unitMemory).WithCoordinates(unitCoordinates)
+                        Context = scope.Context.WithSourceMemory(unitMemory).WithCoordinates(unitCoordinates),
+                        TerminalLaunch = terminal ? SelectTerminalLaunch(command, allowDirectRedirections: false) : null
                     }, negated: false)
                     .ConfigureAwait(false);
                 if (result.Flow == FlowControlKind.Return)

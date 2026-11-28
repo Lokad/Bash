@@ -125,6 +125,9 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>Redirections and builtin execution run after a pipeline stage resets its EXIT action.</summary>
     internal bool AfterPipelineExitReset { get; init; }
 
+    /// <summary>The reached simple command that can replace the current reader's shell.</summary>
+    internal SimpleCommand? TerminalLaunch { get; init; }
+
     /// <summary>A builtin's closed diagnostic output stops its expansion without making later commands fatal.</summary>
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 

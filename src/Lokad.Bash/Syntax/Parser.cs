@@ -181,7 +181,7 @@ public static class Parser
             AllowEofHereDocuments = true
         };
         SkipNewlines(tokenizer);
-        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All, out var lastCommandEnd);
+        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All, out var finalUnit);
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
@@ -191,7 +191,8 @@ public static class Parser
         if (failure != null)
             return false;
         script = CompleteScript(tokenizer, command);
-        script.LastCommandEnd = lastCommandEnd;
+        script.LastCommandEnd = finalUnit.CommandEnd;
+        script.FinalUnitReachesInputEnd = finalUnit.ReaderEnd == input.Length;
         return true;
     }
 
@@ -281,7 +282,8 @@ public static class Parser
             {
                 Locations = tokenizer.Locations,
                 ReadDiagnostics = diagnostics,
-                UnitReadLine = tokenizer.CompletedUnitReadLine
+                UnitReadLine = tokenizer.CompletedUnitReadLine,
+                ReachesInputEnd = tokenizer.Position == input.Length
             };
         }
     }
@@ -2025,9 +2027,9 @@ public static class Parser
         ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata,
-        out int lastCommandEnd)
+        out (int CommandEnd, int ReaderEnd) finalUnit)
     {
-        lastCommandEnd = 0;
+        finalUnit = default;
         SkipNewlines(tokenizer);
         if (IsEndKeyword(tokenizer, endKeywords) || IsEndTokenKind(tokenizer, endTokenKind))
             return (null, false);
@@ -2036,7 +2038,8 @@ public static class Parser
         if (left == null)
             return (null, false);
 
-        lastCommandEnd = tokenizer.ConsumedPosition;
+        var lastCommandEnd = tokenizer.ConsumedPosition;
+        int? lastReaderEnd = null;
         ICommand current = left;
         var unitStart = left;
         var trailingTerminator = false;
@@ -2058,7 +2061,10 @@ public static class Parser
             if (endsCommandUnit && unitMetadata != CommandUnitMetadata.Capture)
                 tokenizer.CompleteCompoundHereDocumentLocations();
             if (endsCommandUnit)
+            {
+                lastReaderEnd ??= tokenizer.Position;
                 RecordUnitRead(unitStart);
+            }
             if (!IsEndTokenKind(tokenizer, endTokenKind))
                 SkipNewlines(tokenizer);
             trailingTerminator = true;
@@ -2075,6 +2081,7 @@ public static class Parser
                 break;
             }
             lastCommandEnd = tokenizer.ConsumedPosition;
+            lastReaderEnd = null;
 
             if (endsCommandUnit)
                 unitStart = right;
@@ -2091,6 +2098,7 @@ public static class Parser
 
         if (unitMetadata != CommandUnitMetadata.None)
             RecordUnitRead(unitStart);
+        finalUnit = (lastCommandEnd, lastReaderEnd ?? tokenizer.Position);
         return (current, trailingTerminator);
 
         void RecordUnitRead(ICommand anchor)

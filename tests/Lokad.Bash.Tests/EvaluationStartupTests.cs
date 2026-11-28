@@ -21,7 +21,7 @@ public sealed class EvaluationStartupTests
     public async Task InheritedShellLevelIsAdjustedAndExported(
         bool prepared, string? inherited, string expectedLevel, string expectedDiagnostic)
     {
-        const string source = "inspect \"$SHLVL\"";
+        const string source = "inspect \"$SHLVL\"; :";
         var label = ShellValue.FromText("fixture");
         EnvironmentVariable[] environment = inherited == null ? [] : [new("SHLVL", ShellValue.FromText(inherited))];
         var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(source), label],
@@ -38,6 +38,34 @@ public sealed class EvaluationStartupTests
         Assert.Equal(level, Assert.Single(command.Arguments));
         Assert.Equal(level, Assert.Single(command.Environment, entry => entry.Name == "SHLVL").Value);
         Assert.Equal(ShellValue.FromText(expectedDiagnostic).Bytes.ToArray(), host.GetOutputBytes(FileDescriptor.StdErr));
+    }
+
+    [Theory]
+    [InlineData("", " # comment\n", "7")]
+    [InlineData("", " # comment\n\n", "8")]
+    [InlineData(":\n: && ", "", "7")]
+    [InlineData(":; : && ", "", "8")]
+    [InlineData(": <<'BODY'; ", "\ntext\nBODY\n", "7")]
+    [InlineData(": <<'BODY'; ", "\ntext\nBODY\n\n", "8")]
+    public async Task TerminalCommandStringLaunchUsesTheFinalReaderUnit(string before, string after, string expectedChild)
+    {
+        const string launch = """bash -c 'printf "%s:%s\n" "$1" "$SHLVL"' fixture "$SHLVL" """;
+        var source = before + launch + after;
+        var label = ShellValue.FromText("fixture");
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(source), label],
+            ShellPath.Root, [new("SHLVL", ShellValue.FromText("6"))], null, null, null);
+        foreach (var script in new[] { Parser.Parse(source), new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]) })
+        {
+            var evaluation = ShellEvaluationStartup.CreateInherited(invocation, script, label, []);
+            await using var host = new TestHost();
+
+            var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal($"7:{expectedChild}\n", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Fact]
