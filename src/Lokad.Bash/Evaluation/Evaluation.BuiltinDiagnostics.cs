@@ -15,6 +15,9 @@ public sealed partial class Evaluation
     private enum ClosedStderrHandling { AttemptWrite, Discard }
     private enum BuiltinHelpOutput { Standard, Control, Prepared }
 
+    private static string InvalidDecimalOperandSuffix(ShellValue operand) =>
+        operand.Bytes.Span.StartsWith("0x"u8) ? ": invalid hex number" : ": invalid number";
+
     private Task<DescriptorWriteResult> WriteDiagnosticUnlessStderrClosedAsync(ReadOnlySpan<ShellValue> name, ReadOnlySpan<ShellValue> message,
         BuiltinDiagnosticScope? scope) =>
         WriteDiagnosticUnlessStderrClosedAsync(name, message, scope, default);

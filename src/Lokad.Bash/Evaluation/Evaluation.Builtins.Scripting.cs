@@ -42,8 +42,7 @@ public sealed partial class Evaluation
         {
             var operand = words[first];
             if (!TryParseControlNumber(operand, out index))
-                return await ReportUsageAsync(operand, operand.Bytes.Span.StartsWith("0x"u8)
-                    ? ": invalid hex number" : ": invalid number").ConfigureAwait(false);
+                return await ReportUsageAsync(operand, InvalidDecimalOperandSuffix(operand)).ConfigureAwait(false);
             if (index < 0)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }

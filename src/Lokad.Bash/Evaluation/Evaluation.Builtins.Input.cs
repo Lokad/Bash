@@ -93,7 +93,8 @@ public sealed partial class Evaluation
             {
                 if (!Integers.TryParseBuiltinNumber(operand.Bytes.Span, out var length) || length is < 0 or > int.MaxValue)
                     return await FinishFailureAsync(WriteDiagnosticUnlessStderrClosedAsync([command],
-                        [operand, ShellValue.FromText(": invalid number")], diagnostics, GetBuiltinDiagnosticPrefix(scope.Context)), 1)
+                        [operand, ShellValue.FromText(InvalidDecimalOperandSuffix(operand))], diagnostics,
+                        GetBuiltinDiagnosticPrefix(scope.Context)), 1)
                         .ConfigureAwait(false);
                 count = (int)length;
                 ignoreDelimiter |= flag == (byte)'N';

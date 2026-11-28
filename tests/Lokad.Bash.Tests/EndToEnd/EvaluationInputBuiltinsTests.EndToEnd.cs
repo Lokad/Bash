@@ -54,6 +54,9 @@ public sealed class EvaluationInputBuiltinsTestsEndToEnd
 
     [Theory]
     [InlineData("read -u4 -N nope value", 1, "read: nope: invalid number\n")]
+    [InlineData("read -u4 -n 0x2 value", 1, "read: 0x2: invalid hex number\n")]
+    [InlineData("read -u4 -N0xg value", 1, "read: 0xg: invalid hex number\n")]
+    [InlineData("read -u4 -N 0X2 value", 1, "read: 0X2: invalid number\n")]
     [InlineData("mapfile -u nope arr", 1, "mapfile: nope: invalid file descriptor specification\n")]
     [InlineData("read -u3 -n2 value", 1, "read: read error: 3: Bad file descriptor\n")]
     [InlineData("readarray -u4 -d", 2, "readarray: -d: option requires an argument\n"
