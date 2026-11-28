@@ -99,13 +99,7 @@ public static class PathResolution
         if (length > MaximumPathCharacters)
             return false;
 
-        var depth = member.IsEmpty ? 0 : 1;
-        foreach (var character in root)
-            if (character == '/')
-                depth++;
-        foreach (var character in member)
-            if (character == '/')
-                depth++;
+        var depth = root.Count('/') + member.Count('/') + (member.IsEmpty ? 0 : 1);
         return depth <= MaximumPathDepth;
     }
 

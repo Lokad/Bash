@@ -5,6 +5,26 @@ namespace Lokad.Bash.Tests;
 
 public sealed class PathResolutionTests
 {
+    [Fact]
+    public void FitsPathLimits_CountsPreservedInteriorSeparators()
+    {
+        var path = string.Join('/', Enumerable.Repeat("x", 63));
+        var repeatedSlash = path.Insert(path.IndexOf('/'), "/");
+
+        Assert.True(PathResolution.FitsPathLimits("/base", "//" + path + "///"));
+        Assert.False(PathResolution.FitsPathLimits("/base", repeatedSlash));
+        Assert.True(PathResolution.FitsPathLimits("", repeatedSlash));
+    }
+
+    [Fact]
+    public void FitsPathLimits_AccountsForTheJoinAndTheRawLength()
+    {
+        Assert.True(PathResolution.FitsPathLimits("/base", new string('x', 4090)));
+        Assert.False(PathResolution.FitsPathLimits("/base", new string('x', 4091)));
+        Assert.True(PathResolution.FitsPathLimits("", new string('/', 4096)));
+        Assert.False(PathResolution.FitsPathLimits("", new string('/', 4097)));
+    }
+
     [Theory]
     [InlineData(FilePathKind.Other)]
     [InlineData(FilePathKind.BlockDevice)]

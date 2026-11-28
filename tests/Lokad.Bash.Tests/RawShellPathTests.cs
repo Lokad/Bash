@@ -42,6 +42,44 @@ public sealed class RawShellPathTests
         Assert.False(RawShellPath.IsValid(s));
     }
 
+    [Fact]
+    public void RawAndCanonicalPathsShareTheCharacterPolicy()
+    {
+        for (var value = 0; value <= char.MaxValue; value++)
+        {
+            var path = "/a" + (char)value + "z";
+            var valid = value >= 0x20 && value != 0x7f;
+            Assert.Equal(valid, RawShellPath.IsValid(path));
+            Assert.Equal(valid, ShellPath.IsValid(path));
+        }
+    }
+
+    [Fact]
+    public void PathCharacterChecksHandleWideComponents()
+    {
+        foreach (var prefix in new[] { new string('a', 128), new string('界', 128) })
+        foreach (var index in new[] { 0, 15, 16, 31, 32, 63, 64, prefix.Length })
+        foreach (var character in new[] { '\0', '\x1f', '\x7f', '\x80', '\u017f' })
+        {
+            var path = "/" + prefix.Insert(index, character.ToString());
+            var valid = character >= 0x20 && character != 0x7f;
+            Assert.Equal(valid, RawShellPath.IsValid(path));
+            Assert.Equal(valid, ShellPath.IsValid(path));
+        }
+    }
+
+    [Fact]
+    public void ValidatingARawPathAvoidsPerCallAllocation()
+    {
+        var path = "/example/" + new string('a', 256);
+        var valid = true;
+
+        AllocationAssert.SustainedReuse(() => valid &= RawShellPath.IsValid(path),
+            iterations: 4096, maximumBytes: 1024);
+
+        Assert.True(valid);
+    }
+
     #endregion
 
     #region IParsable

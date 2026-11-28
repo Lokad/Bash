@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -16,6 +17,8 @@ namespace Lokad.Bash;
 [JsonConverter(typeof(JsonConverter))]
 public sealed class ShellPath
 {
+    private static readonly SearchValues<char> ForbiddenCharacters = CreateForbiddenCharacters();
+
     public string Path { get; }
 
     /// <summary> Is this the root path? </summary>
@@ -73,15 +76,22 @@ public sealed class ShellPath
             var seg = suffix[range];
             if (seg.Length == 0) return false;   // double slash
             if (seg.SequenceEqual(".") || seg.SequenceEqual("..")) return false;
-            foreach (var c in seg)
-                if (IsForbiddenChar(c)) return false;
+            if (ContainsForbiddenCharacters(seg)) return false;
         }
         return true;
     }
 
-    // Forbidden: control chars and DEL.
-    internal static bool IsForbiddenChar(char c) =>
-        c is <= '\x1f' or '\x7f';
+    internal static bool ContainsForbiddenCharacters(ReadOnlySpan<char> path) =>
+        path.ContainsAny(ForbiddenCharacters);
+
+    private static SearchValues<char> CreateForbiddenCharacters()
+    {
+        Span<char> characters = stackalloc char[33];
+        for (var index = 0; index < 32; index++)
+            characters[index] = (char)index;
+        characters[^1] = '\x7f';
+        return SearchValues.Create(characters);
+    }
 
     /// <summary> True if this path is a strict parent of <paramref name="other"/>. </summary>
     public bool IsParentOf(ShellPath other) =>

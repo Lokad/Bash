@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 
 namespace Lokad.Bash;
 
@@ -29,7 +28,7 @@ public sealed class RawShellPath : IParsable<RawShellPath>
 
     /// <summary> Returns true if <paramref name="s"/> satisfies all RawShellPath constraints. </summary>
     public static bool IsValid(string? s) =>
-        !string.IsNullOrEmpty(s) && s.All(c => !ShellPath.IsForbiddenChar(c));
+        !string.IsNullOrEmpty(s) && !ShellPath.ContainsForbiddenCharacters(s);
 
     public static RawShellPath Parse(string s) => Parse(s, null);
 
