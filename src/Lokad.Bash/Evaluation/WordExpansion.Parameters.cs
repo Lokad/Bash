@@ -137,10 +137,12 @@ internal static partial class WordExpansion
         {
             var name = parsed.Name;
             if (parsed.Modifier == ParameterModifier.Length && name.AsSpan().IndexOf((byte)'[') is >= 0 and var bracket)
-                name = name[..bracket];
-            await scope.Effects.ReportUnboundParameterAsync(parsed.Modifier == ParameterModifier.Indirect
-                    ? [ShellValue.FromText("!"), name.ToValue()] : [name.ToValue()], scope,
-                quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                await scope.Effects.ReportUnboundArrayLengthAsync(name[..bracket].ToValue(), scope,
+                    quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+            else
+                await scope.Effects.ReportUnboundParameterAsync(parsed.Modifier == ParameterModifier.Indirect
+                        ? [ShellValue.FromText("!"), name.ToValue()] : [name.ToValue()], scope,
+                    quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
             return;
         }
         var positionalStar = parsed.Modifier == ParameterModifier.None && parameter.Kind == VariableReferenceKind.Star
@@ -440,7 +442,8 @@ internal static partial class WordExpansion
             ReadOnlySpan<ShellValue> name = parsed.Modifier == ParameterModifier.Indirect
                 ? [ShellValue.FromText("!"), parsed.Name.ToValue()] : [parsed.Name.ToValue()];
             return quoteContext == ExpansionQuoteContext.HereDocument
-                ? scope.Effects.ReportHereDocumentParameterFailureAsync(name, [message], scope, ExpansionFailureKind.RequiredParameter)
+                ? scope.Effects.ReportHereDocumentParameterFailureAsync(name, [message], scope,
+                    new ExpansionFailure(ExpansionFailureKind.RequiredParameter))
                 : scope.Effects.ReportParameterExpansionFailureAsync(name, [message], scope, ExpansionFailureKind.RequiredParameter);
         }
 

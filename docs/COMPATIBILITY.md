@@ -929,17 +929,20 @@ they list enabled and disabled options respectively. `-o` selects the
 `errexit`, `noglob`, and `nounset`, and the fixed `pipefail` setting.
 
 `nounset` is off at startup. `set -u` diagnoses a reached read of an
-unbound parameter and exits the active shell reader. Default, alternate,
+unbound parameter and normally exits the active shell reader. Default, alternate,
 assignment and required-value parameter operators keep their own unset
 rules. Empty assigned scalars and ordinary empty aggregates expand as
 values. A missing array element in an assigned array still yields zero
 in arithmetic evaluation and in an element length expansion.
 Arithmetic writes can initialize a missing binding. Command substitutions
-inherit `nounset` and return their own failure status. A direct unbound
-parameter in a here-document fails the redirection. A reached unbound
-arithmetic read in that body exits the active reader. Fresh hosted command
-strings with `nounset` return 127 for a terminal unbound read, or 1 when
-errexit is active.
+inherit `nounset` and return their own failure status. With errexit off,
+an absent array length fails the current command unit with status 1 and
+the enclosing script, `eval`, or `source` reader can resume at its next unit.
+An unbound parameter or arithmetic read in a here-document exits the shell
+performing the redirection.
+For an external command with isolated redirection, this fails the command
+in the enclosing reader. Fresh hosted command strings with `nounset` use
+status 127 for a terminal unbound read, or 1 when errexit is active.
 
 `braceexpand` is enabled by default. `set +B` preserves authored braces
 as fields proceed through the remaining expansion stages. The setting

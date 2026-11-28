@@ -766,7 +766,7 @@ public sealed partial class Evaluation : IFileTester
     private ValueTask<EvaluationResult> CompleteHereDocumentParameterFailureAsync(int status, ScopedEvaluation scope)
     {
         _state.LastExitCode = status;
-        PublishExpansionPipelineStatus(status, scope);
+        PublishExpansionPipelineStatus(1, scope);
         if (ReaderErrexitEnabled(scope))
             return RunExitTrapAsync(scope, EvaluationResult.Exit(status), ExitTrapKind.Expansion);
         var result = _state.FatalExpansion is { } fatal
@@ -5853,13 +5853,13 @@ public sealed partial class Evaluation : IFileTester
         _state.SetExpansionError(exitCode);
 
     internal Task ReportHereDocumentParameterFailureAsync(ReadOnlySpan<ShellValue> subject, ReadOnlySpan<ShellValue> message,
-        ScopedEvaluation scope, ExpansionFailureKind? fatalKind)
+        ScopedEvaluation scope, ExpansionFailure? failure)
     {
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
-        if (fatalKind is { } kind)
-            SetScopedExpansionFailure(new ExpansionFailure(kind), scope);
-        _state.SetHereDocumentParameterError();
+        if (failure is { } fatal)
+            SetScopedExpansionFailure(fatal, scope);
+        _state.SetExpansionError(failure?.ExitCode ?? 1, ExpansionErrorKind.HereDocumentParameter);
         return WriteExpansionFailureDiagnosticAsync(subject, message, GetHereDocumentParameterDiagnosticPrefix(scope), scope);
     }
 
@@ -5876,17 +5876,30 @@ public sealed partial class Evaluation : IFileTester
     {
         ReadOnlySpan<ShellValue> message = [ShellValue.FromText("bad substitution")];
         if (hereDocument)
-            return ReportHereDocumentParameterFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform);
+            return ReportHereDocumentParameterFailureAsync([subject], message, scope,
+                new ExpansionFailure(ExpansionFailureKind.InvalidParameterTransform));
         return ReportUnitExpansionFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform,
             GetCommandDiagnosticPrefix(scope));
     }
 
-    internal Task ReportUnboundParameterAsync(ReadOnlySpan<ShellValue> subject, ScopedEvaluation scope, bool hereDocument)
+    internal Task ReportUnboundParameterAsync(ReadOnlySpan<ShellValue> subject, ScopedEvaluation scope, bool hereDocument) =>
+        ReportUnboundParameterAsync(subject, scope, hereDocument, ExpansionFailureKind.UnboundParameter);
+
+    internal Task ReportUnboundArrayLengthAsync(ShellValue name, ScopedEvaluation scope, bool hereDocument)
+    {
+        var recoverable = !ReaderErrexitEnabled(scope) && (_state.ForkKind == null || hereDocument);
+        return ReportUnboundParameterAsync([name], scope, hereDocument,
+            recoverable ? ExpansionFailureKind.UnboundArrayLength : ExpansionFailureKind.UnboundParameter);
+    }
+
+    private Task ReportUnboundParameterAsync(ReadOnlySpan<ShellValue> subject, ScopedEvaluation scope, bool hereDocument,
+        ExpansionFailureKind kind)
     {
         ReadOnlySpan<ShellValue> message = [ShellValue.FromText("unbound variable")];
         return hereDocument
-            ? ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
-            : ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.UnboundParameter);
+            ? ReportHereDocumentParameterFailureAsync(subject, message, scope,
+                kind == ExpansionFailureKind.UnboundParameter ? GetUnitExpansionFailure(kind, scope) : null)
+            : ReportParameterExpansionFailureAsync(subject, message, scope, kind);
     }
 
     /// <summary>Reports the first fatal expansion through the active stderr mapping without decoding message bytes.</summary>
@@ -6021,22 +6034,27 @@ public sealed partial class Evaluation : IFileTester
         if (_state.FatalExpansion.HasValue)
             return Task.CompletedTask;
 
-        var failure = new ExpansionFailure(kind);
-        if (failure.IsTerminalParameterFailure)
-        {
-            var exitsCommandString = _state.UsesCommandStringExpansionExit && !ReaderErrexitEnabled(scope);
-            failure = failure with
-            {
-                ExitCode = exitsCommandString ? 127 : failure.ExitCode,
-                ExitsCommandString = exitsCommandString,
-                UseInheritedPipelineExitAction = !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope)
-            };
-        }
+        var failure = GetUnitExpansionFailure(kind, scope);
         // Expansion publishes its failure before the reader selects the shell's exit status.
         SetScopedExpansionFailure(failure, scope);
         _state.LastExitCode = failure.ExitCode;
         PublishExpansionPipelineStatus(1, scope);
         return WriteExpansionFailureDiagnosticAsync(subject, message, prefix, scope);
+    }
+
+    private ExpansionFailure GetUnitExpansionFailure(ExpansionFailureKind kind, ScopedEvaluation scope)
+    {
+        var failure = new ExpansionFailure(kind);
+        if (!failure.IsTerminalParameterFailure)
+            return failure;
+
+        var exitsCommandString = _state.UsesCommandStringExpansionExit && !ReaderErrexitEnabled(scope);
+        return failure with
+        {
+            ExitCode = exitsCommandString ? 127 : failure.ExitCode,
+            ExitsCommandString = exitsCommandString,
+            UseInheritedPipelineExitAction = !scope.AfterPipelineExitReset && UsesInheritedPipelineExitAction(scope)
+        };
     }
 
     private void SetScopedExpansionFailure(ExpansionFailure failure, ScopedEvaluation scope)

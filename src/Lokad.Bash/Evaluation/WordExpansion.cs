@@ -526,7 +526,7 @@ internal static partial class WordExpansion
         if (!hereDocument)
             return scope.Effects.ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
         return failure is WordSyntaxFailure.MissingArithmeticParenthesis or WordSyntaxFailure.MissingArithmeticBracket
-            ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
+            ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, failure: null)
             : scope.Effects.ReportHereDocumentWordSyntaxAsync(subject, message, scope, missingBrace: failure == WordSyntaxFailure.MissingBrace);
     }
 

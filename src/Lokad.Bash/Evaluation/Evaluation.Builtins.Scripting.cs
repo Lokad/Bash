@@ -631,6 +631,8 @@ public sealed partial class Evaluation
         if (_state.FatalExpansion is { Kind: ExpansionFailureKind.PathnameNoMatch } pathnameFailure)
             return _state.ForkKind == null && (!_state.ErrexitEnabled || scope.Context.ErrexitIgnored)
                 ? pathnameFailure.ExitCode : null;
+        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.UnboundArrayLength } unboundArrayLength)
+            return unboundArrayLength.ExitCode;
         if (RecoverableCommandSubstitutionStatus is { } substitutionStatus)
             return substitutionStatus;
         if (kind == ScriptExecutionKind.Root)
@@ -684,7 +686,8 @@ public sealed partial class Evaluation
 
     private int? RecoverableRootExpansionStatus => _state.ForkKind != null ? null : _state.FatalExpansion switch
     {
-        { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex, ExitCode: var status } => status,
+        { Kind: ExpansionFailureKind.IntegerAssignment or ExpansionFailureKind.ArrayIndex or ExpansionFailureKind.UnboundArrayLength,
+            ExitCode: var status } => status,
         { Kind: ExpansionFailureKind.ParameterDefaultAssignment, ExitCode: 2 } => 2,
         { Kind: ExpansionFailureKind.AssignmentTarget, CanResumeUntestedUnit: true } => 1,
         _ => null

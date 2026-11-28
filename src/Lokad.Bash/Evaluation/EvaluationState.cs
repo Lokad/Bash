@@ -33,6 +33,8 @@ internal enum ExpansionFailureKind
     RequiredParameter,
     /// <summary>A reached read of an unbound parameter with nounset active.</summary>
     UnboundParameter,
+    /// <summary>An absent array length discards the current unit in a continuing reader.</summary>
+    UnboundArrayLength,
     /// <summary>A present value reached an invalid parameter transformation.</summary>
     InvalidParameterTransform,
     /// <summary>An errexit-enabled file substitution could not open its input.</summary>
@@ -956,8 +958,6 @@ internal sealed class EvaluationState
 
     public void SetExpansionError(int exitCode, ExpansionErrorKind kind = ExpansionErrorKind.General) =>
         _pendingExpansionError = (exitCode, kind);
-
-    internal void SetHereDocumentParameterError() => _pendingExpansionError = (1, ExpansionErrorKind.HereDocumentParameter);
 
     /// <summary>Redefinition retains attributes and fails without changing a readonly function.</summary>
     public bool TryRegisterFunction(FunctionDefinition functionDefinition, Evaluation.EvaluationContext context, EvaluationMemory memory)
