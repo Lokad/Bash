@@ -298,57 +298,62 @@ internal struct RedirectionState
     {
         var handle = binding.Handle;
         var current = CurrentTable;
-        var frames = _frames;
-        var currentChanged = _changedDescriptors;
-        var currentOpened = _openedDescriptors;
-        DescriptorHandleOwner? longestOwner = null;
-        foreach (var target in Targets())
+        var active = includeCurrent ? current : null;
+        DescriptorHandleOwner? longestOwner = active == null ? null : _openedDescriptors;
+        if (active != null)
+            PrepareTarget(ref this, active, _openedDescriptors);
+
+        var preparedFrames = 0;
+        if (!includeCurrent || !_changedDescriptors.Contains(descriptor))
         {
-            var table = target.Table;
-            var before = table.OwnedMemoryBytes;
-            try { table.PrepareSet(descriptor, binding, memory?.Workspace); }
-            finally
+            foreach (var frame in _frames)
             {
-                if (!ReferenceEquals(table, current))
-                    _savedAdditionalBytes = checked(_savedAdditionalBytes + table.OwnedMemoryBytes - before);
+                preparedFrames++;
+                if (frame.Table is { } saved)
+                {
+                    PrepareTarget(ref this, saved, frame.Opened);
+                    longestOwner = frame.Opened;
+                }
+                if (frame.Changed.Contains(descriptor))
+                    break;
             }
-            var old = table.Resolve(descriptor);
-            if (old != handle && target.Opened.Contains(old))
-                PrepareHandles(target.Opened, 0, memory, publication: false);
-            longestOwner = target.Opened;
         }
         var publishOwnership = acquired && !handle.IsClosed && longestOwner != null
             && !longestOwner.Contains(handle) && !HasLongerOwner(longestOwner, handle);
         if (publishOwnership && longestOwner != null)
             PrepareHandles(longestOwner, 1, memory, publication: true);
-        // Prepare every receiving table before publishing the binding anywhere.
-        // Refusal after acquiring a handle must not leave a partially published alias.
-        foreach (var target in Targets())
+        // Only publish after every target has admitted the binding. The admission pass found the restoration boundary.
+        active?.Set(descriptor, binding);
+        if (preparedFrames != 0)
         {
-            var before = target.Table.OwnedMemoryBytes;
-            target.Table.Set(descriptor, binding);
-            if (!ReferenceEquals(target.Table, current))
-                _savedAdditionalBytes = checked(_savedAdditionalBytes + target.Table.OwnedMemoryBytes - before);
+            foreach (var frame in _frames)
+            {
+                if (frame.Table is { } saved)
+                {
+                    var before = saved.OwnedMemoryBytes;
+                    saved.Set(descriptor, binding);
+                    if (!ReferenceEquals(saved, current))
+                        _savedAdditionalBytes = checked(_savedAdditionalBytes + saved.OwnedMemoryBytes - before);
+                }
+                if (--preparedFrames == 0)
+                    break;
+            }
         }
         if (publishOwnership && longestOwner != null)
             longestOwner.PublishPrepared(handle);
 
-        IEnumerable<(DescriptorTable Table, DescriptorHandleOwner Opened)> Targets()
+        void PrepareTarget(ref RedirectionState state, DescriptorTable table, DescriptorHandleOwner opened)
         {
-            if (includeCurrent)
+            var before = table.OwnedMemoryBytes;
+            try { table.PrepareSet(descriptor, binding, memory?.Workspace); }
+            finally
             {
-                if (current != null)
-                    yield return (current, currentOpened);
-                if (currentChanged.Contains(descriptor))
-                    yield break;
+                if (!ReferenceEquals(table, current))
+                    state._savedAdditionalBytes = checked(state._savedAdditionalBytes + table.OwnedMemoryBytes - before);
             }
-            foreach (var frame in frames)
-            {
-                if (frame.Table != null)
-                    yield return (frame.Table, frame.Opened);
-                if (frame.Changed.Contains(descriptor))
-                    yield break;
-            }
+            var old = table.Resolve(descriptor);
+            if (old != handle && opened.Contains(old))
+                state.PrepareHandles(opened, 0, memory, publication: false);
         }
     }
 

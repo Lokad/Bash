@@ -7,6 +7,45 @@ namespace Lokad.Bash.Tests;
 public sealed class RedirectionStateTests
 {
     [Fact]
+    public void PersistentPublicationUsesTheBoundaryFoundDuringAdmission()
+    {
+        var descriptor = LogicalDescriptor.StdOut;
+        var root = new DescriptorTable();
+        var older = new DescriptorTable();
+        var boundary = new DescriptorTable();
+        var reached = new DescriptorTable();
+        var olderChanges = new ObservedChangeSet();
+        var boundaryChanges = new ObservedChangeSet { descriptor };
+        var reachedChanges = new ObservedChangeSet();
+        var state = new RedirectionState(root);
+        state.Push(older, new DescriptorHandleOwner(), olderChanges, memory: null);
+        state.Push(boundary, new DescriptorHandleOwner(), boundaryChanges, memory: null);
+        state.Push(reached, new DescriptorHandleOwner(), reachedChanges, memory: null);
+        var replacement = new FileDescriptor(42);
+
+        state.SetPersistentDescriptor(descriptor, new DescriptorBinding(replacement), memory: null, acquired: false);
+
+        Assert.Equal(replacement, reached.StdOut);
+        Assert.Equal(replacement, boundary.StdOut);
+        Assert.Equal(FileDescriptor.StdOut, older.StdOut);
+        Assert.Equal(FileDescriptor.StdOut, root.StdOut);
+        Assert.Equal(1, reachedChanges.Checks);
+        Assert.Equal(1, boundaryChanges.Checks);
+        Assert.Equal(0, olderChanges.Checks);
+    }
+
+    private sealed class ObservedChangeSet : HashSet<LogicalDescriptor>, IReadOnlySet<LogicalDescriptor>
+    {
+        public int Checks { get; private set; }
+
+        bool IReadOnlySet<LogicalDescriptor>.Contains(LogicalDescriptor descriptor)
+        {
+            Checks++;
+            return Contains(descriptor);
+        }
+    }
+
+    [Fact]
     public void ReceivingOwnershipRefusalPrecedesPersistentMapPublication()
     {
         var original = new FileDescriptor(40);

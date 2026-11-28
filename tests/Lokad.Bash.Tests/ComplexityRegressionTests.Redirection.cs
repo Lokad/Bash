@@ -91,6 +91,27 @@ public sealed partial class ComplexityRegressionTests
     }
 
     [Fact]
+    public void PersistentStandardStreamUpdatesReuseTheSavedFrameStack()
+    {
+        var root = new DescriptorTable();
+        var state = new RedirectionState(root);
+        var changes = new HashSet<LogicalDescriptor>();
+        for (var depth = 0; depth < 8; depth++)
+            state.Push(new DescriptorTable(), new DescriptorHandleOwner(), changes, memory: null);
+        var handle = 100;
+        for (var iteration = 0; iteration < 1_024; iteration++)
+            Publish();
+
+        AllocationAssert.SustainedReuse(Publish, iterations: 1_024, maximumBytes: 1_024);
+
+        Assert.Equal(new FileDescriptor(handle), root.StdOut);
+        Assert.Equal(root.StdOut, state.CurrentTable?.StdOut);
+
+        void Publish() => state.SetPersistentDescriptor(LogicalDescriptor.StdOut,
+            new DescriptorBinding(new FileDescriptor(++handle)), memory: null, acquired: false);
+    }
+
+    [Fact]
     public async Task LiteralRedirectionOverheadDoesNotScaleWithVisibleBindings()
     {
         var narrowOverhead = await MeasureOverhead(0);
