@@ -354,7 +354,10 @@ public sealed partial class Variables
         {
             _directoryStack = directoryStack == null ? null : new IndexedArray(directoryStack),
             _callerFrames = VisibleCallers is { Count: > 0 } frames ? new List<CallerEntry>(frames) : null,
-            _callerLineBytes = VisibleCallerLineBytes
+            _callerLineBytes = VisibleCallerLineBytes,
+            _callerFunctionDepth = VisibleCallerFunctionDepth,
+            _keepCallerNamesVisible = KeepCallerNamesVisible,
+            UsesBashCallerOutput = UsesBashCallerOutput
         };
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
@@ -1409,7 +1412,7 @@ public sealed partial class Variables
             return true;
 
         var name = target.Name;
-        if (IsCallerArray(name))
+        if (IsProtectedCallerArray(name))
             return false;
         if (!removeArrayNameref && IsArrayNameref(name))
         {

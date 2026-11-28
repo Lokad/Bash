@@ -83,16 +83,22 @@ internal sealed class IndexedArray
     private const long PositionNodeBytes = 64;
     // Recovery creates an assigned empty array with immutable contents. Each binding owns its attributes.
     internal static IndexedArray EmptyRecoveryPipelineStatus { get; } = new(isInitialized: true);
-    private readonly Dictionary<long, ShellValue?> _elements;
+    private Dictionary<long, ShellValue?> _elements;
     // SortedDictionary cannot find the last key without enumeration. Keep an ordered
     // position index for sparse traversal and logarithmic maximum removal.
-    private readonly SortedSet<long> _positions;
+    private SortedSet<long> _positions;
     // A live directory view uses the stack's dense positions and retained value bytes.
     internal EvaluationState? DirectoryStack { get; private set; }
     private readonly Variables? _callerOwner;
-    private readonly bool _callerLines;
+    private readonly CallerArrayKind _callerKind;
+    private bool _editedCallerNames;
+    private long _positionOffset;
     internal bool IsCallerArray => _callerOwner != null;
-    private int? DenseCount => DirectoryStack?.DirectoryStackCount ?? _callerOwner?.CallerCount;
+    internal bool IsFunctionNames => _callerOwner != null && _callerKind == CallerArrayKind.FunctionName;
+    internal bool UsesSparseCallerNames => !IsCallerArray || _editedCallerNames;
+    private bool NamesAreVisible => !IsFunctionNames || _callerOwner?.CallerNamesVisible == true;
+    private int? DenseCount => DirectoryStack?.DirectoryStackCount
+        ?? (!NamesAreVisible ? 0 : _editedCallerNames ? null : _callerOwner?.CallerCount);
     private long? _maximumIndex;
     private long _valueBytes;
     private int _entryCapacity;
@@ -119,16 +125,30 @@ internal sealed class IndexedArray
         IsInitialized = true;
     }
 
-    internal IndexedArray(Variables callerOwner, bool lines)
+    internal IndexedArray(Variables callerOwner, CallerArrayKind kind)
     {
         _callerOwner = callerOwner;
-        _callerLines = lines;
+        _callerKind = kind;
         _elements = EmptyRecoveryPipelineStatus._elements;
         _positions = EmptyRecoveryPipelineStatus._positions;
         IsInitialized = true;
     }
 
-    internal IndexedArray ForCallerOwner(Variables owner) => new(owner, _callerLines);
+    internal IndexedArray ForCallerOwner(Variables owner)
+    {
+        var view = new IndexedArray(owner, _callerKind);
+        if (_editedCallerNames)
+        {
+            view._elements = new Dictionary<long, ShellValue?>(_elements);
+            view._positions = new SortedSet<long>(_positions);
+            view._maximumIndex = _maximumIndex;
+            view._positionOffset = _positionOffset;
+            view._valueBytes = _valueBytes;
+            view._entryCapacity = _elements.Count;
+            view._editedCallerNames = true;
+        }
+        return view;
+    }
 
     internal void RebindDirectoryStack(EvaluationState directoryStack) => DirectoryStack = directoryStack;
 
@@ -145,8 +165,26 @@ internal sealed class IndexedArray
     }
 
     /// <summary>Distinguishes a declaration-only array from an assigned array, including an empty one.</summary>
-    public bool IsInitialized { get; private set; }
+    private bool _initialized;
+    public bool IsInitialized
+    {
+        get => IsFunctionNames ? NamesAreVisible && CallerNameCount != 0 : _initialized;
+        private set => _initialized = value;
+    }
     internal bool IsRecoveryPipelineStatus => ReferenceEquals(this, EmptyRecoveryPipelineStatus);
+    internal int CallerNameCount => IsFunctionNames && !_editedCallerNames ? _callerOwner?.CallerCount ?? 0 : _elements.Count;
+
+    internal bool TryReadCallerName(IndexedArrayIndex index, out ShellValue value)
+    {
+        if (!IsFunctionNames)
+            return TryGet(index, out value);
+        if (!_editedCallerNames && index.Value < CallerNameCount)
+        {
+            value = ReadDense((int)index.Value);
+            return true;
+        }
+        return TryGetSparse(index.Value, out value);
+    }
 
     /// <summary>Records an assignment even when a compound append has no elements.</summary>
     public void MarkInitialized()
@@ -163,7 +201,7 @@ internal sealed class IndexedArray
     }
 
     /// <summary>Gets the greatest stored position for arithmetic indexing, including hidden metadata.</summary>
-    public long? MaxIndex => DenseCount is > 0 and { } count ? count - 1L : _maximumIndex;
+    public long? MaxIndex => DenseCount is { } count ? count > 0 ? count - 1L : null : _maximumIndex + _positionOffset;
 
     /// <summary>Enumerates present values by index without copying; consume before mutating.</summary>
     public IEnumerable<ShellValue> PresentValues =>
@@ -173,20 +211,21 @@ internal sealed class IndexedArray
     /// <summary>Enumerates sparse positions and values together, including unassigned positions.</summary>
     internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => DenseCount.HasValue
         ? EntriesByPosition.Select(static entry => KeyValuePair.Create(ShellValue.FromInteger(entry.Key), entry.Value))
-        : IsInitialized ? _positions.Select(position => KeyValuePair.Create(ShellValue.FromInteger(position), _elements[position])) : [];
+        : IsInitialized ? _positions.Select(
+            position => KeyValuePair.Create(ShellValue.FromInteger(position + _positionOffset), _elements[position])) : [];
 
     /// <summary>Enumerates stored entries by numeric position, including unassigned entries.</summary>
     internal IEnumerable<KeyValuePair<long, ShellValue?>> EntriesByPosition => DenseCount is { } count
         ? Enumerable.Range(0, count).Select(
             position => KeyValuePair.Create((long)position, (ShellValue?)ReadDense(position)))
-        : IsInitialized ? _positions.Select(position => KeyValuePair.Create(position, _elements[position])) : [];
+        : IsInitialized ? _positions.Select(position => KeyValuePair.Create(position + _positionOffset, _elements[position])) : [];
 
     /// <summary>Gets the number of visible entries, excluding holes.</summary>
     public int Count => DenseCount ?? (IsInitialized ? _elements.Count : 0);
 
     private ShellValue ReadDense(int position) => DirectoryStack is { } stack
         ? stack.GetDirectoryStackEntry(position).Value
-        : (_callerOwner ?? throw new InvalidOperationException("Expected a dense array owner.")).GetCallerEntry(position, _callerLines);
+        : (_callerOwner ?? throw new InvalidOperationException("Expected a dense array owner.")).GetCallerEntry(position, _callerKind);
 
     /// <summary>Enumerates at most count present entries starting at an index, without materializing holes.</summary>
     public IEnumerable<ShellValue> ValuesFrom(IndexedArrayIndex first, int count)
@@ -202,16 +241,17 @@ internal sealed class IndexedArray
             }
             yield break;
         }
-        if (!IsInitialized || count <= 0 || _maximumIndex is not { } maximum || first.Value > maximum)
+        if (!IsInitialized || count <= 0 || _maximumIndex is not { } maximum || first.Value > maximum + _positionOffset)
             yield break;
-        if (count == 1 && _elements.TryGetValue(first.Value, out var exact))
+        var startPosition = first.Value - _positionOffset;
+        if (count == 1 && _elements.TryGetValue(startPosition, out var exact))
         {
             yield return exact.GetValueOrDefault();
             yield break;
         }
         // Seek into the existing position tree. Do not ask the subset for Count:
         // that would enumerate its entire range before a small window can be read.
-        var positions = first.Value == 0 ? _positions : _positions.GetViewBetween(first.Value, maximum);
+        var positions = first.Value == 0 ? _positions : _positions.GetViewBetween(startPosition, maximum);
         foreach (var position in positions)
         {
             yield return _elements[position].GetValueOrDefault();
@@ -222,7 +262,7 @@ internal sealed class IndexedArray
     /// <summary>Enumerates index bytes in numeric order without a dense view.</summary>
     public IEnumerable<ShellValue> PresentKeys => DenseCount is { } count
         ? Enumerable.Range(0, count).Select(position => ShellValue.FromInteger(position))
-        : IsInitialized ? _positions.Select(ShellValue.FromInteger) : [];
+        : IsInitialized ? _positions.Select(position => ShellValue.FromInteger(position + _positionOffset)) : [];
 
     /// <summary>Gets one present position without allocating.</summary>
     public bool TryGet(
@@ -235,7 +275,16 @@ internal sealed class IndexedArray
             value = exists ? ReadDense((int)index.Value) : ShellValue.Empty;
             return exists;
         }
-        if (IsInitialized && _elements.TryGetValue(index.Value, out var assigned) && assigned is { } stored)
+        if (IsInitialized)
+            return TryGetSparse(index.Value, out value);
+        value = ShellValue.Empty;
+        return false;
+    }
+
+    private bool TryGetSparse(long index, out ShellValue value)
+    {
+        if (_maximumIndex is { } maximum && index <= maximum + _positionOffset
+            && _elements.TryGetValue(index - _positionOffset, out var assigned) && assigned is { } stored)
         {
             value = stored;
             return true;
@@ -258,12 +307,13 @@ internal sealed class IndexedArray
                 stack.SetSavedDirectory(index, assigned, memory);
             return;
         }
-        Set(index.Value, value, memory, prepaidBytes);
+        if (!IsCallerArray)
+            Set(index.Value - _positionOffset, value, memory, prepaidBytes);
     }
 
     private void Set(long position, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
-        if (IsRecoveryPipelineStatus || DirectoryStack != null || IsCallerArray)
+        if (IsRecoveryPipelineStatus || DirectoryStack != null)
             return;
         var present = _elements.TryGetValue(position, out var previous);
         var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
@@ -299,11 +349,56 @@ internal sealed class IndexedArray
     {
         if (IsRecoveryPipelineStatus || DirectoryStack != null || IsCallerArray)
             return;
-        if (!_elements.Remove(index.Value, out var previous))
+        RemovePosition(index.Value - _positionOffset);
+    }
+
+    internal void RemoveFunctionName(IndexedArrayIndex index, EvaluationMemory memory)
+    {
+        if (!_editedCallerNames)
+        {
+            if (!TryGet(index, out _))
+                return;
+            var count = CallerNameCount;
+            memory.Charge((long)count * ElementMemoryBytes);
+            var snapshot = new IndexedArray(isInitialized: true, capacity: count);
+            for (var position = 0; position < count; position++)
+            {
+                memory.CancellationToken.ThrowIfCancellationRequested();
+                snapshot.Set(position, ReadDense(position), memory, prepaidBytes: ElementMemoryBytes);
+            }
+            _elements = snapshot._elements;
+            _positions = snapshot._positions;
+            _valueBytes = snapshot._valueBytes;
+            _entryCapacity = snapshot._entryCapacity;
+            _maximumIndex = snapshot._maximumIndex;
+            _editedCallerNames = true;
+        }
+        RemovePosition(index.Value - _positionOffset);
+    }
+
+    internal void PushCallerName(ShellValue name, EvaluationMemory memory)
+    {
+        // The existing elements move right by one logical position. Only the new head needs storage.
+        var offset = _positionOffset + 1;
+        Set(-offset, name, memory, prepaidBytes: 0);
+        _positionOffset = offset;
+    }
+
+    internal void PopCallerName()
+    {
+        if (_positions.Count == 0)
+            return;
+        RemovePosition(_positions.Min);
+        _positionOffset = _positions.Count == 0 ? 0 : _positionOffset - 1;
+    }
+
+    private void RemovePosition(long position)
+    {
+        if (!_elements.Remove(position, out var previous))
             return;
         _valueBytes -= Variables.EstimateValueBytes(previous.GetValueOrDefault());
-        _positions.Remove(index.Value);
-        if (_maximumIndex == index.Value)
+        _positions.Remove(position);
+        if (_maximumIndex == position)
             _maximumIndex = _positions.Count == 0 ? null : _positions.Max;
     }
 
@@ -326,7 +421,7 @@ internal sealed class IndexedArray
         if (previous != null && previous._elements.Count <= statuses.Count && previous._maximumIndex >= previous._elements.Count)
         {
             foreach (var position in previous._positions)
-                array.Set(position, FormatStatusAt(index++), memory: null, prepaidBytes: 0);
+                array.Set(position + previous._positionOffset, FormatStatusAt(index++), memory: null, prepaidBytes: 0);
         }
         else if (statuses.Count > 1)
         {
@@ -410,8 +505,8 @@ internal sealed class IndexedArray
 
             int CountExisting(uint first, int length)
             {
-                var start = Math.Max(minimum, first);
-                var last = Math.Min(maximum, (long)first + length - 1);
+                var start = Math.Max(minimum, (long)first - _positionOffset);
+                var last = Math.Min(maximum, (long)first + length - 1 - _positionOffset);
                 if (start > last)
                     return 0;
                 if (contiguous)
@@ -469,7 +564,7 @@ internal sealed class IndexedArray
             values.Add(ShellValue.Empty);
 
         foreach (var entry in _elements)
-            values[checked((int)entry.Key)] = entry.Value.GetValueOrDefault();
+            values[checked((int)(entry.Key + _positionOffset))] = entry.Value.GetValueOrDefault();
 
         return values;
     }
@@ -477,13 +572,16 @@ internal sealed class IndexedArray
     /// <summary>Copies sparse storage. A directory view keeps its shell owner until rebind at a fork.</summary>
     public IndexedArray Clone()
     {
-        if (IsRecoveryPipelineStatus || DirectoryStack != null || IsCallerArray)
+        if (_callerOwner != null)
+            return _editedCallerNames ? ForCallerOwner(_callerOwner) : this;
+        if (IsRecoveryPipelineStatus || DirectoryStack != null)
             return this;
         return new IndexedArray(new Dictionary<long, ShellValue?>(_elements),
             new SortedSet<long>(_positions), _maximumIndex, IsInitialized)
         {
             _valueBytes = _valueBytes,
-            _entryCapacity = _elements.Count
+            _entryCapacity = _elements.Count,
+            _positionOffset = _positionOffset
         };
     }
 

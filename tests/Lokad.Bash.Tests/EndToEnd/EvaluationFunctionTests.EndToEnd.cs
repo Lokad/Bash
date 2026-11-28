@@ -640,4 +640,121 @@ public sealed class EvaluationFunctionTestsEndToEnd
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
     }
+
+    [Fact]
+    public async Task NamedFileCallerUsesTheSourceLineAndFunctionArrays()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            f() {
+                printf '%s\n' "${FUNCNAME[*]}"
+                caller
+                caller 0
+                caller 1
+            }
+            g() { f; }
+            g
+            declare -p FUNCNAME
+            caller
+            """);
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("f g main\n7 ./unit\n7 g ./unit\n8 main ./unit\ndeclare -a FUNCNAME\n0 NULL\n",
+            host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task AnIndexedFuncnameReplacementParticipatesInLaterCalls()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            unset FUNCNAME
+            FUNCNAME=([0]=custom [3]=prior)
+            f() { printf '%s:%s\n' "${!FUNCNAME[*]}" "${FUNCNAME[*]}"; caller 0; }
+            f
+            printf '%s:%s\n' "${!FUNCNAME[*]}" "${FUNCNAME[*]}"
+            """);
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("0 1 4:f custom prior\n4 custom ./unit\n0 3:custom prior\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task FuncnameElementRemovalKeepsSparsePositionsThroughCallReturn()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            f() { unset 'FUNCNAME[0]'; printf '<%s>:%s\n' "${!FUNCNAME[*]}" "${FUNCNAME[*]}"; }
+            g() { f; printf '<%s>:%s\n' "${!FUNCNAME[*]}" "${FUNCNAME[*]}"; }
+            g
+            printf '<%s>:%s\n' "${!FUNCNAME[*]}" "${FUNCNAME[*]}"
+            """);
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<1 2>:g main\n<1>:main\n<>:\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task CallReturnPopsTheReplacementValueOfTheSameFuncnameBinding()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            unset FUNCNAME
+            FUNCNAME=([2]=kept)
+            f() { FUNCNAME=([2]=new [5]=later); declare -p FUNCNAME; }
+            f
+            declare -p FUNCNAME
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -a FUNCNAME=([2]=\"new\" [5]=\"later\")\ndeclare -a FUNCNAME=([4]=\"later\")\n",
+            result.StdOut);
+    }
+
+    [Theory]
+    [InlineData(":", "declare -a names=([2]=\"kept\")\n")]
+    [InlineData("declare -n FUNCNAME=other", "declare -a names=([0]=\"f\" [3]=\"kept\")\n")]
+    public async Task FuncnameNamerefPopsOnlyTheStillSelectedIndexedBinding(string change, string after)
+    {
+        var result = await EvaluationTestHelper.RunAsync("unset FUNCNAME\n"
+            + "names=([2]=kept); other=(other)\n"
+            + "declare -n FUNCNAME=names\n"
+            + "f() { declare -p names; " + change + "; }\n"
+            + "f; declare -p names\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -a names=([0]=\"f\" [3]=\"kept\")\n" + after, result.StdOut);
+    }
+
+    [Theory]
+    [InlineData("FUNCNAME")]
+    [InlineData("BASH_SOURCE")]
+    [InlineData("BASH_LINENO")]
+    public async Task CompoundCallArrayAssignmentDiscardsTheActiveFunctionUnit(string name)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "f() {\n"
+            + "  printf 'before\\n'\n"
+            + "  " + name + "=(value)\n"
+            + "  printf 'after\\n'\n"
+            + "}\nf\n"
+            + "printf 'returned:%s:%s\\n' \"$?\" \"$FUNCNAME\"\n"
+            + "f() { :; }; f\n"
+            + "printf 'restored:%s:%s\\n' \"$?\" \"$FUNCNAME\"\n");
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("before\nreturned:1:main\nrestored:0:\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
 }

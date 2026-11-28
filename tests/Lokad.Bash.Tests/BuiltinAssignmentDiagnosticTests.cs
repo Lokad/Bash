@@ -32,7 +32,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(FileDescriptor.StdErr, diagnostic.Descriptor);
         Assert.Equal("line 1: missing: bad array subscript\n", Encoding.UTF8.GetString(diagnostic.Content));
         Assert.False(state.Variables.ContainsKey("changed"));
-        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "PIPESTATUS" },
+        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME", "PIPESTATUS" },
             state.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
     }
 
@@ -74,7 +74,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
         Assert.False(state.Variables.ContainsKey("later"));
         Assert.False(state.Variables.ContainsKey("output"));
-        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "PIPESTATUS" },
+        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME", "PIPESTATUS" },
             state.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
         if (declaration.StartsWith("declare -n arr;", StringComparison.Ordinal))
             Assert.Equal(ShellValue.Empty, state.Namerefs["arr"]);
@@ -133,7 +133,7 @@ public sealed class BuiltinAssignmentDiagnosticTests
         Assert.Equal(closed ? 0 : 1, state.LastExitCode);
         Assert.Equal(FileDescriptor.StdErr, Assert.Single(host.Appends).Descriptor);
         Assert.Equal(ShellValue.FromText(circular ? "other" : ""), state.Namerefs["ref"]);
-        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "PIPESTATUS" },
+        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME", "PIPESTATUS" },
             state.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
         Assert.Empty(host.ClosedDescriptors);
     }

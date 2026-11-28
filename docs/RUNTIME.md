@@ -749,11 +749,11 @@ provides key lookup, ordered traversal and range selection. Its subtree counts
 stay current through inserts and removals. Slice enumeration starts after the
 reached bounds have expanded and sees changes to the selected array.
 
-`caller` merges active sourced invocations with the function chain.
-Each source command owns its immutable frame across execution and child
-cleanup. Child evaluations borrow the frame chain and preserve the order
-relative to their reconstructed function scopes. A retained function
-definition keeps its source bytes independently of any active invocation.
+`caller` and the call arrays use the same ordered frames. Function and
+source entry publish one frame and retire it in their existing unwind
+path. Child evaluations copy the active entries once and retain borrowed
+source bytes through cleanup. A retained function definition keeps its
+source bytes independently of any active invocation.
 Command diagnostics take their filename and coordinates from the reached
 syntax, so a retained function reports its definition source through a
 different caller. Eval and captures inherit the source of the reached

@@ -130,6 +130,7 @@ public sealed partial class Evaluation
     internal void SetInheritedReader(ShellValue name, SourceMemory.ReaderKind kind)
     {
         _inheritedReader = (name, kind);
+        _vars.UsesBashCallerOutput = true;
         _state.UsesCommandStringExpansionExit = kind == SourceMemory.ReaderKind.CommandString;
     }
 

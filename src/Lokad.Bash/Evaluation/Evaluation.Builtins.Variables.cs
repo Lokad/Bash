@@ -105,7 +105,7 @@ public sealed partial class Evaluation
                 continue;
             }
             var selectedName = resolvedBinding ? binding.Name : unsetName;
-            if (!namerefs && commandVars.IsCallerArray(selectedName) && !commandVars.IsReadonlyBinding(selectedName))
+            if (!namerefs && commandVars.IsProtectedCallerArray(selectedName) && !commandVars.IsReadonlyBinding(selectedName))
             {
                 exitCode = 1;
                 await ReportBuiltinDiagnosticAsync([command], [selectedName.ToValue(), ShellValue.FromText(": cannot unset")],

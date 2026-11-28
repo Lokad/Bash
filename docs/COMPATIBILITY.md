@@ -429,15 +429,19 @@ clears it for assignments. Named print operands select their bindings
 directly. Attribute listings can display a name that has attributes and
 remains unset. Assignment-style listings omit names without values.
 
-`caller` uses a compact display of active function and
-sourced invocations for unnamed script input. Both `source` and `.` appear
-as `source`. An omitted index selects the current invocation. Explicit
-indices select enclosing invocations starting at zero. A leading `--` ends
-option scanning. Invalid options and malformed indices report usage and
-return 2. The error includes the reached line and any active source filename.
-A valid index beyond the available frames returns 1. A leading
-`--help` requests help and returns 2 even with closed stdout. Frame output
-returns its selection status even if the write fails.
+`caller` reports a call site's line and caller source in a named file
+or inherited command string. An explicit index also includes the caller
+name from `FUNCNAME`. Bare `caller` prints `NULL` when only the current
+frame is present. An empty source stack or missing indexed frame returns
+1. Unnamed script input uses the compact format `0 name`. In that format
+an omitted index selects the current invocation and explicit indices
+start at the enclosing invocation. Both `source` and `.` contribute the
+name `source`.
+
+A leading `--` ends option scanning. Invalid options and malformed indices
+in a reached lookup report usage and return 2. A leading `--help` requests
+help and returns 2 even with closed stdout. Output returns its selection
+status even if the write fails.
 
 `cd` accepts at most one expanded directory field after leading options and
 an optional `--`. Word splitting and pathname expansion apply as for ordinary
@@ -1767,6 +1771,12 @@ use `environment`. A command string begins with an empty stack, and
 eval, captures and shell forks preserve the enclosing frames. Scalar
 and element assignments leave the projected entries intact. Compound
 assignments, local declarations and unsets fail.
+
+`FUNCNAME` exposes the names from the same frames while a function is
+active. A named file contributes `main` at the bottom and a sourced
+frame contributes `source`. Unsetting the whole binding removes the
+automatic view. A subsequently declared indexed array receives the
+names of later invocations and retains its own entries after they return.
 
 Invalid loop variable and function definition names use the reader's completed
 unit line through the active stderr descriptor. A retained function uses its

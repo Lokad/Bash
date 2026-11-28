@@ -11,7 +11,7 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    private static readonly ShellValue SourceCallerName = ShellValue.FromText("source");
+    private static readonly ShellValue MissingCallerSource = ShellValue.FromText("NULL");
 
     /// <summary>
     /// Handles the <c>caller</c> builtin by selecting an active function or sourced invocation.
@@ -19,23 +19,31 @@ public sealed partial class Evaluation
     /// <returns>The finalized evaluation result.</returns>
     private async Task<EvaluationResult> EvaluateBuiltinCallerAsync(
         IReadOnlyList<ShellValue> words,
+        Variables variables,
         EvaluationContext context,
         bool negated)
     {
         var command = words[0];
         var first = 1;
+        var field = first < words.Count ? ClassifyShortOptionField(words[first].Bytes.Span) : ShortOptionField.Operand;
+        if (field == ShortOptionField.Help)
+            return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Caller, "caller", negated)
+                .ConfigureAwait(false);
+        var bashOutput = variables.UsesBashCallerOutput;
+        var count = variables.CallerCount;
+        if (bashOutput && count == 0)
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         if (first < words.Count)
         {
-            var option = words[first].Bytes;
-            var field = ClassifyShortOptionField(option.Span);
             if (field == ShortOptionField.Terminator)
                 first++;
-            else if (field == ShortOptionField.Help)
-                return await WriteBuiltinHelpUnlessStdoutClosedAsync(command, BuiltinKind.Caller, "caller", negated)
-                    .ConfigureAwait(false);
             else if (field == ShortOptionField.Flags)
-                return await ReportUsageAsync(ShellValue.FromBytes(option[..2]), ": invalid option").ConfigureAwait(false);
+                return await ReportUsageAsync(ShellValue.FromBytes(words[first].Bytes[..2]), ": invalid option").ConfigureAwait(false);
         }
+
+        var names = bashOutput && first < words.Count ? variables.FunctionNamesForCaller : null;
+        if (bashOutput && first < words.Count && names is not { CallerNameCount: > 0 })
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
         var index = -1L;
         if (first < words.Count)
@@ -46,33 +54,39 @@ public sealed partial class Evaluation
             if (index < 0)
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
         }
-        var function = SkipScriptPrefixes(context.FunctionContext);
-        var source = context.CallerSource;
-        while (true)
-        {
-            CheckCancellation();
-            ShellValue name;
-            // At the same depth, the source was entered after the function.
-            if (source != null && source.FunctionDepth >= (function?.Depth ?? 0))
-            {
-                name = SourceCallerName;
-                source = source.Enclosing;
-            }
-            else if (function != null)
-            {
-                name = function.FunctionName;
-                function = SkipScriptPrefixes(function.Enclosing);
-            }
-            else
-                return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+        CheckCancellation();
+        if (index >= count - 1)
+            return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
 
-            if (index-- >= 0)
-                continue;
-            using var output = new ByteMemoryBuilder(0, Memory.Budget);
-            output.Append("0 "u8).Append(name.Bytes).Append((byte)'\n');
-            await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
-            return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
+        var line = ShellValue.FromByte((byte)'0');
+        ShellValue? name = null;
+        ShellValue? source = null;
+        if (bashOutput)
+        {
+            line = variables.GetCallerEntry((int)Math.Max(0, index), CallerArrayKind.Line);
+            if (index < 0)
+                source = count > 1 ? variables.GetCallerEntry(1, CallerArrayKind.Source) : MissingCallerSource;
+            else
+            {
+                var caller = (int)index + 1;
+                if (names == null || !names.TryReadCallerName(IndexedArrayIndex.FromUnsigned((uint)caller), out var function))
+                    return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), negated).ConfigureAwait(false);
+                name = function;
+                source = variables.GetCallerEntry(caller, CallerArrayKind.Source);
+            }
         }
+        else
+            name = variables.GetCallerEntry((int)(index + 1), CallerArrayKind.FunctionName);
+
+        using var output = new ByteMemoryBuilder(0, Memory.Budget);
+        output.Append(line.Bytes);
+        if (name is { } functionName)
+            output.Append((byte)' ').Append(functionName.Bytes);
+        if (source is { } sourceName)
+            output.Append((byte)' ').Append(sourceName.Bytes);
+        output.Append((byte)'\n');
+        await ExecuteWriteAsync(GetStdOutDescriptor(), output.ToMemory()).ConfigureAwait(false);
+        return await FinalizeResultAsync(EvaluationResult.FromExitCode(0), negated).ConfigureAwait(false);
 
         async Task<EvaluationResult> ReportUsageAsync(ShellValue operand, string reason)
         {
@@ -84,12 +98,6 @@ public sealed partial class Evaluation
             return await FinalizeResultAsync(EvaluationResult.FromExitCode(2), negated).ConfigureAwait(false);
         }
 
-        static FunctionContext? SkipScriptPrefixes(FunctionContext? frame)
-        {
-            while (frame?.Locals.IsTemporaryPrefixScope == true)
-                frame = frame.Enclosing;
-            return frame;
-        }
     }
 
     /// <summary>

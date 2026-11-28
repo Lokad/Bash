@@ -57,6 +57,7 @@ public sealed partial class Variables
             _getoptsCursor = caller._getoptsCursor,
             _deferFieldSeparators = caller._deferFieldSeparators,
             _indexedIfs = caller._indexedIfs,
+            UsesBashCallerOutput = caller.UsesBashCallerOutput,
             CachedFieldSeparators = caller.CachedFieldSeparators
         };
     }

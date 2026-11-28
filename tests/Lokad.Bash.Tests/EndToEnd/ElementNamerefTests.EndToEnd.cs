@@ -19,7 +19,7 @@ public sealed class ElementNamerefTestsEndToEnd
         await new Engine().RunAsync(evaluation, host, timeout.Token);
 
         Assert.Equal(1, evaluation.LastExitCode);
-        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "PIPESTATUS" },
+        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME", "PIPESTATUS" },
             evaluation.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
         Assert.Empty(evaluation.AssociativeArrays);
         Assert.False(evaluation.Variables.ContainsKey(BindingName.Empty));

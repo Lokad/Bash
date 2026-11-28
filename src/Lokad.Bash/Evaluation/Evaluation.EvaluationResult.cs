@@ -4,6 +4,8 @@ namespace Lokad.Bash.Evaluation;
 
 public partial class Evaluation
 {
+    private enum DirectAssignmentResult { Assigned, Failed, DiscardUnit }
+
     /// <summary> Enumerates the flow-control outcomes produced by evaluation. </summary>
     private enum FlowControlKind
     {

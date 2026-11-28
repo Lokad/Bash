@@ -510,7 +510,7 @@ public sealed partial class Evaluation : IFileTester
                         scope = scope with { Context = scope.Context.WithSourceMemory(startupSource) };
                     }
                     using var caller = callerSource is { } sourceName
-                        ? _vars.EnterCaller(sourceName, 0, Memory) : default;
+                        ? _vars.EnterCaller(sourceName, 0, CallerFrameKind.File, ShellValue.Empty, Memory) : default;
                     result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
                     if (_state.ForkKind == ShellForkKind.Subshell)
                         result = CompleteDiscardInChild(result);
@@ -1286,7 +1286,14 @@ public sealed partial class Evaluation : IFileTester
                     PublishAssignmentTargetFailure(scope);
                     return PublishStatus(await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false));
                 }
-                if (!applied)
+                if (applied == DirectAssignmentResult.DiscardUnit)
+                {
+                    scope.Variables.RetainCallerNameVisibilityOnDiscard();
+                    _state.LastExitCode = 1;
+                    PublishExpansionPipelineStatus(1, scope);
+                    return EvaluationResult.DiscardCompoundInitializerUnit();
+                }
+                if (applied == DirectAssignmentResult.Failed)
                     exitCode = 1;
             }
 
@@ -1868,7 +1875,7 @@ public sealed partial class Evaluation : IFileTester
                         .ConfigureAwait(false),
                     BuiltinKind.Popd => await EvaluateBuiltinPopdAsync(byteOperands, commandVars, bindings, builtinScope.Context, false)
                         .ConfigureAwait(false),
-                    BuiltinKind.Caller => await EvaluateBuiltinCallerAsync(byteOperands, builtinScope.Context, false)
+                    BuiltinKind.Caller => await EvaluateBuiltinCallerAsync(byteOperands, commandVars, builtinScope.Context, false)
                         .ConfigureAwait(false),
                     BuiltinKind.Shift => await AwaitWordExpansionAsync(EvaluateBuiltinShiftAsync(
                         byteOperands, builtinScope with { Variables = commandVars }, false)).ConfigureAwait(false),
@@ -5003,25 +5010,26 @@ public sealed partial class Evaluation : IFileTester
                     operand.Value.GetValueOrDefault(), ShellValue.FromText("': not a valid identifier")]);
             }
         }
-        async Task<bool> ApplyAssignmentAsync(AssignmentWord assignment)
+        async Task<DirectAssignmentResult> ApplyAssignmentAsync(AssignmentWord assignment)
         {
             if (assignment.ArrayValues is not { } items)
             {
                 var value = await WordExpansion.ExpandAssignmentValueAsync(assignment.Value, scope).ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
-                    return false;
-                return await WordExpansion.TryAssignAsync(assignment.Target, value, assignment.Operator, scope).ConfigureAwait(false);
+                    return DirectAssignmentResult.Failed;
+                return await WordExpansion.TryAssignAsync(assignment.Target, value, assignment.Operator, scope).ConfigureAwait(false)
+                    ? DirectAssignmentResult.Assigned : DirectAssignmentResult.Failed;
             }
 
             if (!VariableReference.TryParse(assignment.Target, Memory, out var compoundTarget))
-                return false;
+                return DirectAssignmentResult.Failed;
             var variables = scope.Variables;
             var name = variables.ResolveNamerefName(compoundTarget.Name);
             if (compoundTarget.Kind != VariableReferenceKind.Name || !name.IsIdentifier)
             {
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "cannot assign list to array member", scope)
                     .ConfigureAwait(false);
-                return false;
+                return DirectAssignmentResult.Failed;
             }
             var destination = new VariableBinding(VariableReference.ForName(name), variables);
             var createsGlobalArray = false;
@@ -5029,24 +5037,25 @@ public sealed partial class Evaluation : IFileTester
             {
                 var selected = await SelectArrayNamerefDestinationAsync(name, compoundTarget.Name).ConfigureAwait(false);
                 if (selected is not { } target)
-                    return false;
+                    return DirectAssignmentResult.Failed;
                 (destination, createsGlobalArray) = target;
             }
             if (destination.Owner.IsReadonly(destination.Name))
             {
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope).ConfigureAwait(false);
-                return false;
+                return DirectAssignmentResult.Failed;
             }
             if (destination.Owner.IsCallerArray(destination.Name))
-                return false;
+                return scope.Variables.HasActiveCallerFunction ? DirectAssignmentResult.DiscardUnit : DirectAssignmentResult.Failed;
             if (!await ValidateCompoundInitializerCapturesAsync(items, scope).ConfigureAwait(false))
-                return false;
+                return DirectAssignmentResult.Failed;
 
             var kind = !createsGlobalArray && destination.Owner.AssociativeArrays.ContainsKey(destination.Name)
                 ? ArrayKind.Associative : ArrayKind.Indexed;
             return await ExpandAndApplyCompoundArrayItemsAsync(
                 destination, kind, createsGlobalArray ? AssignmentOperator.Replace : assignment.Operator, items,
-                AssignmentContext.Direct, scope, scope, compoundTarget.Name, initializeReadonly: false).ConfigureAwait(false);
+                AssignmentContext.Direct, scope, scope, compoundTarget.Name, initializeReadonly: false).ConfigureAwait(false)
+                ? DirectAssignmentResult.Assigned : DirectAssignmentResult.Failed;
         }
 
         async Task<(VariableBinding Binding, bool CreatesGlobalArray)?> SelectArrayNamerefDestinationAsync(BindingName initial, BindingName source)
@@ -5742,6 +5751,7 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Sets an exported variable, bypassing readonly checks for host-provided environment.</summary>
     internal void SetExportedVariable(BindingName name, ShellValue value)
     {
+        _vars.KeepImportedFunctionName(name);
         _vars.SetScalarIgnoringReadonly(name, value);
         _vars.SetExported(name, true);
     }
@@ -7104,7 +7114,7 @@ public sealed partial class Evaluation : IFileTester
             sourceMemory.OwnDiagnosticName(openedPath, currentSearchEntry);
             lookupMemory?.Dispose();
             using var caller = scope.Variables.EnterCaller(sourceMemory.GetDiagnosticName(inFunction: false) ?? ShellValue.Empty,
-                scope.Context.Coordinates.Line, Memory);
+                scope.Context.Coordinates.Line, CallerFrameKind.Source, ShellValue.Empty, Memory);
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
             var sourceScope = scope with

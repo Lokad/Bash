@@ -46,29 +46,29 @@ public sealed partial class Evaluation
         };
         using var positionalParametersScope = scope.Variables.EnterFunctionPositionals(arguments);
         functionContext.CallerPositionals = positionalParametersScope;
-        using var caller = scope.Variables.EnterCaller(
-            function.SourceMemory?.GetDiagnosticName(inFunction: true) ?? SourceMemory.EnvironmentDiagnosticName,
-            scope.Context.Coordinates.Line, Memory);
-        var functionScope = scope with
-        {
-            TerminalLaunch = terminalCapture
-                ? SelectTerminalLaunch(functionDefinition.Body is GroupCommand group ? group.Body : functionDefinition.Body,
-                    allowDirectRedirections: false)
-                : null,
-            // A function can only break/continue its own loops, not the caller's loops.
-            Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
-            {
-                GlobalPrefixes = scope.Context.GlobalPrefixes,
-                CallerSource = scope.Context.CallerSource,
-                ErrexitIgnored = scope.Context.ErrexitIgnored,
-                SourceMemory = function.SourceMemory,
-                Coordinates = function.Coordinates
-            }
-        };
         EvaluationResult functionResult;
         var preserveExitOptions = false;
         try
         {
+            using var caller = scope.Variables.EnterCaller(
+                function.SourceMemory?.GetDiagnosticName(inFunction: true) ?? SourceMemory.EnvironmentDiagnosticName,
+                scope.Context.Coordinates.Line, CallerFrameKind.Function, functionDefinition.Name.Value, Memory);
+            var functionScope = scope with
+            {
+                TerminalLaunch = terminalCapture
+                    ? SelectTerminalLaunch(functionDefinition.Body is GroupCommand group ? group.Body : functionDefinition.Body,
+                        allowDirectRedirections: false)
+                    : null,
+                // A function can only break/continue its own loops, not the caller's loops.
+                Context = new EvaluationContext(0, functionContext, ReturnTargetKind.Function)
+                {
+                    GlobalPrefixes = scope.Context.GlobalPrefixes,
+                    CallerSource = scope.Context.CallerSource,
+                    ErrexitIgnored = scope.Context.ErrexitIgnored,
+                    SourceMemory = function.SourceMemory,
+                    Coordinates = function.Coordinates
+                }
+            };
             try
             {
                 functionResult = await EvaluateCommandAsync(functionDefinition.Body, functionScope, negated: false)

@@ -170,6 +170,7 @@ public sealed partial class Variables
     private sealed class IndexedSlot(IndexedArray value) : VariableSlot
     {
         public IndexedArray Value { get; } = value;
+        public long CallerNameBindingVersion { get; set; }
         public EvaluationState.DirectoryStackListing? DirectoryListing { get; set; }
         public long? RemovedDirectoryListingIndex { get; set; }
         protected override VariableSlot CloneValue() => new IndexedSlot(Value.Clone());
@@ -197,6 +198,8 @@ public sealed partial class Variables
         {
             if (previous is IndexedSlot indexed && (indexed.Value.IsRecoveryPipelineStatus || indexed.Value.IsCallerArray))
                 return;
+            if (previous is IndexedSlot oldArray && replacement is IndexedSlot newArray)
+                newArray.CallerNameBindingVersion = oldArray.CallerNameBindingVersion;
             replacement.Attributes |= retainArrayNameref
                 ? previous.Attributes : previous.Attributes & ~BindingAttributes.ArrayNameref;
         }
@@ -396,12 +399,14 @@ public sealed partial class Variables
         }
     }
 
-    internal bool TryRemoveIndexedElement(BindingName name, IndexedArrayIndex index)
+    internal bool TryRemoveIndexedElement(BindingName name, IndexedArrayIndex index, EvaluationMemory memory)
     {
         if (TryGetBinding(name, out var slot) && slot is IndexedSlot indexed)
         {
             if (indexed.Value.DirectoryStack != null)
                 indexed.RemovedDirectoryListingIndex = index.Value;
+            else if (indexed.Value.IsFunctionNames)
+                indexed.Value.RemoveFunctionName(index, memory);
             else
                 indexed.Value.Remove(index);
             return true;

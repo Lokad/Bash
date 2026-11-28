@@ -296,7 +296,7 @@ internal static partial class WordExpansion
         switch (target)
         {
             case ResolvedVariableReference.Indexed indexed:
-                if (variables.TryRemoveIndexedElement(indexed.Name, indexed.Index))
+                if (variables.TryRemoveIndexedElement(indexed.Name, indexed.Index, scope.Effects.Memory))
                 {
                     if (indexed.Name == FieldSeparators.Name && reference.Name == indexed.Name)
                         variables.RefreshIndexedFieldSeparators();
