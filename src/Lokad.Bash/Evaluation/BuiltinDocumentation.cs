@@ -79,7 +79,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
         BuiltinKind.Hash => new("[-dlrt] [--] [name ...]",
             "Report an empty command cache. -l lists its reusable entries and -r clears it. Both succeed silently.\n    -d deletes named entries and succeeds against the empty cache. -t reports each queried name as missing."),
         BuiltinKind.Shift => new("[--] [n]", "Remove the first n positional parameters. With no count, remove one."),
-        BuiltinKind.Set => new("[-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]", "Set errexit or replace positional parameters. A lone + is consumed while scanning options. -o/+o alone inspect errexit. With no arguments, list variable assignments and function definitions."),
+        BuiltinKind.Set => new("[-ef|+ef] [-o name|+o name] [-|+|--] [arg ...]", "Set errexit or noglob, or replace positional parameters. A lone + is consumed while scanning options. -o/+o alone inspect the supported mutable options. With no arguments, list variable assignments and function definitions."),
         BuiltinKind.Shopt => new("[-pqsu] [-o] [optname ...]",
             "Inspect or change shell options. Supported options are dotglob, failglob, globskipdots,\n    inherit_errexit, localvar_inherit, nocaseglob, nocasematch, and nullglob. -s enables,\n    -u disables, -p prints reusable settings, and -q suppresses listings.\n    -o inspects set options or changes errexit."),
         BuiltinKind.Exec => new("[-cl] [-a name] [command [argument ...]] [redirection ...]",

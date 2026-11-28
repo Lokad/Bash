@@ -7,6 +7,79 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationGlobTestsEndToEnd
 {
     [Fact]
+    public async Task NoglobSkipsPathnameLookupsAndKeepsWordAndPatternExpansion()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/itemA.txt", "A")]);
+        var listings = new List<ShellPath>();
+        host.BeforeListDirectory = listings.Add;
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s failglob nullglob
+            set -f
+            IFS=:
+            value='item[AB].txt:extra'
+            printf 'split:<%s>\n' $value
+            printf 'brace:<%s>\n' item{a,b}[AB]
+            [[ word == w* ]] && printf 'conditional\n'
+            case word in w*) printf 'case\n';; esac
+            set +f
+            printf 'expanded:<%s>\n' item[AB].txt
+            """, tree: host);
+
+        Assert.Equal("split:<item[AB].txt>\nsplit:<extra>\nbrace:<itema[AB]>\nbrace:<itemb[AB]>\n"
+            + "conditional\ncase\nexpanded:<itemA.txt>\n", result.StdOut);
+        Assert.Equal(ShellPath.Root, Assert.Single(listings));
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task NoglobUsesLiteralRedirectionTargetsAndArrayFields()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/itemA.txt", "initial\n")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            set -o noglob
+            printf 'literal\n' >item[AB].txt
+            read -r value <item[AB].txt
+            printf 'read:<%s>\n' "$value"
+            declare -a a=( item[AB].txt )
+            b=( item[AB].txt )
+            printf 'arrays:<%s>\n' "${a[@]}" "${b[@]}"
+            set +o noglob
+            printf 'expanded\n' >item[AB].txt
+            """, tree: host);
+
+        Assert.Equal("read:<literal>\narrays:<item[AB].txt>\narrays:<item[AB].txt>\n", result.StdOut);
+        Assert.Equal("literal\n", host.ReadFile("/item[AB].txt"));
+        Assert.Equal("expanded\n", host.ReadFile("/itemA.txt"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task NoglobRestoresTheFunctionSnapshotAndReportsTheReachedState()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -
+                shopt -os noglob
+                local -
+                printf 'local:%s:%s:%s\n' "$-" "${-}" "$SHELLOPTS"
+                [[ -o noglob ]] && test -o noglob && shopt -oq noglob && printf 'active\n'
+                printf 'capture:%s\n' "$(printf '%s' "$-")"
+            }
+            f
+            printf 'outer:%s:%s\n' "$-" "$SHELLOPTS"
+            [[ -o noglob ]] || printf 'restored\n'
+            """);
+
+        Assert.Equal("local:f:f:braceexpand:noglob:pipefail\nactive\ncapture:f\n"
+            + "outer::braceexpand:pipefail\nrestored\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task GlobIgnoreFiltersFinalPathSpellingsBeforeApplyingNoMatchPolicy()
     {
         var host = EndToEndHarness.BuildTree(["/dir", "/dir/sub"],

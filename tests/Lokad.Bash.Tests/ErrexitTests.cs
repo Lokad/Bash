@@ -11,7 +11,8 @@ namespace Lokad.Bash.Tests;
 public sealed class ErrexitTests
 {
     private const string ReportOption = "flag(){ if [[ -o errexit ]]; then printf on; else printf off; fi; }; ";
-    private const string SetUsage = "set: usage: set [-e|+e] [-o errexit|+o errexit] [-|+|--] [arg ...]\n";
+    private const string SetUsage = "set: usage: set [-ef|+ef] [-o name|+o name] [-|+|--] [arg ...]\n";
+    private const string DefaultSetInspection = "errexit\toff\nnoglob\toff\n";
     private const string SetClosedOutput = "set: write error: Bad file descriptor\n";
     private const string TopLevelSetClosedOutput = "line 1: " + SetClosedOutput;
 
@@ -39,7 +40,8 @@ public sealed class ErrexitTests
             "set -- keep; set -o; set -e; set +o; set +e; set -o; printf '%s' \"$1\"", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("errexit\toff\nset -o errexit\nerrexit\toff\nkeep", host.StandardOutput.TextContent);
+        Assert.Equal(DefaultSetInspection + "set -o errexit\nset +o noglob\n" + DefaultSetInspection + "keep",
+            host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
@@ -218,8 +220,8 @@ public sealed class ErrexitTests
     }
 
     [Theory]
-    [InlineData('-', "+e", "errexit\toff\n", "errexit\ton\n", "e")]
-    [InlineData('+', "-e", "set -o errexit\n", "set +o errexit\n", "")]
+    [InlineData('-', "+e", DefaultSetInspection, "errexit\ton\nnoglob\toff\n", "e")]
+    [InlineData('+', "-e", "set -o errexit\nset +o noglob\n", "set +o errexit\nset +o noglob\n", "")]
     public async Task GroupedSetInspectionsObserveFlagRunsAndReuseStableOutput(
         char sign, string initial, string before, string after, string flags)
     {
@@ -266,7 +268,7 @@ public sealed class ErrexitTests
         Assert.Equal(ShellValue.FromText("tail"), Assert.Single(evaluation.PositionalParameters));
         var inspection = Assert.Single(host.Appends);
         Assert.Equal(FileDescriptor.StdOut, inspection.Descriptor);
-        Assert.Equal("errexit\toff\n"u8.ToArray(), inspection.Content);
+        Assert.Equal(ShellValue.FromText(DefaultSetInspection).Bytes.ToArray(), inspection.Content);
     }
 
     [Theory]
@@ -291,7 +293,7 @@ public sealed class ErrexitTests
         Assert.Equal(ShellValue.FromText("keep"), Assert.Single(evaluation.PositionalParameters));
         FileDescriptor[] expected = merged ? [FileDescriptor.StdOut] : [FileDescriptor.StdOut, FileDescriptor.StdErr];
         Assert.Equal(expected, host.Appends.Select(static write => write.Descriptor));
-        Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[0].Content);
+        Assert.Equal(ShellValue.FromText(DefaultSetInspection).Bytes.ToArray(), host.Appends[0].Content);
         if (!merged)
             Assert.Equal(ShellValue.FromText(diagnostic).Bytes.ToArray(), host.Appends[1].Content);
     }
@@ -314,9 +316,9 @@ public sealed class ErrexitTests
         Assert.Equal(ShellValue.FromText("tail"), Assert.Single(evaluation.PositionalParameters));
         Assert.Equal(new[] { FileDescriptor.StdOut, FileDescriptor.StdErr, FileDescriptor.StdOut },
             host.Appends.Select(static write => write.Descriptor));
-        Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[0].Content);
+        Assert.Equal(ShellValue.FromText(DefaultSetInspection).Bytes.ToArray(), host.Appends[0].Content);
         Assert.Equal("line 1: set: write error: Synthetic write failure\n"u8.ToArray(), host.Appends[1].Content);
-        Assert.Equal("errexit\toff\n"u8.ToArray(), host.Appends[2].Content);
+        Assert.Equal(ShellValue.FromText(DefaultSetInspection).Bytes.ToArray(), host.Appends[2].Content);
     }
 
     [Theory]
@@ -356,7 +358,7 @@ public sealed class ErrexitTests
             + "printf '<%s><%s>' \"$status\" \"$1\"; flag", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.StartsWith("set: set [-e|+e]", host.StandardOutput.TextContent);
+        Assert.StartsWith("set: set [-ef|+ef]", host.StandardOutput.TextContent);
         Assert.EndsWith("<2><keep>" + expectedMode, host.StandardOutput.TextContent);
         Assert.True(host.StandardError.Content.IsEmpty);
     }
@@ -480,7 +482,7 @@ public sealed class ErrexitTests
             CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("errexit\ton\n<new><e>", host.StandardOutput.TextContent);
+        Assert.Equal("errexit\ton\nnoglob\toff\n<new><e>", host.StandardOutput.TextContent);
         Assert.True(host.StandardError.Content.IsEmpty);
     }
 

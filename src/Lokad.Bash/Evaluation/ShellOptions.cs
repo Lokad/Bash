@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -18,22 +19,31 @@ internal enum ShellOption
     NoCaseMatch = 128,
     GlobSkipDots = 256,
     BraceExpand = 512,
-    Pipefail = 1024
+    Pipefail = 1024,
+    Noglob = 2048
 }
 
 internal static class ShellOptions
 {
     internal const ShellOption Fixed = ShellOption.BraceExpand | ShellOption.Pipefail;
     internal const ShellOption Default = Fixed | ShellOption.GlobSkipDots;
+    internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob;
+    internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit;
+    internal const byte ErrexitFlag = (byte)'e';
+    internal const byte NoglobFlag = (byte)'f';
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
-    internal readonly record struct Entry(ShellValue Name, ShellOption Option);
+    internal readonly record struct Entry(ShellValue Name, ShellOption Option)
+    {
+        internal byte ShortFlag { get; init; }
+    }
 
     private static readonly Entry[] SetOptions =
     [
         new(ShellValue.FromText("braceexpand"), ShellOption.BraceExpand),
-        new(ShellValue.FromText("errexit"), ShellOption.Errexit),
+        new(ShellValue.FromText("errexit"), ShellOption.Errexit) { ShortFlag = ErrexitFlag },
+        new(ShellValue.FromText("noglob"), ShellOption.Noglob) { ShortFlag = NoglobFlag },
         new(ShellValue.FromText("pipefail"), ShellOption.Pipefail)
     ];
 
@@ -50,8 +60,12 @@ internal static class ShellOptions
     ];
 
     private static readonly ShellOption BashMask = CollectBashFlags();
-    private static readonly ShellValue[] SetValues =
-        [Format(SetOptions, Fixed, memory: null, out _), Format(SetOptions, Fixed | ShellOption.Errexit, memory: null, out _)];
+    private static readonly ShellOption[] SetStates =
+        [ShellOption.None, ShellOption.Errexit, ShellOption.Noglob, MutableSet];
+    private static readonly ShellValue[] SetValues = Array.ConvertAll(SetStates,
+        static enabled => Format(SetOptions, Fixed | enabled, memory: null, out _));
+    private static readonly ShellValue[] SetFlags =
+        [ShellValue.Empty, ShellValue.FromByte(ErrexitFlag), ShellValue.FromByte(NoglobFlag), ShellValue.FromText("ef")];
 
     internal static ShellValue DefaultBashBinding { get; } = FormatBashBinding(SelectBashFlags(Default), memory: null, out _);
 
@@ -65,7 +79,25 @@ internal static class ShellOptions
         return ShellOption.None;
     }
 
-    internal static ShellValue SetBinding(ShellOption enabled) => SetValues[(int)(enabled & ShellOption.Errexit)];
+    internal static ShellOption FindShortSetOption(byte flag) => flag switch
+    {
+        ErrexitFlag => ShellOption.Errexit,
+        NoglobFlag => ShellOption.Noglob,
+        _ => ShellOption.None
+    };
+
+    private static int MutableSetIndex(ShellOption enabled) =>
+        ((enabled & ShellOption.Errexit) != 0 ? 1 : 0) + ((enabled & ShellOption.Noglob) != 0 ? 2 : 0);
+
+    internal static ShellValue SetBinding(ShellOption enabled) => SetValues[MutableSetIndex(enabled)];
+
+    internal static ShellValue Flags(ShellOption enabled) => SetFlags[MutableSetIndex(enabled)];
+
+    internal static ShellValue InspectSetOptions(ShellOption enabled, bool listing)
+    {
+        var inspection = SetInspections.Values[MutableSetIndex(enabled)];
+        return listing ? inspection.Listing : inspection.Commands;
+    }
 
     internal static ShellOption SelectBashFlags(ShellOption enabled) => enabled & BashMask;
 
@@ -78,6 +110,28 @@ internal static class ShellOptions
         foreach (var component in value.Split((byte)':'))
             enabled |= Find(value[component], setOptions);
         return enabled;
+    }
+
+    private static class SetInspections
+    {
+        internal static readonly (ShellValue Listing, ShellValue Commands)[] Values =
+            Array.ConvertAll(SetStates, Create);
+
+        private static (ShellValue Listing, ShellValue Commands) Create(ShellOption enabled)
+        {
+            var listing = new StringBuilder();
+            var commands = new StringBuilder();
+            foreach (var entry in SetOptions)
+            {
+                if (entry.ShortFlag == 0)
+                    continue;
+                var active = (enabled & entry.Option) != 0;
+                var name = entry.Name.ToUtf8String();
+                listing.Append(name).Append(active ? "\ton\n" : "\toff\n");
+                commands.Append(active ? "set -o " : "set +o ").Append(name).Append('\n');
+            }
+            return (ShellValue.FromText(listing.ToString()), ShellValue.FromText(commands.ToString()));
+        }
     }
 
     private static ShellValue Format(Entry[] entries, ShellOption enabled, EvaluationMemory? memory, out long ownedBytes)

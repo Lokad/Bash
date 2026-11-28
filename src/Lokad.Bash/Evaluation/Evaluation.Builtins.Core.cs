@@ -46,7 +46,7 @@ public sealed partial class Evaluation
         }
 
         var evaluation = TestEvaluation.ParseValues(words, firstArgument: 1, argumentLimit, _cancellationToken,
-            _state.ErrexitEnabled, Memory);
+            _state.EnabledOptions, Memory);
         bool? mixed = null;
         if (evaluation.HasVariablePredicates)
         {

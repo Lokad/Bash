@@ -312,6 +312,8 @@ and other dynamic syntax stay late-bound. Pathname expansion scans components in
 the existing pattern and quote mask. It prepares the literal prefix once and
 keeps separate spellings for output and lookup. Lookup preserves dot and dot-dot
 components for host traversal.
+With `noglob` enabled, expanded fields bypass the pathname matcher and keep
+their byte spelling. Prepared literal fields can use the existing direct path.
 An explicit leading dot can select virtual dot entries when `globskipdots`
 is disabled and the directory listing succeeds. A failed listing still
 contributes no candidates.
@@ -394,8 +396,8 @@ invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
 descriptor cleanup path. Command substitutions clear errexit on entry by
 default and inherit it when `inherit_errexit` is enabled. Subshells and
 pipeline stages inherit it directly.
-The `local -` operand saves errexit and its inheritance setting on the active
-function invocation, including when reached through eval or source.
+The `local -` operand saves `errexit`, `noglob`, and `inherit_errexit` on the
+active function invocation, including when reached through eval or source.
 Normal return and expansion failure
 unwind the snapshot. A terminating exit or errexit lets the EXIT action see the
 active option state. A child evaluation forks the function frames and their

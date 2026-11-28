@@ -103,7 +103,7 @@ public sealed class TestEvaluationTests
         {
             memory.Workspace.Resize(0);
             return TestEvaluation.ParseValues(args, 0, args.Length, CancellationToken.None,
-                errexitEnabled: false, memory);
+                ShellOptions.Default, memory);
         }
     }
 
@@ -176,7 +176,7 @@ public sealed class TestEvaluationTests
             return bytes;
 
             bool ParseAndComplete() => TestEvaluation.ParseValues(arguments, 0, arguments.Length,
-                CancellationToken.None, errexitEnabled: false, memory).CompleteFileTests([]);
+                CancellationToken.None, ShellOptions.Default, memory).CompleteFileTests([]);
         }
     }
 
@@ -211,7 +211,7 @@ public sealed class TestEvaluationTests
         {
             var operands = expression.Split(' ').Select(ShellValue.FromText).ToArray();
             return TestEvaluation.ParseValues(operands, 0, operands.Length,
-                CancellationToken.None, errexitEnabled: false, memory);
+                CancellationToken.None, ShellOptions.Default, memory);
         }
 
         static void VerifyRefusal(string expression, long limit)

@@ -23,7 +23,7 @@ internal readonly record struct ShellLaunchArguments(
                 break;
             }
             if (group.Length < 2 || group[0] is not ((byte)'-' or (byte)'+')
-                || group[1] is not ((byte)'e' or (byte)'O' or (byte)'c'))
+                || group[1] is not (ShellOptions.ErrexitFlag or ShellOptions.NoglobFlag or (byte)'o' or (byte)'O' or (byte)'c'))
                 break;
 
             var enable = group[0] == (byte)'-';
@@ -36,19 +36,18 @@ internal readonly record struct ShellLaunchArguments(
                     continue;
                 }
 
-                ShellOption option;
-                if (flag == (byte)'e')
-                    option = ShellOption.Errexit;
-                else if (flag == (byte)'O')
+                var option = ShellOptions.FindShortSetOption(flag);
+                if (flag is (byte)'o' or (byte)'O')
                 {
                     if (index == arguments.Count)
                         return Failure(ShellLaunchError.MissingOptionName, spelling);
                     var name = arguments[index++];
-                    option = ShellOptions.Find(name.Bytes.Span, setOptions: false);
-                    if (option == ShellOption.None)
-                        return Failure(ShellLaunchError.InvalidOptionName, name);
+                    var setOptions = flag == (byte)'o';
+                    option = ShellOptions.Find(name.Bytes.Span, setOptions);
+                    if (option == ShellOption.None || !enable && (option & ShellOptions.Fixed) != 0)
+                        return Failure(setOptions ? ShellLaunchError.InvalidSetOptionName : ShellLaunchError.InvalidOptionName, name);
                 }
-                else
+                else if (option == ShellOption.None)
                     return Failure(ShellLaunchError.InvalidFlag, spelling);
 
                 enabledOptions = enable ? enabledOptions | option : enabledOptions & ~option;
@@ -62,4 +61,4 @@ internal readonly record struct ShellLaunchArguments(
     }
 }
 
-internal enum ShellLaunchError { None, MissingOptionName, InvalidOptionName, InvalidFlag }
+internal enum ShellLaunchError { None, MissingOptionName, InvalidOptionName, InvalidSetOptionName, InvalidFlag }

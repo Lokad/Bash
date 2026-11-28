@@ -124,7 +124,7 @@ public sealed partial class Evaluation
                         return await WordExpansion.TestVariableAsync(kind, operand, scope).ConfigureAwait(false) ? 0 : 1;
                     return kind switch
                     {
-                        UnaryPredicateKind.OptionEnabled => IsOptionEnabled(operand.Bytes.Span, _state.ErrexitEnabled) ? 0 : 1,
+                        UnaryPredicateKind.OptionEnabled => IsOptionEnabled(operand.Bytes.Span, _state.EnabledOptions) ? 0 : 1,
                         _ => throw new InvalidOperationException("Unexpected conditional unary predicate.")
                     };
                 case ConditionalExpression.VariableElement element:

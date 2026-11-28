@@ -3,6 +3,28 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task NoglobStartupReadsShortNamedAndInheritedOptionState()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/itemA.txt", "")]);
+        var result = await host.RunAsync("""
+            bash -fc 'printf "short:<%s>\n" item[AB].txt'
+            bash -o noglob -c 'printf "named:<%s>\n" item[AB].txt'
+            bash -f +o noglob -c 'printf "cleared:<%s>\n" item[AB].txt'
+            set -f
+            bash -c 'printf "unexported:<%s>\n" item[AB].txt'
+            export SHELLOPTS
+            bash +f -c 'printf "imported:<%s>\n" item[AB].txt'
+            exec -c bash -c 'printf "empty:<%s>\n" item[AB].txt'
+            """, CancellationToken.None);
+
+        Assert.Equal("short:<item[AB].txt>\nnamed:<item[AB].txt>\ncleared:<itemA.txt>\n"
+            + "unexported:<itemA.txt>\nimported:<item[AB].txt>\nempty:<itemA.txt>\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task FileLaunchUsesInvocationDirectoryAndPreservesSourceAndArguments()
     {
         await using var host = new TestHost();

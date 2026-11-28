@@ -251,6 +251,7 @@ public class TestHost : MockFileSystem
             diagnostic.Append(launch.Error switch
             {
                 ShellLaunchError.InvalidOptionName => ": invalid shell option name\n"u8,
+                ShellLaunchError.InvalidSetOptionName => ": invalid option name\n"u8,
                 ShellLaunchError.InvalidFlag => ": invalid option\n"u8,
                 _ => ": option requires a name\n"u8
             });

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `noglob` through `set -f`, `set -o noglob`, `shopt -o`,
+  and hosted shell launch options.
+
 - Support `GLOBIGNORE` filtering and its `dotglob` transitions.
 
 - Support `globskipdots` and leading `+O globskipdots` in hosted launches.

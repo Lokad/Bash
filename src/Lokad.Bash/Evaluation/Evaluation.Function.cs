@@ -111,10 +111,7 @@ public sealed partial class Evaluation
         finally
         {
             if (!preserveExitOptions && functionContext.SavedOptions is { } saved)
-            {
-                _state.ErrexitEnabled = saved.Errexit;
-                _state.InheritErrexit = saved.InheritErrexit;
-            }
+                _state.EnabledOptions = (_state.EnabledOptions & ~ShellOptions.LocalSnapshot) | saved;
             functionContext.Locals.Restore();
         }
 

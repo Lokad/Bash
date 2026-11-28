@@ -16,7 +16,7 @@ public sealed class TestEvaluation
 {
     private readonly IReadOnlyList<ShellValue> _arguments;
     private readonly CancellationToken _cancellationToken;
-    private readonly bool _errexitEnabled;
+    private readonly ShellOption _enabledOptions;
     // Standalone parsing has no execution owner; the evaluator supplies its command workspace.
     private readonly EvaluationMemory? _memory;
     private InlineSteps _inlineSteps;
@@ -29,11 +29,11 @@ public sealed class TestEvaluation
     private int _maximumStackDepth;
 
     private TestEvaluation(IReadOnlyList<ShellValue> arguments, int firstArgument, int argumentLimit,
-        CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory? memory)
+        CancellationToken cancellationToken, ShellOption enabledOptions, EvaluationMemory? memory)
     {
         _arguments = arguments;
         _cancellationToken = cancellationToken;
-        _errexitEnabled = errexitEnabled;
+        _enabledOptions = enabledOptions;
         _memory = memory;
         _index = firstArgument;
         _end = argumentLimit;
@@ -63,13 +63,13 @@ public sealed class TestEvaluation
         var values = new ShellValue[arguments.Count];
         for (var index = 0; index < arguments.Count; index++)
             values[index] = ShellValue.FromText(arguments[index]);
-        return new TestEvaluation(values, firstArgument: 0, values.Length, CancellationToken.None, false, null);
+        return new TestEvaluation(values, firstArgument: 0, values.Length, CancellationToken.None, ShellOptions.Default, null);
     }
 
     /// <summary>Borrows the expanded operands in the given range through predicate evaluation.</summary>
     internal static TestEvaluation ParseValues(IReadOnlyList<ShellValue> arguments, int firstArgument, int argumentLimit,
-        CancellationToken cancellationToken, bool errexitEnabled, EvaluationMemory memory) =>
-        new(arguments, firstArgument, argumentLimit, cancellationToken, errexitEnabled, memory);
+        CancellationToken cancellationToken, ShellOption enabledOptions, EvaluationMemory memory) =>
+        new(arguments, firstArgument, argumentLimit, cancellationToken, enabledOptions, memory);
 
     /// <summary>Collects host predicates; pure predicates are already validated during parsing.</summary>
     internal IReadOnlyList<UnresolvedFileTest> CollectFileTests(out bool? result)
@@ -341,7 +341,7 @@ public sealed class TestEvaluation
         if (predicate.IsFilePredicate)
             File(predicate.FileKind, operand, null);
         else if (predicate.Operator == UnaryPredicateKind.OptionEnabled)
-            Constant(IsOptionEnabled(operand.Bytes.Span, _errexitEnabled));
+            Constant(IsOptionEnabled(operand.Bytes.Span, _enabledOptions));
         else if (predicate.IsVariablePredicate)
         {
             HasVariablePredicates = true;

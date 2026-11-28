@@ -119,9 +119,8 @@ internal static class ShellPredicates
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 
-    internal static bool IsOptionEnabled(ReadOnlySpan<byte> name, bool errexitEnabled) =>
-        (ShellOptions.Find(name, setOptions: true)
-            & (ShellOptions.Fixed | (errexitEnabled ? ShellOption.Errexit : ShellOption.None))) != 0;
+    internal static bool IsOptionEnabled(ReadOnlySpan<byte> name, ShellOption enabledOptions) =>
+        (ShellOptions.Find(name, setOptions: true) & enabledOptions) != 0;
 
     private static (char, char, char) AsciiToken<T>(ReadOnlySpan<T> token) where T : IBinaryInteger<T>
     {

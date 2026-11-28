@@ -248,7 +248,7 @@ public sealed partial class Evaluation : IFileTester
     /// <summary> Gets evaluation options. </summary>
     public EvaluationOptions Options { get; }
 
-    internal ShellValue ShellOptionFlags => _state.ErrexitEnabled ? ShellValue.FromByte((byte)'e') : ShellValue.Empty;
+    internal ShellValue ShellOptionFlags => ShellOptions.Flags(_state.EnabledOptions);
     internal bool IgnoreCaseInPatterns => _state.HasOption(ShellOption.NoCaseMatch);
 
     /// <summary> Gets the last recorded exit code, if any. </summary>
@@ -4593,7 +4593,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (localBuiltinFrame == null || !operand.Bytes.Span.SequenceEqual("-"u8))
                     return false;
-                localBuiltinFrame.SaveOptions(_state.ErrexitEnabled, _state.InheritErrexit);
+                localBuiltinFrame.SaveOptions(_state.EnabledOptions);
                 return true;
             }
 
@@ -5474,8 +5474,9 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private static ExpandedWord? GetLiteralWithoutGlob(Word word) => word.LiteralFields is [var literal]
-        && (literal.Segments is [{ IsGlobQuoted: true }] || !GlobPattern.RequiresExpansion(literal)) ? literal : null;
+    private ExpandedWord? GetLiteralWithoutGlob(Word word) => word.LiteralFields is [var literal]
+        && (_state.HasOption(ShellOption.Noglob) || literal.Segments is [{ IsGlobQuoted: true }]
+            || !GlobPattern.RequiresExpansion(literal)) ? literal : null;
 
     private Word[] CaptureLiteralWords(List<ShellValue> fields, int start, ShellValue? first)
     {
@@ -5733,19 +5734,20 @@ public sealed partial class Evaluation : IFileTester
         IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity backingOwner, ScopedEvaluation scope,
         Func<ShellValue, T> createItem)
     {
+        var noglob = _state.HasOption(ShellOption.Noglob);
         var skipUnmatched = _state.HasOption(ShellOption.Nullglob);
         var rejectUnmatched = _state.HasOption(ShellOption.Failglob);
-        var ignored = _state.GlobIgnore;
+        var ignored = noglob ? ShellValue.Empty : _state.GlobIgnore;
         using var ignorePatterns = ignored.IsEmpty ? null : new GlobIgnorePatterns(ignored,
             _state.HasOption(ShellOption.NoCaseGlob), Memory);
         var count = expanded.Count;
-        if (count > 1 && !skipUnmatched && !rejectUnmatched)
+        if (count > 1 && (noglob || !skipUnmatched && !rejectUnmatched))
             Memory.PrepareListCapacity(backingOwner, results, count);
         for (var index = 0; index < count; index++)
         {
             CheckCancellation();
             var expandedWord = expanded[index];
-            if (!GlobPattern.RequiresExpansion(expandedWord))
+            if (noglob || !GlobPattern.RequiresExpansion(expandedWord))
             {
                 Memory.PrepareListCapacity(backingOwner, results, 1);
                 results.Add(createItem(expandedWord.ToValue(Memory)));
@@ -7802,7 +7804,7 @@ public sealed partial class Evaluation : IFileTester
         public HashSet<BindingName> PromotedNames { get; } = new();
 
         /// <summary>The supported option state saved by the first local dash operand in this invocation.</summary>
-        internal (bool Errexit, bool InheritErrexit)? SavedOptions { get; private set; }
+        internal ShellOption? SavedOptions { get; private set; }
 
         internal FunctionContext InvocationOwner
         {
@@ -7816,7 +7818,7 @@ public sealed partial class Evaluation : IFileTester
             }
         }
 
-        internal void SaveOptions(bool errexit, bool inheritErrexit) => InvocationOwner.SavedOptions ??= (errexit, inheritErrexit);
+        internal void SaveOptions(ShellOption options) => InvocationOwner.SavedOptions ??= options & ShellOptions.LocalSnapshot;
 
         internal bool HasOwnOptionSnapshot => InvocationOwner.SavedOptions.HasValue;
 

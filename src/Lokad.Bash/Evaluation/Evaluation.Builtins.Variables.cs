@@ -8,11 +8,6 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    private static readonly ReadOnlyMemory<byte> ErrexitOnOutput = "errexit\ton\n"u8.ToArray();
-    private static readonly ReadOnlyMemory<byte> ErrexitOffOutput = "errexit\toff\n"u8.ToArray();
-    private static readonly ReadOnlyMemory<byte> ErrexitEnableCommand = "set -o errexit\n"u8.ToArray();
-    private static readonly ReadOnlyMemory<byte> ErrexitDisableCommand = "set +o errexit\n"u8.ToArray();
-
     /// <summary>
     /// Handles <c>unset</c> namespace selection and readonly protection.
     /// </summary>
@@ -327,7 +322,7 @@ public sealed partial class Evaluation
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Set, "set", negated)
                     .ConfigureAwait(false);
 
-            var firstOtherFlag = bytes[1..].IndexOfAnyExcept((byte)'e') + 1;
+            var firstOtherFlag = bytes[1..].IndexOfAnyExcept(ShellOptions.ErrexitFlag, ShellOptions.NoglobFlag) + 1;
             if (firstOtherFlag == 0)
                 continue;
             if (bytes[firstOtherFlag] != (byte)'o')
@@ -368,34 +363,33 @@ public sealed partial class Evaluation
             for (var flagIndex = 1; flagIndex < option.Bytes.Length; flagIndex++)
             {
                 var flag = option.Bytes.Span[flagIndex];
-                if (flag == (byte)'e')
+                var selected = ShellOptions.FindShortSetOption(flag);
+                if (selected != ShellOption.None)
                 {
-                    _state.ErrexitEnabled = enabled;
-                    // An inspection or invalid flag can observe the state after the run.
-                    var nextFlag = option.Bytes.Span[(flagIndex + 1)..].IndexOfAnyExcept((byte)'e');
+                    _state.SetOption(selected, enabled);
+                    var nextFlag = option.Bytes.Span[(flagIndex + 1)..].IndexOfAnyExcept(flag);
                     if (nextFlag < 0)
                         break;
-                    flagIndex += nextFlag + 1;
-                    flag = option.Bytes.Span[flagIndex];
+                    flagIndex += nextFlag;
+                    continue;
                 }
                 if (flag != (byte)'o')
                     return await RejectFlagAsync(option, flagIndex, 1).ConfigureAwait(false);
                 if (index + 1 < words.Count && words[index + 1].Bytes.Span is [not ((byte)'-' or (byte)'+'), ..])
                 {
                     var name = words[++index];
-                    if (ShellOptions.Find(name.Bytes.Span, setOptions: true) != ShellOption.Errexit)
+                    var named = ShellOptions.Find(name.Bytes.Span, setOptions: true);
+                    if ((named & ShellOptions.MutableSet) == 0)
                         return await InvalidOptionAsync(name, ": invalid option name", 2).ConfigureAwait(false);
-                    _state.ErrexitEnabled = enabled;
+                    _state.SetOption(named, enabled);
                     continue;
                 }
 
                 // With shell-closed stdout, Bash reports listing write failures only when no argument follows.
                 if (inspectionClosed || (index + 1 < words.Count && GetStdOutDescriptor().IsClosed))
                     continue;
-                var inspection = enabled
-                    ? (_state.ErrexitEnabled ? ErrexitOnOutput : ErrexitOffOutput)
-                    : (_state.ErrexitEnabled ? ErrexitEnableCommand : ErrexitDisableCommand);
-                var written = await WriteBuiltinOutputAsync(words[0], inspection, sourcePrefix).ConfigureAwait(false);
+                var inspection = ShellOptions.InspectSetOptions(_state.EnabledOptions, listing: enabled);
+                var written = await WriteBuiltinOutputAsync(words[0], inspection.Bytes, sourcePrefix).ConfigureAwait(false);
                 if (written.IsError)
                     status = 1;
                 else
@@ -420,7 +414,7 @@ public sealed partial class Evaluation
         {
             var flag = group.Bytes.Slice(flagIndex, 1);
             // Recognized Bash flags outside the mutable option profile keep the unsupported-option diagnostic.
-            if ("abfhkmnprtuvxBCEHPT"u8.Contains(flag.Span[0]))
+            if ("abhkmnprtuvxBCEHPT"u8.Contains(flag.Span[0]))
                 return await InvalidOptionAsync(group, ": unsupported option", exitCode).ConfigureAwait(false);
 
             if (CanWriteOptionDiagnostic())
