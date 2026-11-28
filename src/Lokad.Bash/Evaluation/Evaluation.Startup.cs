@@ -12,6 +12,9 @@ namespace Lokad.Bash.Evaluation;
 public sealed partial class Evaluation
 {
     private static readonly BindingName ExecutionStringName = "BASH_EXECUTION_STRING";
+    private static readonly BindingName ShellLevelName = "SHLVL";
+    private static readonly ShellValue ShellLevelWarning = ShellValue.FromText("warning: shell level (");
+    private static readonly ShellValue ShellLevelReset = ShellValue.FromText(") too high, resetting to 1");
 
     /// <summary>Initializes evaluation from captured interpreter values, independently of command hosting.</summary>
     /// <remarks>
@@ -22,14 +25,30 @@ public sealed partial class Evaluation
         ParsedScript script,
         EvaluationOptions options,
         EvaluationDescriptorSetup descriptors,
+        string invocationName,
         IReadOnlyList<EnvironmentVariable> environment,
         ShellValue argumentZero,
         IReadOnlyList<ShellValue> positionalParameters)
         : this(script, descriptors, publishNextStep: null, onComplete: null,
             options, new MemoryGovernor(long.MaxValue), sourceMemory: null)
     {
+        var inheritedLevel = ShellValue.Empty;
         foreach (var variable in environment)
-            SetExportedVariable(variable.Name, variable.Value);
+        {
+            if (variable.Name == ShellLevelName)
+                inheritedLevel = variable.Value;
+            else
+                SetExportedVariable(variable.Name, variable.Value);
+        }
+        if (Integers.TryParseBuiltinNumber(inheritedLevel.Bytes.Span, out var previous))
+        {
+            // Bash stores the adjusted value in a signed C int before checking the range.
+            var level = unchecked((int)previous + 1);
+            if (level >= 1000)
+                _startupShellLevelWarning = (invocationName, level);
+            else if (level != 1)
+                SetExportedVariable(ShellLevelName, ShellValue.FromInteger(Math.Max(0, level)));
+        }
         _vars.ArgumentZero = argumentZero;
         _vars.SubshellLevel = 0;
         ReplacePositionalParameters(positionalParameters);
@@ -38,6 +57,19 @@ public sealed partial class Evaluation
     private (string CommandName, IReadOnlyList<ExportedFunction> Functions,
         BashCommandInheritance.ImportEntry[]? ImportOrder)? _inheritedFunctions;
     private (ShellValue Name, SourceMemory.ReaderKind Kind)? _inheritedReader;
+    private (string InvocationName, int Level)? _startupShellLevelWarning;
+
+    private Task ReportStartupShellLevelAsync()
+    {
+        if (_startupShellLevelWarning is not { } warning)
+            return Task.CompletedTask;
+        _startupShellLevelWarning = null;
+        var descriptor = GetStdErrDescriptor();
+        return descriptor.IsClosed
+            ? Task.CompletedTask
+            : WriteDiagnosticAsync(descriptor, [ShellValue.FromText(warning.InvocationName)],
+                [ShellLevelWarning, ShellValue.FromInteger(warning.Level), ShellLevelReset], scope: null);
+    }
 
     internal void SetInheritedReader(ShellValue name, SourceMemory.ReaderKind kind)
     {

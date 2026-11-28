@@ -457,7 +457,8 @@ public sealed class CommandInvocationTests
         else
         {
             Assert.Null(diagnostic);
-            Assert.Equal(exported ? BindingCount + 1 : 1, environment.Count);
+            Assert.Equal(exported ? BindingCount + 2 : 2, environment.Count);
+            Assert.Equal(ShellValue.FromText("1"), Assert.Single(environment, entry => entry.Name == "SHLVL").Value);
             if (exported)
             {
                 var snapshot = Assert.IsType<List<EnvironmentVariable>>(environment);
@@ -502,8 +503,9 @@ public sealed class CommandInvocationTests
             var environment = query
                 ? Assert.IsType<ResolveCommandsOperation>(step).Environment
                 : Assert.IsType<RunCommand>(step).Command.Environment;
-            Assert.Equal(3, environment.Count);
+            Assert.Equal(4, environment.Count);
             Assert.DoesNotContain(environment, entry => entry.Name == "array");
+            Assert.Equal(ShellValue.FromText("1"), Assert.Single(environment, entry => entry.Name == "SHLVL").Value);
             Assert.Equal(value, Assert.Single(environment, entry => entry.Name == "value").Value);
             Assert.Equal(ShellValue.FromText("temporary"), Assert.Single(environment, entry => entry.Name == "FLAG").Value);
             var snapshot = Assert.IsType<List<EnvironmentVariable>>(environment);
@@ -549,7 +551,9 @@ public sealed class CommandInvocationTests
         {
             Assert.Equal(count, lookup.CommandNames.Count);
             Assert.All(lookup.CommandNames, name => Assert.Equal("synthetic", name));
-            Assert.Equal("PWD", Assert.Single(lookup.Environment).Name.CachedText);
+            Assert.Equal(2, lookup.Environment.Count);
+            Assert.Equal(ShellValue.FromText("/"), Assert.Single(lookup.Environment, entry => entry.Name == "PWD").Value);
+            Assert.Equal(ShellValue.FromText("1"), Assert.Single(lookup.Environment, entry => entry.Name == "SHLVL").Value);
             var missing = new CommandLookupResult.Missing();
             lookup.SetResult(Enumerable.Repeat<CommandLookupResult>(missing, count).ToArray());
         }

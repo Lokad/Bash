@@ -518,7 +518,8 @@ public sealed class QueryWriteFailureTests
         var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
         Assert.Equal("inspect", Assert.Single(lookup.CommandNames));
         var snapshot = Assert.IsType<List<EnvironmentVariable>>(lookup.Environment);
-        Assert.Equal(BindingCount + 1, snapshot.Count);
+        Assert.Equal(BindingCount + 2, snapshot.Count);
+        Assert.Equal(ShellValue.FromText("1"), Assert.Single(snapshot, item => item.Name == "SHLVL").Value);
         Assert.True(value.Bytes.Equals(Assert.Single(snapshot, item => item.Name == "synthetic_0000").Value.Bytes));
         var lookupBytes = governor.ReservedBytes;
         var snapshotBytes = MemoryCapacity.ArrayBackingBytes<EnvironmentVariable>(snapshot.Capacity);

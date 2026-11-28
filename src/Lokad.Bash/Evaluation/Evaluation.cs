@@ -163,6 +163,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.SetExported("OLDPWD", true);
         _vars.TrySetScalar(FieldSeparators.Name, FieldSeparators.DefaultValue);
         var one = ShellValue.FromText("1");
+        SetExportedVariable(ShellLevelName, one);
         _vars.TrySetScalar("OPTIND", one);
         _vars.SetIntegerBinding("OPTIND", true);
         _vars.GetoptsPosition = GetoptsCursor.AtArgument(1);
@@ -492,6 +493,7 @@ public sealed partial class Evaluation : IFileTester
                     result = EvaluationResult.FromExitCode(2);
                 else
                 {
+                    await ReportStartupShellLevelAsync().ConfigureAwait(false);
                     var parent = scope.Context.SourceMemory;
                     if (reader == null && startup.DiagnosticName is { } recoveredName)
                         reader = (recoveredName, parent?.Kind ?? SourceMemory.ReaderKind.Script);

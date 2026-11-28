@@ -10,6 +10,71 @@ namespace Lokad.Bash.Tests;
 public sealed class EvaluationStartupTests
 {
     [Theory]
+    [InlineData(false, null, "1", "")]
+    [InlineData(true, null, "1", "")]
+    [InlineData(false, " \t+007 \t", "8", "")]
+    [InlineData(true, "7\n", "1", "")]
+    [InlineData(false, "-7", "0", "")]
+    [InlineData(true, "998", "999", "")]
+    [InlineData(false, "999", "1", "bash: warning: shell level (1000) too high, resetting to 1\n")]
+    [InlineData(true, "2000", "1", "bash: warning: shell level (2001) too high, resetting to 1\n")]
+    public async Task InheritedShellLevelIsAdjustedAndExported(
+        bool prepared, string? inherited, string expectedLevel, string expectedDiagnostic)
+    {
+        const string source = "inspect \"$SHLVL\"";
+        var label = ShellValue.FromText("fixture");
+        EnvironmentVariable[] environment = inherited == null ? [] : [new("SHLVL", ShellValue.FromText(inherited))];
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), ShellValue.FromText(source), label],
+            ShellPath.Root, environment, null, null, null);
+        var script = prepared ? Parser.Parse(source) : new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]);
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, script, label, []);
+        await using var host = new MockFileSystem();
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        var command = Assert.Single(host.CommandInvocations);
+        var level = ShellValue.FromText(expectedLevel);
+        Assert.Equal(level, Assert.Single(command.Arguments));
+        Assert.Equal(level, Assert.Single(command.Environment, entry => entry.Name == "SHLVL").Value);
+        Assert.Equal(ShellValue.FromText(expectedDiagnostic).Bytes.ToArray(), host.GetOutputBytes(FileDescriptor.StdErr));
+    }
+
+    [Fact]
+    public async Task ForksShareTheLaunchLevelAndKeepOrdinaryAssignment()
+    {
+        const string source = """
+            declare -p SHLVL
+            SHLVL=003
+            (SHLVL+=1; printf '%s:%s\n' "$SHLVL" "$BASH_SUBSHELL")
+            printf '%s:%s\n' "$SHLVL" "$BASH_SUBSHELL"
+            bash -c 'printf "%s:%s\n" "$SHLVL" "$BASH_SUBSHELL"' fixture
+            """;
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -x SHLVL=\"1\"\n0031:1\n003:0\n4:0\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Fact]
+    public async Task EmptyChildReaderReportsShellLevelWarningToItsInheritedStderr()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("SHLVL=999 bash -c '' fixture 2>diagnostic; printf '%s\\n' \"$SHLVL\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1\n", host.StandardOutput.TextContent);
+        Assert.Equal("bash: warning: shell level (1000) too high, resetting to 1\n", host.ReadFile("/diagnostic"));
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task CommandStringAndItsFunctionsUseDifferentReaderNames(bool prepared)
@@ -378,7 +443,7 @@ public sealed class EvaluationStartupTests
             DescriptorTable.Snapshot.Standard.WithStandardStreams(FileDescriptor.StdIn, output, FileDescriptor.StdErr),
             [output]);
         var evaluation = new ShellEvaluation(Parser.Parse("inspect \"$0\" \"$1\" \"$#\" \"$PWD\" \"$VALUE\""),
-            new EvaluationOptions(0, directory), descriptors, environment, argumentZero, arguments);
+            new EvaluationOptions(0, directory), descriptors, "bash", environment, argumentZero, arguments);
 
         arguments.Clear();
         environment.Clear();

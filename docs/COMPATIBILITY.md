@@ -1737,6 +1737,13 @@ stage expands redirections at the parent level. The dynamic scalar
 accepts decimal assignments. Local shadowing, unset and array conversion
 leave the ordinary binding independent of the shell's current level.
 
+`SHLVL` is an exported scalar initialized to one on a fresh launch. An
+inherited launch increments the incoming decimal value, treating a missing
+or invalid value as zero. Negative results become zero. A level of 1000
+or more produces a startup warning and resets the binding to one.
+Subshells, command substitutions and pipeline stages retain the launch
+level.
+
 The supported inherited `bash -c` launch initializes `BASH_EXECUTION_STRING`
 from the original command argument bytes. It is an ordinary writable scalar.
 An inherited export attribute survives the initialization. File and stream

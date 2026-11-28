@@ -29,7 +29,7 @@ public static class ShellEvaluationStartup
             .WithStandardStreams(command.StdIn, command.StdOut, command.StdErr);
         var evaluation = new ShellEvaluation(script, new EvaluationOptions(0, command.CurrentDirectory),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(bindings), command.BorrowedDescriptors),
-            command.Environment, argumentZero, positionalParameters);
+            command.CommandName, command.Environment, argumentZero, positionalParameters);
         evaluation.SetInheritedFunctions(command.CommandName, command.Functions, inherited.Imports);
         if (command.Arguments.Count != 0)
         {
