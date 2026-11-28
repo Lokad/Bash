@@ -141,7 +141,7 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.True(outerSaved.TrySetScalar("x", ShellValue.FromText(new string('x', 4096))));
         Assert.Equal(outerLocals.SavedMemoryBytes + innerLocals.SavedMemoryBytes, total.Bytes);
         var context = new Eval.EvaluationContext(0, inner, Eval.ReturnTargetKind.Function);
-        var (_, fork) = context.Fork(variables, state.Memory, CancellationToken.None);
+        var (_, fork) = context.Fork(variables, directoryStack: null, state.Memory, CancellationToken.None);
         var forkedLeaf = Assert.IsType<Eval.FunctionContext>(fork.FunctionContext);
         using var forkedOuter = Assert.IsType<Eval.FunctionContext>(forkedLeaf.Enclosing);
         using var forkedInner = forkedLeaf;

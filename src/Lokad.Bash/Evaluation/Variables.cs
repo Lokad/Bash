@@ -49,6 +49,8 @@ public sealed partial class Variables
     internal static readonly BindingName LastArgumentName = "_";
     private static readonly BindingName LineNumberName = "LINENO";
     private static readonly BindingName ArgumentZeroName = "BASH_ARGV0";
+    private static readonly BindingName DirectoryStackName = "DIRSTACK";
+    private IndexedArray? _directoryStack;
     private static readonly BindingName SubshellLevelName = "BASH_SUBSHELL";
 
     /// <summary>Retains an assigned spelling even when it does not parse as a reference.</summary>
@@ -123,6 +125,17 @@ public sealed partial class Variables
     internal void InitializeArgumentZero() => StoreBinding(ArgumentZeroName, new ArgumentZeroSlot(this));
 
     internal void InitializeSubshellLevel() => StoreBinding(SubshellLevelName, new SubshellLevelSlot(this));
+
+    internal void InitializeDirectoryStack(EvaluationState stack)
+    {
+        _directoryStack = new IndexedArray(stack);
+        StoreBinding(DirectoryStackName, new IndexedSlot(_directoryStack));
+    }
+
+    internal void RebindDirectoryStack(EvaluationState stack) => _directoryStack?.RebindDirectoryStack(stack);
+
+    internal bool IsDirectoryStackBinding(BindingName name) =>
+        TryGetBinding(name, detachBorrowed: false, out var slot) && slot is IndexedSlot { Value.DirectoryStack: not null };
 
     internal bool IsShellStateBinding(BindingName name) => IsShellStateName(name)
         && TryGetBinding(name, detachBorrowed: false, out var slot) && slot is ShellStateSlot;
@@ -331,9 +344,13 @@ public sealed partial class Variables
     /// </summary>
     public Variables Clone() => Clone(shellOwner: null);
 
-    private Variables Clone(Variables? shellOwner)
+    private Variables Clone(Variables? shellOwner) => Clone(shellOwner, directoryStack: null);
+
+    internal Variables CloneForShell(EvaluationState directoryStack) => Clone(shellOwner: null, directoryStack);
+
+    private Variables Clone(Variables? shellOwner, EvaluationState? directoryStack)
     {
-        var clone = new Variables();
+        var clone = new Variables { _directoryStack = directoryStack == null ? null : new IndexedArray(directoryStack) };
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
             clone.StoreBinding(entry.Key, entry.Value.Clone(shellOwner ?? clone));
@@ -1314,6 +1331,8 @@ public sealed partial class Variables
             ReplaceValue(resolved, new ScalarSlot(value));
             return value;
         }
+        if (!prefixOperator.HasValue && slot is IndexedSlot { Value.DirectoryStack: not null })
+            return value;
         if (prefixOperator != AssignmentOperator.Replace && slot is not ShellStateSlot)
             value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, value, memory);
         // A prefix shadows the recovered array in its command scope.
@@ -1515,7 +1534,8 @@ public sealed partial class Variables
 
         if (kind == ArrayKind.Indexed)
         {
-            ReplaceValue(resolved, new IndexedSlot(IndexedArray.FromSequential(values)), retainArrayNameref);
+            if (!IsDirectoryStackBinding(resolved))
+                ReplaceValue(resolved, new IndexedSlot(IndexedArray.FromSequential(values)), retainArrayNameref);
             return true;
         }
 

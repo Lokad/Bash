@@ -10,6 +10,7 @@ namespace Lokad.Bash.Evaluation;
 public sealed partial class Variables
 {
     private CommandSource? _commandSource;
+    private bool _isolatedRedirections;
     internal bool BorrowsBindings => _commandSource != null;
 
     /// <summary>The surrounding command owns this borrow and all reached-binding copies.</summary>
@@ -31,6 +32,13 @@ public sealed partial class Variables
     /// </summary>
     internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken) =>
         CreateCommandScope(caller, memory, cancellationToken, prefixCollectionMemory: null);
+
+    internal static Variables CreateRedirectionScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken)
+    {
+        var variables = CreateCommandScope(caller, memory, cancellationToken);
+        variables._isolatedRedirections = true;
+        return variables;
+    }
 
     /// <summary>Admits temporary binding and export-index growth during prefix preparation.</summary>
     internal static Variables CreateCommandScope(Variables caller, EvaluationMemory memory, CancellationToken cancellationToken,
@@ -81,7 +89,10 @@ public sealed partial class Variables
             return true;
         source.Memory.Charge(EstimateSlotBytes(name, slot));
         source.CancellationToken.ThrowIfCancellationRequested();
-        slot = slot.Clone(this);
+        slot = _isolatedRedirections && slot is IndexedSlot { Value.DirectoryStack: not null } indexed
+            ? new IndexedSlot(indexed.Value.CaptureDirectoryStack(source.Memory, source.CancellationToken))
+                { Attributes = slot.Attributes }
+            : slot.Clone(this);
         source.CancellationToken.ThrowIfCancellationRequested();
         var deferFieldSeparators = _deferFieldSeparators;
         var indexedIfs = _indexedIfs;

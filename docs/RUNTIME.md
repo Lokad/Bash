@@ -81,6 +81,16 @@ while keeping the completed stack change and its status. When stdout is closed
 by the shell, the directory listing reports the failure without formatting
 output or sending a write request to the host.
 
+Resolved stack entries retain encoded paths for `PWD`, `DIRSTACK`, stack
+listings and numeric tilde expansion.
+The indexed binding reads the existing stack without creating a sparse copy.
+Argument and loop expansion materialize their own values before running later
+operands or commands. Subshells and pipeline stages bind to their own directory
+state. Isolated input redirections detach the reached binding.
+Array-reader writes copy their record bytes before replacing saved entries.
+Callback input retains displaced entries until the reader commits. Rollback
+restores the reader's writes while preserving independent callback edits.
+
 Nameref target validation uses the reference parser without evaluating
 selectors. A nonempty replacement is validated before creating a local.
 An empty or appended initializer can fail after local creation and

@@ -414,7 +414,8 @@ public sealed class CollectionOwnershipTests
     [Theory]
     [InlineData(255)]
     [InlineData(256)]
-    public void DirectoryOutputFitsWithBoundedHomeDecoding(int homeBytes)
+    [InlineData(257)]
+    public void DirectoryOutputBorrowsHomeBytesAcrossThePreviousDecodingBoundary(int homeBytes)
     {
         var home = "/" + new string('a', homeBytes - 5) + "𐐀";
         var state = new EvaluationState(Parser.Parse(":"), new ShellPath(home), inheritedDescriptorTable: null);
@@ -424,22 +425,7 @@ public sealed class CollectionOwnershipTests
         {
             Assert.Equal("~\n", Utf8Text.Decode(state.FormatDirectoryStack(
                 0, DirectoryStackLayout.Compact, ShellValue.FromText(home), memory, CancellationToken.None)));
-        }
-        finally { memory.Finish(retainVariables: false); }
-        Assert.Equal(0, budget.ReservedBytes);
-    }
-
-    [Fact]
-    public void DirectoryOutputAdmitsLongDecodedHomeBeforeFormatting()
-    {
-        var home = "/" + new string('a', 252) + "𐐀";
-        var state = new EvaluationState(Parser.Parse(":"), new ShellPath(home), inheritedDescriptorTable: null);
-        var budget = new MemoryGovernor(64);
-        var memory = new EvaluationMemory(budget);
-        try
-        {
-            Assert.Throws<MemoryBudgetExceededException>(() => state.FormatDirectoryStack(
-                0, DirectoryStackLayout.Compact, ShellValue.FromText(home), memory, CancellationToken.None));
+            Assert.Equal(34, memory.Workspace.Bytes);
         }
         finally { memory.Finish(retainVariables: false); }
         Assert.Equal(0, budget.ReservedBytes);

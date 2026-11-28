@@ -157,7 +157,7 @@ public sealed partial class Evaluation : IFileTester
             memoryBudget,
             preparedSyntaxRoot: null)
     {
-        _vars.TrySetScalar("PWD", ShellValue.FromText(_state.CurrentDirectory.Path));
+        _vars.TrySetScalar("PWD", _state.GetDirectoryStackEntry(0).Value);
         _vars.SetExported("PWD", true);
         _vars.TryDeclareName("OLDPWD");
         _vars.SetExported("OLDPWD", true);
@@ -170,6 +170,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.InitializeLineNumber();
         _vars.InitializeArgumentZero();
         _vars.InitializeSubshellLevel();
+        _vars.InitializeDirectoryStack(_state);
     }
 
     /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>
@@ -182,7 +183,7 @@ public sealed partial class Evaluation : IFileTester
     {
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
-        var (variables, context) = scope.ForkBindings();
+        var (variables, context) = scope.ForkBindings(outer._state);
         variables.EnterSubshell();
         var line = Math.Max(scope.Context.FirstReaderLine, scope.Context.Coordinates.Line);
         context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line)
@@ -224,6 +225,7 @@ public sealed partial class Evaluation : IFileTester
         Options = options;
         _state = state;
         _vars = variables;
+        _vars.RebindDirectoryStack(state);
         _stdIn = descriptorSetup.Bindings.StdIn;
         _stdOut = descriptorSetup.Bindings.StdOut;
         _stdErr = descriptorSetup.Bindings.StdErr;
@@ -857,7 +859,7 @@ public sealed partial class Evaluation : IFileTester
             memory.Resize(DescriptorCleanupMemoryBytes);
             memory.TrimExcess();
         }
-        var (childVars, childContext) = scope.ForkBindings();
+        var (childVars, childContext) = scope.ForkBindings(parentState);
         childVars.EnterSubshell();
         var coordinates = childContext.Coordinates;
         if (coordinates.Locations?.TryGet(subshellCommand, out var location) == true)
@@ -874,6 +876,7 @@ public sealed partial class Evaluation : IFileTester
         var inheritedExitBindings = exitBoundary.KeepsReachedBindings ? null
             : parentState.CaptureInheritedExitBindings(scope.PipelineExitReader.RedirectionDepth, Memory);
         var childState = parentState.CloneForSubshell(Memory, inheritedExitBindings);
+        childVars.RebindDirectoryStack(childState);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
@@ -1070,7 +1073,7 @@ public sealed partial class Evaluation : IFileTester
                     inheritedExitBindings = _state.CaptureInheritedExitBindings(exitReader.RedirectionDepth, Memory);
                     capturedInheritedExitBindings = true;
                 }
-                var (stageVars, stageContext) = scope.ForkBindings();
+                var (stageVars, stageContext) = scope.ForkBindings(_state);
                 // A parenthesized stage enters its own level. Simple stages expand
                 // their argument fields and prefix right-hand sides first.
                 if (forkKind != ShellForkKind.PipelineSimpleCommand
@@ -1878,7 +1881,7 @@ public sealed partial class Evaluation : IFileTester
 
         ScopedEvaluation ForkExecScope(ScopedEvaluation source, ShellValue name)
         {
-            var (variables, context) = source.ForkBindings();
+            var (variables, context) = source.ForkBindings(_state);
             variables.ArgumentZero = name;
             return source with { Variables = variables, Context = context };
         }
@@ -7677,16 +7680,16 @@ public sealed partial class Evaluation : IFileTester
         internal EvaluationContext WithCoordinates(CommandCoordinates coordinates) => this with { Coordinates = coordinates };
 
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
-        internal (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory,
+        internal (Variables, EvaluationContext) Fork(Variables source, EvaluationState? directoryStack, EvaluationMemory memory,
             CancellationToken cancellationToken) =>
-            Fork(source, memory, cancellationToken, borrowVisible: false);
+            ForkCore(source, directoryStack, memory, cancellationToken, borrowVisible: false);
 
         /// <summary>Isolates redirection writes while borrowing visible bindings until selected.</summary>
         internal (Variables, EvaluationContext) ForkForRedirections(Variables source, EvaluationMemory memory,
             CancellationToken cancellationToken) =>
-            Fork(source, memory, cancellationToken, borrowVisible: true);
+            ForkCore(source, directoryStack: null, memory, cancellationToken, borrowVisible: true);
 
-        private (Variables, EvaluationContext) Fork(Variables source, EvaluationMemory memory,
+        private (Variables, EvaluationContext) ForkCore(Variables source, EvaluationState? directoryStack, EvaluationMemory memory,
             CancellationToken cancellationToken, bool borrowVisible)
         {
             var bytes = borrowVisible ? 0 : source.EstimatedMemoryBytes;
@@ -7708,8 +7711,8 @@ public sealed partial class Evaluation : IFileTester
                 + (prefixCount == 0 ? 0 : 32L + 8L * prefixCount)));
             cancellationToken.ThrowIfCancellationRequested();
             var variables = borrowVisible
-                ? global::Lokad.Bash.Evaluation.Variables.CreateCommandScope(source, memory, cancellationToken)
-                : source.Clone();
+                ? global::Lokad.Bash.Evaluation.Variables.CreateRedirectionScope(source, memory, cancellationToken)
+                : directoryStack == null ? source.Clone() : source.CloneForShell(directoryStack);
             if (functionDepth == 0 && prefixCount == 0)
                 return (variables, this);
 

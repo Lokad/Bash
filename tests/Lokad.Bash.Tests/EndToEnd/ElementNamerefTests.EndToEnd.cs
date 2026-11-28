@@ -19,7 +19,7 @@ public sealed class ElementNamerefTestsEndToEnd
         await new Engine().RunAsync(evaluation, host, timeout.Token);
 
         Assert.Equal(1, evaluation.LastExitCode);
-        Assert.Equal((BindingName)"PIPESTATUS", Assert.Single(evaluation.IndexedArrays).Key);
+        Assert.Equal(new BindingName[] { "DIRSTACK", "PIPESTATUS" }, evaluation.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
         Assert.Empty(evaluation.AssociativeArrays);
         Assert.False(evaluation.Variables.ContainsKey(BindingName.Empty));
         Assert.Equal(ShellValue.Empty, Assert.Single(evaluation.Namerefs).Value);

@@ -291,6 +291,43 @@ public partial class EvaluationTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public async Task DirectoryStackInputRefusalRestoresTheReaderWriteAndKeepsCallbackWrites()
+    {
+        var state = new Eval(Parser.Parse("""
+            pushd -n other 1>&- 2>&-
+            pushd -n old 1>&- 2>&-
+            visit() { DIRSTACK[2]=callback; }
+            mapfile -t -O 1 -c 1 -C visit DIRSTACK
+            """));
+        var governor = new MemoryGovernor(256 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+
+        var first = await NextReadAsync(state);
+        first.SetResult(ReadResult.Success(Utf8Bytes("first\n"), [], reachedEoF: false));
+
+        var second = await NextReadAsync(state);
+        Assert.Equal(["/", "first", "callback"], state.IndexedArrays["DIRSTACK"].Select(value => value.ToUtf8String()));
+        var record = Utf8Bytes(new string('x', 4096) + "\n");
+        using var borrowed = Assert.IsAssignableFrom<IMemoryBudget>(second.DestinationBudget).Reserve(record.Length);
+        using var occupied = governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 2048);
+        second.SetResult(ReadResult.Success(record, [], reachedEoF: false));
+
+        var diagnostic = await NextWriteAsync(state);
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+        Assert.Equal(0, borrowed.Bytes);
+        Assert.Equal(["/", "old", "callback"], state.IndexedArrays["DIRSTACK"].Select(value => value.ToUtf8String()));
+        occupied.Dispose();
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(2, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

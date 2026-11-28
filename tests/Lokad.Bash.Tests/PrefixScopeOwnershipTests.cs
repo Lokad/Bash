@@ -640,7 +640,7 @@ public sealed class PrefixScopeOwnershipTests
             Assert.True(command.TrySetScalar("prepared", ShellValue.FromText("prefix")));
             Assert.True(command.TryUnset("hidden"));
             var context = default(Eval.EvaluationContext);
-            var (child, _) = context.Fork(command, memory, CancellationToken.None);
+            var (child, _) = context.Fork(command, directoryStack: null, memory, CancellationToken.None);
             Assert.False(child.HasBinding("hidden"));
             Assert.True(child.TryGetScalar("prepared", out var prepared));
             Assert.Equal("prefix", prepared.ToUtf8String());
@@ -689,7 +689,7 @@ public sealed class PrefixScopeOwnershipTests
 
             // A real child snapshot owns its whole store and must still be admitted.
             var context = default(Eval.EvaluationContext);
-            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(command, memory, CancellationToken.None));
+            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(command, directoryStack: null, memory, CancellationToken.None));
             Assert.Equal(4096, caller.IndexedArrays["unrelated_array"].Count);
         }
         finally { memory.Finish(retainVariables: false); }
@@ -743,7 +743,7 @@ public sealed class PrefixScopeOwnershipTests
         var tightMemory = new EvaluationMemory(tightBudget);
         try
         {
-            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(caller, tightMemory, CancellationToken.None));
+            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(caller, directoryStack: null, tightMemory, CancellationToken.None));
             Assert.Same(savedArray, context.GetGlobalBindingOwner("x", caller).IndexedArrays["x"]);
             Assert.Equal(0, tightBudget.ReservedBytes);
         }
@@ -753,7 +753,7 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(budget);
         try
         {
-            var (child, childContext) = context.Fork(caller, memory, CancellationToken.None);
+            var (child, childContext) = context.Fork(caller, directoryStack: null, memory, CancellationToken.None);
             var childSaved = childContext.GetGlobalBindingOwner("x", child);
             Assert.NotSame(savedArray, childSaved.IndexedArrays["x"]);
             Assert.True(budget.ReservedBytes >= child.EstimatedMemoryBytes + childSaved.EstimatedMemoryBytes);

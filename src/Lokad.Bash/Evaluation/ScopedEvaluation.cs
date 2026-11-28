@@ -129,8 +129,8 @@ internal readonly record struct ScopedEvaluation(
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 
     /// <summary>Copies visible and hidden bindings under the surrounding command's admission.</summary>
-    internal (Variables Variables, Evaluation.EvaluationContext Context) ForkBindings() =>
-        Context.Fork(Variables, Effects.Memory, Effects.CancellationToken);
+    internal (Variables Variables, Evaluation.EvaluationContext Context) ForkBindings(EvaluationState directoryStack) =>
+        Context.Fork(Variables, directoryStack, Effects.Memory, Effects.CancellationToken);
 
     /// <summary>The current simple command owns the prefix-name set, adding names as their bindings are prepared.</summary>
     internal readonly record struct ExpansionBindings(Variables Variables, IReadOnlySet<BindingName> PreparedPrefixNames)

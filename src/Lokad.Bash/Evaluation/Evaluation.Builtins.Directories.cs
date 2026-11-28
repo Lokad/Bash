@@ -463,7 +463,7 @@ public sealed partial class Evaluation
                 CheckCancellation();
                 var separator = remaining.Span.IndexOf((byte)':');
                 var component = separator < 0 ? remaining : remaining[..separator];
-                var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope, lookupMemory);
+                var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope);
                 var joined = JoinSearchPathComponent(prefix, suffix, target, lookupMemory);
                 if (joined != null && await ResolveDirectoryCandidateAsync(joined, lookupMemory).ConfigureAwait(false)
                     is { } candidate && IsDirectory(candidate.Lookup))
@@ -599,9 +599,8 @@ public sealed partial class Evaluation
             bindings, BuiltinAssignmentKind.Directory, ShellValue.FromText("cd"), expansionWriteTarget: null).ConfigureAwait(false);
         if (ExitsOnReadonly(oldResult))
             return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);
-        var currentPath = _state.CurrentDirectory.Path;
-        Memory.Charge(checked(32L + 3L * currentPath.Length));
-        var pwdResult = await AssignBuiltinAsync(VariableReference.ForName("PWD"), ShellValue.FromText(currentPath), scope,
+        var currentPath = _state.GetDirectoryStackEntry(0).Value;
+        var pwdResult = await AssignBuiltinAsync(VariableReference.ForName("PWD"), currentPath, scope,
             bindings, BuiltinAssignmentKind.Directory, ShellValue.FromText("cd"), expansionWriteTarget: null).ConfigureAwait(false);
         if (ExitsOnReadonly(pwdResult))
             return await RunExitTrapAsync(scope, EvaluationResult.Exit(1)).ConfigureAwait(false);

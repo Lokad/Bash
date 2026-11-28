@@ -185,7 +185,8 @@ public sealed partial class Evaluation
             // Admit fresh storage before preparing a replacement binding. An ordinary origin
             // update admits its entries at the destination, where occupied positions are known.
             long prepaidEntryBytes = 0;
-            if (origin == null || target.Kind != IndexedInputTargetKind.ExistingOrNew)
+            var usesDirectoryStack = !target.RecreatesBinding && variables.IsDirectoryStackBinding(resolved);
+            if (!usesDirectoryStack && (origin == null || target.Kind != IndexedInputTargetKind.ExistingOrNew))
             {
                 prepaidEntryBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
                 if (!target.RecreatesBinding && origin.HasValue && (target.NamerefValue.HasValue || variables.Scalars.ContainsKey(resolved)))
@@ -196,10 +197,10 @@ public sealed partial class Evaluation
 
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
-            if (origin is { } first && !target.RecreatesBinding)
+            if ((usesDirectoryStack || origin.HasValue) && !target.RecreatesBinding)
             {
                 target.PrepareForPublication();
-                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, target.NamerefValue,
+                assigned = variables.TryUpdateResolvedIndexedArray(resolved, origin.GetValueOrDefault(), values, target.NamerefValue,
                     Memory, _cancellationToken, prepaidEntryBytes);
             }
             else if (origin is { } recreatedOrigin)
@@ -349,7 +350,7 @@ public sealed partial class Evaluation
                 }
                 CheckCancellation();
                 var prepaidBytes = global::Lokad.Bash.Evaluation.Variables.EstimateValueBytes(coerced.Value);
-                stored = variables.TrySetResolvedArrayElement(resolved, index, coerced.Value, Memory, prepaidBytes);
+                stored = assignment.TryStoreConvertedRecord(index, coerced.Value, Memory, prepaidBytes);
             }
             else
                 stored = assignment.TryStoreBorrowedRecord(index, value, Memory);
@@ -472,7 +473,7 @@ public sealed partial class Evaluation
                 var beforeWrite = Memory.Workspace.Bytes;
                 try
                 {
-                    if (!target.Owner.TrySetResolvedArrayElement(target.Name, position, integer.Value, Memory, prepaidBytes))
+                    if (!assignment.TryStoreConvertedRecord(position, integer.Value, Memory, prepaidBytes))
                         return false;
                 }
                 finally { stagedBytes += Memory.Workspace.Bytes - beforeWrite; }

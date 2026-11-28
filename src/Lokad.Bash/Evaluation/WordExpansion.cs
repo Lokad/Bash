@@ -625,7 +625,7 @@ internal static partial class WordExpansion
 
     private static bool TryAppendTildeValue(byte sign, int? ordinal, ScopedEvaluation scope, ExpandedWordBuilder output)
     {
-        if (!TryResolveTildePrefix(sign, ordinal, scope, pathMemory: null, out var value))
+        if (!TryResolveTildePrefix(sign, ordinal, scope, out var value))
             return false;
 
         output.AppendValue(value, globQuoted: true);
@@ -777,7 +777,7 @@ internal static partial class WordExpansion
 
     /// <summary>Expands the leading tilde of an already split search-path component.</summary>
     internal static (ReadOnlyMemory<byte> Prefix, ReadOnlyMemory<byte> Suffix) ExpandPathTilde(
-        ReadOnlyMemory<byte> path, ScopedEvaluation scope, MemoryCapacity pathMemory)
+        ReadOnlyMemory<byte> path, ScopedEvaluation scope)
     {
         if (path.Span is not [(byte)'~', ..])
             return (path, default);
@@ -791,7 +791,7 @@ internal static partial class WordExpansion
             if (!TryAppendTildeSelector(path.Span[end], ref sign, ref ordinal))
                 return (path, default);
         }
-        return TryResolveTildePrefix(sign, ordinal, scope, pathMemory, out var expanded)
+        return TryResolveTildePrefix(sign, ordinal, scope, out var expanded)
             ? (expanded.Bytes, path[end..]) : (path, default);
     }
 
@@ -817,7 +817,6 @@ internal static partial class WordExpansion
         byte sign,
         int? ordinal,
         ScopedEvaluation scope,
-        MemoryCapacity? pathMemory,
         out ShellValue expanded)
     {
         if (ordinal is { } index)
@@ -832,20 +831,7 @@ internal static partial class WordExpansion
             if (position == 0)
                 return scope.Variables.TryGetExpansionValue("PWD", out expanded);
 
-            var entry = scope.Effects.GetDirectoryStackEntry(position);
-            if (entry.Path is not { } resolved)
-            {
-                expanded = entry.DeferredPath;
-                return true;
-            }
-            var path = resolved.Path;
-            var bytes = checked(24L + 3L * path.Length);
-            if (pathMemory == null)
-                scope.Effects.Memory.Charge(bytes);
-            else
-                scope.Effects.Memory.Charge(pathMemory, bytes);
-            scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-            expanded = ShellValue.FromText(path);
+            expanded = scope.Effects.GetDirectoryStackEntry(position).Value;
             return true;
         }
 
@@ -854,10 +840,7 @@ internal static partial class WordExpansion
             if (scope.Variables.TryGetExpansionValue("PWD", out expanded))
                 return true;
 
-            var directory = scope.Effects.CurrentDirectory.Path;
-            if (pathMemory != null)
-                scope.Effects.Memory.Charge(pathMemory, checked(24L + 3L * directory.Length));
-            expanded = ShellValue.FromText(directory);
+            expanded = scope.Effects.GetDirectoryStackEntry(0).Value;
             return true;
         }
 

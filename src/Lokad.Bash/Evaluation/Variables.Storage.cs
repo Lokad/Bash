@@ -61,8 +61,13 @@ public sealed partial class Variables
 
         public VariableSlot Clone(Variables? shellOwner)
         {
-            var copy = this is ShellStateSlot dynamic && shellOwner != null
-                ? dynamic.CloneForShell(shellOwner) : CloneValue();
+            var copy = this switch
+            {
+                ShellStateSlot dynamic when shellOwner != null => dynamic.CloneForShell(shellOwner),
+                IndexedSlot { Value.DirectoryStack: not null } when shellOwner?._directoryStack is { } stack =>
+                    new IndexedSlot(stack),
+                _ => CloneValue()
+            };
             copy.Attributes = Attributes;
             return copy;
         }
@@ -304,6 +309,8 @@ public sealed partial class Variables
         {
             if (slot is not AttributeSlot
                 && (slot is not ShellStateSlot || attributes != BindingAttributes.None)
+                && (slot is not IndexedSlot { Value.DirectoryStack: not null }
+                    || filters.HasFlag(DeclarationListingAttributes.Indexed) || attributes != BindingAttributes.None)
                 && (!filters.HasFlag(DeclarationListingAttributes.Indexed) || slot is IndexedSlot)
                 && (!filters.HasFlag(DeclarationListingAttributes.Associative) || slot is AssociativeSlot)
                 && (attributes == BindingAttributes.None || (slot.Attributes & attributes) != 0
@@ -434,6 +441,9 @@ public sealed partial class Variables
         private readonly BindingName _name;
         private readonly VariableSlot? _previous;
         private readonly GetoptsCursor _previousCursor;
+        private readonly EvaluationState? _directoryStack;
+        private Dictionary<object, EvaluationState.DirectoryStackEntry>? _directoryWrites;
+        private MemoryCapacity? _directoryWriteMemory;
         private bool _committed;
 
         internal long SavedBytes { get; }
@@ -446,6 +456,11 @@ public sealed partial class Variables
             _name = name;
             owner.TryGetBinding(name, out _previous);
             _previousCursor = owner._getoptsCursor;
+            if (!resetAttributes && _previous is IndexedSlot { Value.DirectoryStack: { } stack })
+            {
+                _directoryStack = stack;
+                return;
+            }
             if (_previous != null)
             {
                 SavedBytes = EstimateSlotBytes(name, _previous);
@@ -476,19 +491,50 @@ public sealed partial class Variables
 
         /// <summary>Promotes a borrowed record without retaining the source batch.</summary>
         internal bool TryStoreBorrowedRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory) =>
-            _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes: 0,
-                savedInputBytes: SavedBytes, replaceAssociative: false, initializesArrayNameref: false);
+            TryStoreRecord(index, value, memory, prepaidBytes: 0, savedInputBytes: SavedBytes);
+
+        internal bool TryStoreConvertedRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory, long prepaidBytes) =>
+            TryStoreRecord(index, value, memory, prepaidBytes, savedInputBytes: null);
+
+        private bool TryStoreRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory,
+            long prepaidBytes, long? savedInputBytes)
+        {
+            if (_directoryStack is not { } stack || !_owner.IsDirectoryStackBinding(_name))
+                return _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes, savedInputBytes,
+                    replaceAssociative: false, initializesArrayNameref: false);
+
+            if (!stack.ContainsSavedDirectory(index.Value))
+                return true;
+            var position = (int)index.Value;
+            var previous = stack.GetDirectoryStackEntry(position);
+            _directoryWrites ??= new Dictionary<object, EvaluationState.DirectoryStackEntry>(ReferenceEqualityComparer.Instance);
+            _directoryWriteMemory ??= new MemoryCapacity(memory.Budget, 0);
+            _directoryWriteMemory.PrepareDictionaryCapacity(_directoryWrites, bytesPerEntry: 64);
+            memory.Charge(_directoryWriteMemory, previous.OwnedBytes);
+            // The directory stack copies these bytes before publishing the entry.
+            if (!_owner.TrySetResolvedArrayElement(_name, index, value, memory))
+                return false;
+            var current = stack.GetDirectoryStackEntry(position);
+            _directoryWrites.Add(current.PathIdentity, previous);
+            return true;
+        }
 
         public void Dispose()
         {
-            if (_committed)
-                return;
-            if (_previous != null)
-                _owner.StoreBinding(_name, _previous);
-            else
-                _owner.ClearBinding(_name);
-            if (_name.CachedText == "OPTIND")
-                _owner._getoptsCursor = _previousCursor;
+            try
+            {
+                if (_committed)
+                    return;
+                if (_directoryWrites != null)
+                    _directoryStack?.RestoreSavedDirectoryWrites(_directoryWrites);
+                if (_previous != null)
+                    _owner.StoreBinding(_name, _previous);
+                else
+                    _owner.ClearBinding(_name);
+                if (_name.CachedText == "OPTIND")
+                    _owner._getoptsCursor = _previousCursor;
+            }
+            finally { _directoryWriteMemory?.Dispose(); }
         }
     }
 

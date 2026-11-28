@@ -397,6 +397,16 @@ If that announcement fails, the changed directory and its bookkeeping survive
 and the saved stack keeps its existing entries. An empty path revalidates the
 current directory. A directory stored by `pushd -n dir` retains its supplied bytes
 until a later navigation resolves the path through the host.
+`DIRSTACK` exposes the current directory and saved entries as an indexed array.
+Index zero follows the active directory independently of `PWD`. Saved entries
+keep their byte spelling, including relative paths. Writing an existing saved
+position changes the path for its next navigation. The active and out-of-range
+positions ignore writes. Unsetting an element leaves the stack intact.
+Unsetting the whole variable removes the live binding. An inherited environment
+value remains an ordinary scalar in a fresh launch. Local and temporary
+bindings can shadow the array, and `local -I` retains the live binding.
+Children start with their own stack. A named declaration listing shows the
+current array.
 Successful stack edits retain success if the
 listing write fails, and the write cause is reported through active stderr.
 `pwd`, `dirs`, and declaration and option listings report write failures.

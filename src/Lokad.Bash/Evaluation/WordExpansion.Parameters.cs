@@ -304,6 +304,8 @@ internal static partial class WordExpansion
                                 destination.TryGetExpansionValue(target.Name, out var arrayScalar);
                                 assigned = arrayScalar;
                             }
+                            else if (assigned.HasValue && destination.IsDirectoryStackBinding(target.Name))
+                                assigned = ShellValue.Empty;
                         }
                         else
                             assigned = null;

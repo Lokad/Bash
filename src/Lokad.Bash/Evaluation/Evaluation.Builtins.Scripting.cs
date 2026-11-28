@@ -218,7 +218,7 @@ public sealed partial class Evaluation
 
         RawShellPath? BuildCandidate(ReadOnlyMemory<byte> component)
         {
-            var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope, lookupMemory);
+            var (prefix, suffix) = WordExpansion.ExpandPathTilde(component, scope);
             if (suffix.IsEmpty && (prefix.IsEmpty || prefix.Span.SequenceEqual("."u8)))
                 return fileName;
 

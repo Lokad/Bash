@@ -1,10 +1,8 @@
 using System;
-using System.Buffers;
 using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
-using System.Text.Unicode;
 using System.Threading;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
@@ -276,6 +274,9 @@ internal sealed class EvaluationState
     /// </summary>
     private readonly List<DirectoryStackEntry> _directoryStack;
     private long _ownedDirectoryPathBytes;
+    private const int ResolvedPathValueOverheadBytes = 64;
+
+    private sealed record ResolvedDirectoryPath(ShellPath Path, ShellValue Value);
 
     internal readonly struct DirectoryStackEntry
     {
@@ -288,11 +289,19 @@ internal sealed class EvaluationState
             OwnedBytes = ownedBytes;
         }
 
-        internal ShellPath? Path => _path as ShellPath;
+        internal ShellPath? Path => (_path as ResolvedDirectoryPath)?.Path;
+        internal ShellValue Value => _path is ResolvedDirectoryPath resolved ? resolved.Value : DeferredPath;
         internal ShellValue DeferredPath => ShellValue.FromBytes((byte[])_path);
         internal long OwnedBytes { get; }
 
-        internal static DirectoryStackEntry Resolved(ShellPath path) => new(path, 48L + 2L * path.Path.Length);
+        internal static DirectoryStackEntry Resolved(ShellPath path)
+        {
+            var value = ShellValue.FromText(path.Path);
+            return new(new ResolvedDirectoryPath(path, value),
+                48L + 2L * path.Path.Length + ResolvedPathValueOverheadBytes + value.Bytes.Length);
+        }
+
+        internal object PathIdentity => _path;
         internal static DirectoryStackEntry Deferred(byte[] path, long ownedBytes) => new(path, ownedBytes);
         internal DirectoryStackEntry Borrow() => new(_path, 0);
     }
@@ -953,6 +962,68 @@ internal sealed class EvaluationState
         PushStackEntry(DirectoryStackEntry.Deferred(operand.Bytes.ToArray(), bytes), memory);
     }
 
+    /// <summary>Replaces one saved path without resolving it or changing the working directory.</summary>
+    internal void SetSavedDirectory(IndexedArrayIndex index, ShellValue value, EvaluationMemory? memory)
+    {
+        if (!ContainsSavedDirectory(index.Value))
+            return;
+        var bytes = checked(48L + value.Bytes.Length);
+        memory?.Charge(bytes);
+        memory?.CancellationToken.ThrowIfCancellationRequested();
+        ReplaceDeferredDirectory((int)index.Value, value);
+    }
+
+    internal bool ContainsSavedDirectory(long index) => index > 0 && index < DirectoryStackCount;
+
+    /// <summary>Admits all replacement paths before publishing an already-read batch.</summary>
+    internal void SetSavedDirectories(uint origin, IReadOnlyList<ShellValue> values,
+        EvaluationMemory? memory, CancellationToken cancellationToken)
+    {
+        long bytes = 0;
+        for (var offset = 0; offset < values.Count; offset++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ContainsSavedDirectory(unchecked(origin + (uint)offset)))
+                bytes = checked(bytes + 48L + values[offset].Bytes.Length);
+        }
+        memory?.Charge(bytes);
+        cancellationToken.ThrowIfCancellationRequested();
+        for (var offset = 0; offset < values.Count; offset++)
+        {
+            var position = unchecked(origin + (uint)offset);
+            if (ContainsSavedDirectory(position))
+                ReplaceDeferredDirectory((int)position, values[offset]);
+        }
+    }
+
+    /// <summary>Restores unpublished input writes while preserving stack edits made by callbacks.</summary>
+    internal void RestoreSavedDirectoryWrites(Dictionary<object, DirectoryStackEntry> writes)
+    {
+        for (var index = 1; index < DirectoryStackCount; index++)
+        {
+            var entry = GetDirectoryStackEntry(index);
+            if (!writes.TryGetValue(entry.PathIdentity, out var previous))
+                continue;
+            while (writes.TryGetValue(previous.PathIdentity, out var earlier))
+                previous = earlier;
+            ReplaceDirectoryStackEntry(index, previous);
+        }
+    }
+
+    private void ReplaceDeferredDirectory(int index, ShellValue value)
+    {
+        var path = new byte[value.Bytes.Length];
+        value.Bytes.Span.CopyTo(path);
+        ReplaceDirectoryStackEntry(index, DirectoryStackEntry.Deferred(path, 48L + path.Length));
+    }
+
+    private void ReplaceDirectoryStackEntry(int index, DirectoryStackEntry entry)
+    {
+        var slot = DirectoryStackSlot(index);
+        _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes - _directoryStack[slot].OwnedBytes);
+        _directoryStack[slot] = entry;
+    }
+
     public void RemoveSavedDirectory(int index)
     {
         var slot = DirectoryStackSlot(index);
@@ -985,29 +1056,27 @@ internal sealed class EvaluationState
         var previous = _directoryStack[^1];
         var fromStack = kind is DirectoryChangeKind.PopDirectory or DirectoryChangeKind.SwapDirectories;
         var stored = fromStack ? _directoryStack[^2] : previous;
-        var destination = ReferenceEquals(stored.Path, target) ? stored : DirectoryStackEntry.Resolved(target);
+        var destination = stored;
+        if (succeeded && !ReferenceEquals(stored.Path, target))
+        {
+            memory.Charge(ResolvedPathValueOverheadBytes + 3L * target.Path.Length);
+            destination = DirectoryStackEntry.Resolved(target);
+        }
         if (kind == DirectoryChangeKind.SwapDirectories)
         {
             if (!succeeded)
                 memory.Charge(Math.Max(0, previous.OwnedBytes - stored.OwnedBytes));
-            Replace(1, previous);
+            ReplaceDirectoryStackEntry(1, previous);
         }
         // A successful lookup publishes the head before variable assignments. A pop can
         // leave two occurrences of the same path if those assignments reject the change.
         if (succeeded)
         {
             if (kind == DirectoryChangeKind.PopDirectory)
-                memory.Charge(Math.Max(0, destination.OwnedBytes - previous.OwnedBytes));
-            Replace(0, destination);
+                memory.Charge(Math.Max(0, stored.OwnedBytes - previous.OwnedBytes));
+            ReplaceDirectoryStackEntry(0, destination);
         }
         return previous;
-
-        void Replace(int index, DirectoryStackEntry entry)
-        {
-            var slot = DirectoryStackSlot(index);
-            _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes - _directoryStack[slot].OwnedBytes);
-            _directoryStack[slot] = entry;
-        }
     }
 
     /// <summary>Completes stack publication only after directory-variable bookkeeping succeeds.</summary>
@@ -1053,33 +1122,11 @@ internal sealed class EvaluationState
         var homeBytes = home.BeforeFirstNul().Bytes.Span;
         if (homeBytes.Length <= 1)
             homeBytes = default;
-        var encoding = Utf8Text.StrictUtf8;
-        const int MaxStackHomeBytes = 256;
-        // Resolved paths are absolute. A deferred selection compares the original bytes directly.
-        var decodeHome = homeBytes is [(byte)'/', ..] && (!selected.HasValue || GetDirectoryStackEntry(start).Path != null);
-        // Valid UTF-8 needs at most one UTF-16 code unit per input byte.
-        scoped Span<char> homeCharacters = decodeHome && homeBytes.Length <= MaxStackHomeBytes
-            ? stackalloc char[homeBytes.Length] : default;
-        scoped ReadOnlySpan<char> homeText = default;
-        using var homeMemory = decodeHome && homeCharacters.IsEmpty && Utf8.IsValid(homeBytes)
-            ? new MemoryCapacity(memory.Budget, 0) : null;
-        if (!homeCharacters.IsEmpty)
-        {
-            if (Utf8.ToUtf16(homeBytes, homeCharacters, out _, out var written, replaceInvalidSequences: false)
-                == OperationStatus.Done)
-                homeText = homeCharacters[..written];
-        }
-        else if (homeMemory != null)
-        {
-            memory.Charge(homeMemory, 32L + 2L * encoding.GetCharCount(homeBytes));
-            homeText = encoding.GetString(homeBytes).AsSpan();
-        }
-
         long bytes = end - start;
         for (var index = start; index < end; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            bytes += FormatEntry(index, homeBytes, homeText, default);
+            bytes += FormatEntry(index, homeBytes, default);
         }
         if (bytes >= ByteMemoryBuilder.MaxMemoryBuilderBytes)
             throw new ByteMemoryBuilder.LimitExceededException();
@@ -1090,12 +1137,12 @@ internal sealed class EvaluationState
         for (var index = start; index < end; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            offset += FormatEntry(index, homeBytes, homeText, output.AsSpan(offset));
+            offset += FormatEntry(index, homeBytes, output.AsSpan(offset));
             output[offset++] = layout == DirectoryStackLayout.Compact && index + 1 < end ? (byte)' ' : (byte)'\n';
         }
         return output;
 
-        int FormatEntry(int index, ReadOnlySpan<byte> homePrefix, ReadOnlySpan<char> homeText, Span<byte> destination)
+        int FormatEntry(int index, ReadOnlySpan<byte> homePrefix, Span<byte> destination)
         {
             var writing = !destination.IsEmpty;
             var position = 0;
@@ -1113,31 +1160,18 @@ internal sealed class EvaluationState
                 }
             }
 
-            var entry = GetDirectoryStackEntry(index);
-            var path = entry.Path?.Path;
-            var text = path.AsSpan();
-            var raw = path == null ? entry.DeferredPath.Bytes.Span : default;
-            var abbreviate = path == null
-                ? MatchesHome(raw, homePrefix, (byte)'/')
-                : MatchesHome(text, homeText, '/');
-            if (abbreviate)
+            var path = GetDirectoryStackEntry(index).Value.Bytes.Span;
+            if (!homePrefix.IsEmpty && path.StartsWith(homePrefix)
+                && (path.Length == homePrefix.Length || path[homePrefix.Length] == (byte)'/'))
             {
                 if (writing)
                     destination[position] = (byte)'~';
                 position++;
-                if (path == null)
-                    raw = raw[homePrefix.Length..];
-                else
-                    text = text[homeText.Length..];
+                path = path[homePrefix.Length..];
             }
-            if (path != null)
-                return checked(position + (writing ? encoding.GetBytes(text, destination[position..]) : encoding.GetByteCount(text)));
             if (writing)
-                raw.CopyTo(destination[position..]);
-            return checked(position + raw.Length);
+                path.CopyTo(destination[position..]);
+            return checked(position + path.Length);
         }
-
-        static bool MatchesHome<T>(ReadOnlySpan<T> path, ReadOnlySpan<T> prefix, T separator) where T : IEquatable<T> =>
-            !prefix.IsEmpty && path.StartsWith(prefix) && (path.Length == prefix.Length || path[prefix.Length].Equals(separator));
     }
 }

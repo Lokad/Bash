@@ -1,11 +1,121 @@
 using Lokad.Bash.Tests.EndToEnd;
+using Lokad.Bash.Evaluation;
 using Lokad.Bash.Files;
 using Lokad.Bash.Helpers;
+using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 using Lokad.Bash.Tree;
+using Eval = Lokad.Bash.Evaluation.Evaluation;
 namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationDirectoryStackTestsEndToEnd
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackReadsLivePathsAndRetainsExpandedValues(bool prepared)
+    {
+        const string script = """
+            pushd -n alpha >/dev/null
+            pushd -n beta >/dev/null
+            PWD=/shadow
+            printf '<%s>\n' "$DIRSTACK" "${DIRSTACK[-1]}" "${!DIRSTACK[@]}"
+            DIRSTACK[1]=
+            printf '<%s>\n' "${DIRSTACK[@]}" "${DIRSTACK[1]:=gamma}" "${DIRSTACK[1]}"
+            for entry in "${DIRSTACK[@]}"; do printf '<%s>\n' "$entry"; dirs -c; done
+            declare -p DIRSTACK
+            """;
+        await AssertDirectoryStackAsync(script, prepared,
+            "</>\n<alpha>\n<0>\n<1>\n<2>\n</>\n<>\n<alpha>\n<>\n<gamma>\n"
+            + "</>\n<gamma>\n<alpha>\ndeclare -a DIRSTACK=([0]=\"/\")\n");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackWritesThroughTheSelectedBindingAndDrivesNavigation(bool prepared)
+    {
+        const string script = """
+            pushd -n alpha >/dev/null
+            pushd -n beta >/dev/null
+            declare -n target='DIRSTACK[1]'
+            target=gamma
+            DIRSTACK[0]=ignored
+            DIRSTACK[9]=ignored
+            unset 'DIRSTACK[1]'
+            popd
+            printf '<%s>\n' "$PWD" "${DIRSTACK[@]}"
+            """;
+        await AssertDirectoryStackAsync(script, prepared, "/gamma alpha\n</gamma>\n</gamma>\n<alpha>\n");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackFollowsLocalInheritanceAndChildOwnership(bool prepared)
+    {
+        const string script = """
+            pushd -n alpha >/dev/null
+            pushd -n beta >/dev/null
+            show() { printf '<%s>\n' "${DIRSTACK[1]-unset}"; }
+            f() {
+                local -I DIRSTACK
+                ( DIRSTACK[1]=subshell; show )
+                result=$(DIRSTACK[1]=capture; show); printf '%s\n' "$result"
+                { DIRSTACK[1]=pipeline; show; } | while IFS= read -r line; do printf '%s\n' "$line"; done
+                DIRSTACK[1]=gamma
+            }
+            f
+            DIRSTACK=prefix show
+            show
+            unset DIRSTACK
+            DIRSTACK[1]=ordinary
+            show; dirs -l
+            """;
+        await AssertDirectoryStackAsync(script, prepared,
+            "<subshell>\n<capture>\n<pipeline>\n<unset>\n<gamma>\n<ordinary>\n/ gamma alpha\n");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackDistinguishesBulkInputAndIsolatedRedirections(bool prepared)
+    {
+        const string script = """
+            pushd -n alpha >/dev/null
+            pushd -n beta >/dev/null
+            < "./file$((DIRSTACK[1]=2))"
+            dirs -l
+            : > "out$((DIRSTACK[1]=2))"
+            dirs -l
+            visit() { printf '<%s:%s>\n' "$1" "${DIRSTACK[1]}"; }
+            mapfile -t -O 1 -c 1 -C visit DIRSTACK <<< $'first\nsecond'
+            dirs -l
+            mapfile -t DIRSTACK <<< $'ignored\nnext\nlast\nignored'
+            dirs -l
+            """;
+        await AssertDirectoryStackAsync(script, prepared,
+            "/ beta alpha\n/ 2 alpha\n<1:2>\n<2:first>\n/ first second\n/ next last\n");
+    }
+
+    private static async Task AssertDirectoryStackAsync(string script, bool prepared, string expected)
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.DefaultBytes);
+        using var owner = governor.CreateScope();
+        await using var host = EndToEndHarness.BuildTree(["/alpha", "/beta", "/gamma"], [("/file2", "data\n")]);
+        host.MemoryBudget = owner;
+        var result = prepared
+            ? await new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, CancellationToken.None)
+            : await BashScript.RunAsync(host, script, EvaluationOptions.Default, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData("pushd /alpha /beta", 1, "line 3: pushd: too many arguments\n")]
     [InlineData("pushd -n -x", 2, "line 3: pushd: -x: invalid number\npushd: usage: pushd [-n] [+N | -N | dir]\n")]
