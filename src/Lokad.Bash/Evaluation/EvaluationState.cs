@@ -31,6 +31,8 @@ internal enum ExpansionFailureKind
     ParameterTarget,
     /// <summary>A reached error-if-unset parameter expansion.</summary>
     RequiredParameter,
+    /// <summary>A reached read of an unbound parameter with nounset active.</summary>
+    UnboundParameter,
     /// <summary>A present value reached an invalid parameter transformation.</summary>
     InvalidParameterTransform,
     /// <summary>An errexit-enabled file substitution could not open its input.</summary>
@@ -58,7 +60,8 @@ internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int 
         : this(kind, kind == ExpansionFailureKind.NamerefDefault ? 2 : 1) { }
 
     internal bool IsTerminalParameterFailure =>
-        Kind is ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.InvalidParameterTransform;
+        Kind is ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.UnboundParameter
+            or ExpansionFailureKind.InvalidParameterTransform;
 
     // A local option scope may be restored before the loaded script reader handles the failure.
     internal bool CanResumeUntestedUnit { get; init; }

@@ -225,6 +225,14 @@ internal static partial class WordExpansion
                         && location is not ResolvedVariableReference.Indexed { ReadAsUnset: true }
                         && location.TryRead(scope.Variables, out var read))
                         stored = read;
+                    else if (scope.Effects.NounsetEnabled
+                        && (target.Location is not { } selectedLocation || !HasAssignedBase(selectedLocation, scope.Variables)))
+                    {
+                        var name = (target.Location?.Name ?? selected.Syntax.Name).ToValue();
+                        await scope.Effects.ReportUnboundParameterAsync([name], scope, hereDocument: false).ConfigureAwait(false);
+                        referenceFailureReported = true;
+                        return new ArithmeticBinding<ArithmeticTarget>.Failure(new ArithmeticError(ArithmeticErrorKind.InvalidTarget, name));
+                    }
                 }
                 if (!stored.IsEmpty)
                 {

@@ -250,6 +250,7 @@ public sealed partial class Evaluation : IFileTester
 
     internal ShellValue ShellOptionFlags => ShellOptions.Flags(_state.EnabledOptions);
     internal bool BraceExpansionEnabled => _state.HasOption(ShellOption.BraceExpand);
+    internal bool NounsetEnabled => _state.HasOption(ShellOption.Nounset);
     internal bool IgnoreCaseInPatterns => _state.HasOption(ShellOption.NoCaseMatch);
 
     /// <summary> Gets the last recorded exit code, if any. </summary>
@@ -5878,6 +5879,14 @@ public sealed partial class Evaluation : IFileTester
             return ReportHereDocumentParameterFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform);
         return ReportUnitExpansionFailureAsync([subject], message, scope, ExpansionFailureKind.InvalidParameterTransform,
             GetCommandDiagnosticPrefix(scope));
+    }
+
+    internal Task ReportUnboundParameterAsync(ReadOnlySpan<ShellValue> subject, ScopedEvaluation scope, bool hereDocument)
+    {
+        ReadOnlySpan<ShellValue> message = [ShellValue.FromText("unbound variable")];
+        return hereDocument
+            ? ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
+            : ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.UnboundParameter);
     }
 
     /// <summary>Reports the first fatal expansion through the active stderr mapping without decoding message bytes.</summary>

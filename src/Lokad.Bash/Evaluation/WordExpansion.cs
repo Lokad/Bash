@@ -1146,6 +1146,12 @@ internal static partial class WordExpansion
             }
             if (next == (byte)'!')
             {
+                if (scope.Effects.NounsetEnabled)
+                {
+                    await scope.Effects.ReportUnboundParameterAsync([content.Slice(index, 2).ToValue()], scope,
+                        quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                    return null;
+                }
                 output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
                 index++;
                 continue;
@@ -1197,6 +1203,12 @@ internal static partial class WordExpansion
                     output.AppendExpansion(scope.Variables.ArgumentZero, allowWordSplitting, globQuoted);
                 else if (position <= arguments.Count)
                     output.AppendExpansion(arguments[position - 1], allowWordSplitting, globQuoted);
+                else if (scope.Effects.NounsetEnabled)
+                {
+                    await scope.Effects.ReportUnboundParameterAsync([content.Slice(index, 2).ToValue()], scope,
+                        quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                    return null;
+                }
                 else if (quoteContext == ExpansionQuoteContext.DoubleQuoted)
                     output.AppendExpansion(ShellValue.Empty, allowWordSplitting, globQuoted);
 
@@ -1309,11 +1321,17 @@ internal static partial class WordExpansion
                     nameEnd++;
                 }
 
-                var name = content.Slice(nameStart, nameEnd - nameStart).ToUtf8String();
-                var target = await ResolveReferenceAsync(VariableReference.ForName(name), ReferenceUse.ShortRead,
+                var name = content.Slice(nameStart, nameEnd - nameStart);
+                var target = await ResolveReferenceAsync(VariableReference.ForName(name.ToUtf8String()), ReferenceUse.ShortRead,
                     scope, ExpansionPurpose.ArithmeticSource).ConfigureAwait(false);
                 var selectedValue = ShellValue.Empty;
-                if (target != null) target.TryRead(scope.Variables, out selectedValue);
+                var isSet = target != null && target.TryRead(scope.Variables, out selectedValue);
+                if (!isSet && scope.CanExpand && scope.Effects.NounsetEnabled)
+                {
+                    await scope.Effects.ReportUnboundParameterAsync([name.ToValue()], scope,
+                        quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+                    return null;
+                }
                 output.AppendExpansion(selectedValue, allowWordSplitting, globQuoted);
                 index = nameEnd - 1;
                 continue;

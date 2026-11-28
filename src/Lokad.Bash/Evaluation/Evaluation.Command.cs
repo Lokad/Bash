@@ -75,7 +75,8 @@ public sealed partial class Evaluation
             if (result.DeferredErrexit is { IsActive: false })
                 return await RunErrexitExitTrapAsync(scope, result, result.DefersLoadedErrexit).ConfigureAwait(false);
             if (result.Flow == FlowControlKind.Exit && _state.ErrexitEnabled
-                && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.InvalidParameterTransform
+                && _state.FatalExpansion is { Kind: ExpansionFailureKind.RequiredParameter or ExpansionFailureKind.UnboundParameter
+                    or ExpansionFailureKind.InvalidParameterTransform
                     or ExpansionFailureKind.CompoundArrayIndex or ExpansionFailureKind.ArrayRead,
                     UseInheritedPipelineExitAction: false, UnwindsLoadedReader: false })
                 return await RunExitTrapAsync(scope, result, ExitTrapKind.Expansion).ConfigureAwait(false);

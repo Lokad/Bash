@@ -887,9 +887,9 @@ cancellation and a live-memory allowance. Here-document bodies are collected in
 physical source order across pipeline/list headers and completed through timing,
 negation and compound-command wrappers. An incomplete body is rejected rather
 than accepted with GNU's end-of-input warning. Builtins implement their documented option subsets;
-`set` sets positional parameters and supports `-e`/`+e`, `-f`/`+f`, and
-`-B`/`+B`, with named `-o`/`+o` forms for `errexit`, `noglob`, and
-`braceexpand`. With no expanded operands, it lists visible variable
+`set` sets positional parameters and supports `-e`/`+e`, `-f`/`+f`,
+`-u`/`+u`, and `-B`/`+B`, with named `-o`/`+o` forms for `errexit`,
+`noglob`, `nounset`, and `braceexpand`. With no expanded operands, it lists visible variable
 assignments followed by function definitions. Each group uses byte-name
 order. Like bare `declare`, this listing hides the command's own temporary
 prefixes and prints function bodies without their declaration attributes.
@@ -901,7 +901,7 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default. It inherits the setting
 with `shopt -s inherit_errexit`. Parenthesized subshells inherit it directly.
 `$-` and `${-}` expose the supported mutable flags. `set -o` and `set +o`
-inspect `braceexpand`, `errexit`, and `noglob`. `test -o` and `[[ -o ]]` query
+inspect `braceexpand`, `errexit`, `noglob`, and `nounset`. `test -o` and `[[ -o ]]` query
 the active settings. Unsupported option changes report a diagnostic.
 Downstream closure stops inspection output and diagnostics routed to the
 same handle. Option and positional processing continues.
@@ -926,7 +926,20 @@ Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
 they list enabled and disabled options respectively. `-o` selects the
 `set` option namespace. That namespace exposes mutable `braceexpand`,
-`errexit`, and `noglob`, and the fixed `pipefail` setting.
+`errexit`, `noglob`, and `nounset`, and the fixed `pipefail` setting.
+
+`nounset` is off at startup. `set -u` diagnoses a reached read of an
+unbound parameter and exits the active shell reader. Default, alternate,
+assignment and required-value parameter operators keep their own unset
+rules. Empty assigned scalars and ordinary empty aggregates expand as
+values. A missing array element in an assigned array still yields zero
+in arithmetic evaluation and in an element length expansion.
+Arithmetic writes can initialize a missing binding. Command substitutions
+inherit `nounset` and return their own failure status. A direct unbound
+parameter in a here-document fails the redirection. A reached unbound
+arithmetic read in that body exits the active reader. Fresh hosted command
+strings with `nounset` return 127 for a terminal unbound read, or 1 when
+errexit is active.
 
 `braceexpand` is enabled by default. `set +B` preserves authored braces
 as fields proceed through the remaining expansion stages. The setting
@@ -994,7 +1007,7 @@ reached shell state, including a capture's errexit setting, and appear in
 operand-free `set` and `declare -p` listings. They can
 be explicitly exported. An inherited list enables its recognized
 options in a fresh hosted launch after the leading launch options are
-applied. The supported `-e`, `+e`, `-f`, `+f`, `-B`, and `+B` flags and the
+applied. The supported `-e`, `+e`, `-f`, `+f`, `-u`, `+u`, `-B`, and `+B` flags and the
 `-o`/`+o` and `-O`/`+O` option-name pairs precede `-c` or a script operand. The
 application host supplies the selected source and positional parameters.
 `$_` holds the last expanded argument of a completed simple command. A command
@@ -1097,7 +1110,7 @@ invalid identifier. A source integer or case flag prepares the reached
 array and its attribute without selecting the stored index or key.
 
 Inside a function, `local -` saves `braceexpand`, `errexit`, `noglob`,
-`inherit_errexit`, `shift_verbose`, and `sourcepath` and restores them on
+`nounset`, `inherit_errexit`, `shift_verbose`, and `sourcepath` and restores them on
 return. A second `local -` keeps the first snapshot, as in the pinned
 Bash 5.2.37 build.
 `local -p -` inspects the current function's snapshot.
@@ -2029,7 +2042,7 @@ decimal. A nonnumeric token stays in the expression and the predicate is false. 
 required operand and returns false for an invalid descriptor.
 
 The unary `-o` predicate in `[[ … ]]`, `test` and `[` reports the current
-settings for `errexit`, `noglob`, and `braceexpand` and the fixed `pipefail` option.
+settings for `errexit`, `noglob`, `nounset`, and `braceexpand` and the fixed `pipefail` option.
 All other option names return false.
 
 `[[ … ]]`, `test` and `[` recognize `-v` and `-R`. An assigned empty value counts as

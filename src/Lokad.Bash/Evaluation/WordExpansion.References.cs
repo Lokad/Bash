@@ -1195,6 +1195,13 @@ internal static partial class WordExpansion
 
     private enum SpecialParameterKind { None, Status, Count, At, Star, Positional, BackgroundProcess, Flags }
 
+    private static bool HasAssignedBase(ResolvedVariableReference target, Variables variables)
+    {
+        var owner = target.ReadOwner ?? variables;
+        return owner.GetArrayMetadata(target.Name) is { IsInitialized: true }
+            || owner.TryGetScalar(target.Name, out _);
+    }
+
     private static SpecialParameterKind GetSpecialParameterKind(ReadOnlySpan<byte> name)
     {
         if (!name.IsEmpty && name.IndexOfAnyExceptInRange((byte)'0', (byte)'9') < 0)

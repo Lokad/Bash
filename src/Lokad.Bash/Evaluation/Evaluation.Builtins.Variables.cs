@@ -329,8 +329,7 @@ public sealed partial class Evaluation
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Set, "set", negated)
                     .ConfigureAwait(false);
 
-            var firstOtherFlag = bytes[1..].IndexOfAnyExcept(ShellOptions.ErrexitFlag, ShellOptions.NoglobFlag,
-                ShellOptions.BraceExpandFlag) + 1;
+            var firstOtherFlag = bytes[1..].IndexOfAnyExcept(ShellOptions.ShortSetFlags) + 1;
             if (firstOtherFlag == 0)
                 continue;
             if (bytes[firstOtherFlag] != (byte)'o')

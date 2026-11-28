@@ -130,6 +130,19 @@ internal static partial class WordExpansion
                 .ConfigureAwait(false);
             return;
         }
+        if (scope.Effects.NounsetEnabled && !parameter.IsSet
+            && parameter.Kind is not (VariableReferenceKind.At or VariableReferenceKind.Star)
+            && parsed.Kind is not (BracedParameterOperatorKind.UseDefault or BracedParameterOperatorKind.UseAlternate
+                or BracedParameterOperatorKind.AssignDefault or BracedParameterOperatorKind.ErrorIfUnset))
+        {
+            var name = parsed.Name;
+            if (parsed.Modifier == ParameterModifier.Length && name.AsSpan().IndexOf((byte)'[') is >= 0 and var bracket)
+                name = name[..bracket];
+            await scope.Effects.ReportUnboundParameterAsync(parsed.Modifier == ParameterModifier.Indirect
+                    ? [ShellValue.FromText("!"), name.ToValue()] : [name.ToValue()], scope,
+                quoteContext == ExpansionQuoteContext.HereDocument).ConfigureAwait(false);
+            return;
+        }
         var positionalStar = parsed.Modifier == ParameterModifier.None && parameter.Kind == VariableReferenceKind.Star
             && parameter.RangeSource is ParameterSource.Positional;
         var starSplit = PositionalStarSplit.Default;
@@ -812,7 +825,8 @@ internal static partial class WordExpansion
                     var length = special.Kind is VariableReferenceKind.At or VariableReferenceKind.Star
                         ? special.Fields.Count : CountParameterCharacters(special.Fields[0], scope);
                     return new ParameterValue(VariableReferenceKind.Name,
-                        [ShellValue.FromInteger(length)], true, null, null);
+                        [ShellValue.FromInteger(length)], special.IsSet || special.RangeSource is ParameterSource.Positional,
+                        null, null);
                 }
                 if (syntax.Reference is not { } reference)
                 {
@@ -837,10 +851,11 @@ internal static partial class WordExpansion
                         ? binding.Name : BindingName.Empty;
                     if (modifier == ParameterModifier.Length)
                     {
-                        var length = variables.GetArrayMetadata(resolved)?.Count
-                            ?? (variables.TryGetScalar(resolved, out _) ? 1 : 0);
+                        var metadata = variables.GetArrayMetadata(resolved);
+                        var scalarExists = metadata == null && variables.TryGetScalar(resolved, out _);
+                        var length = metadata?.Count ?? (scalarExists ? 1 : 0);
                         return new ParameterValue(VariableReferenceKind.Name,
-                            [ShellValue.FromInteger(length)], true, null, null);
+                            [ShellValue.FromInteger(length)], metadata?.IsInitialized == true || scalarExists, null, null);
                     }
 
                     // Operators that consume the array after expanding an operand keep the command-owned source.
@@ -914,10 +929,13 @@ internal static partial class WordExpansion
                     var global = scope.Context.GetGlobalBindingOwner(reference.Name, scope.Variables);
                     isSet = !ReferenceEquals(global, scope.Variables) && global.TryGetNameref(reference.Name, out value);
                 }
-                return modifier == ParameterModifier.Length
-                    ? new ParameterValue(VariableReferenceKind.Name,
-                        [ShellValue.FromInteger(CountParameterCharacters(value, scope))], true, null, null)
-                    : new ParameterValue(reference.Kind, [value], isSet, reference, target);
+                if (modifier != ParameterModifier.Length)
+                    return new ParameterValue(reference.Kind, [value], isSet, reference, target);
+
+                if (!isSet && scope.Effects.NounsetEnabled && reference.Kind == VariableReferenceKind.Element && target != null)
+                    isSet = HasAssignedBase(target, scope.Variables);
+                return new ParameterValue(VariableReferenceKind.Name,
+                    [ShellValue.FromInteger(CountParameterCharacters(value, scope))], isSet, null, null);
 
                 // Special parameters are values, not assignable variable locations.
                 static ParameterValue ReadSpecialParameter(ReadOnlySpan<byte> name, SpecialParameterKind kind, ScopedEvaluation scope)

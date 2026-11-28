@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
 using Lokad.Bash.Memory;
@@ -23,7 +24,8 @@ internal enum ShellOption
     Noglob = 2048,
     XpgEcho = 4096,
     SourcePath = 8192,
-    ShiftVerbose = 16384
+    ShiftVerbose = 16384,
+    Nounset = 32768
 }
 
 internal static class ShellOptions
@@ -31,12 +33,14 @@ internal static class ShellOptions
     internal const ShellOption Fixed = ShellOption.Pipefail;
     private const ShellOption DefaultBashFlags = ShellOption.GlobSkipDots | ShellOption.SourcePath;
     internal const ShellOption Default = Fixed | ShellOption.BraceExpand | DefaultBashFlags;
-    internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.BraceExpand;
+    internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.Nounset | ShellOption.BraceExpand;
     internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.ShiftVerbose
         | ShellOption.SourcePath;
     internal const byte ErrexitFlag = (byte)'e';
     internal const byte NoglobFlag = (byte)'f';
+    internal const byte NounsetFlag = (byte)'u';
     internal const byte BraceExpandFlag = (byte)'B';
+    internal static readonly SearchValues<byte> ShortSetFlags = SearchValues.Create("efuB"u8);
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
@@ -47,6 +51,7 @@ internal static class ShellOptions
         new(ShellValue.FromText("braceexpand"), ShellOption.BraceExpand),
         new(ShellValue.FromText("errexit"), ShellOption.Errexit),
         new(ShellValue.FromText("noglob"), ShellOption.Noglob),
+        new(ShellValue.FromText("nounset"), ShellOption.Nounset),
         new(ShellValue.FromText("pipefail"), ShellOption.Pipefail)
     ];
 
@@ -70,7 +75,11 @@ internal static class ShellOptions
     [
         ShellOption.None, ShellOption.Errexit, ShellOption.Noglob, ShellOption.Errexit | ShellOption.Noglob,
         ShellOption.BraceExpand, ShellOption.BraceExpand | ShellOption.Errexit,
-        ShellOption.BraceExpand | ShellOption.Noglob, MutableSet
+        ShellOption.BraceExpand | ShellOption.Noglob, MutableSet & ~ShellOption.Nounset,
+        ShellOption.Nounset, ShellOption.Nounset | ShellOption.Errexit, ShellOption.Nounset | ShellOption.Noglob,
+        ShellOption.Nounset | ShellOption.Errexit | ShellOption.Noglob,
+        ShellOption.Nounset | ShellOption.BraceExpand, ShellOption.Nounset | ShellOption.BraceExpand | ShellOption.Errexit,
+        ShellOption.Nounset | ShellOption.BraceExpand | ShellOption.Noglob, MutableSet
     ];
 
     internal static ShellValue DefaultBashBinding { get; } = Format(BashOptions, DefaultBashFlags, memory: null, out _);
@@ -89,13 +98,14 @@ internal static class ShellOptions
     {
         ErrexitFlag => ShellOption.Errexit,
         NoglobFlag => ShellOption.Noglob,
+        NounsetFlag => ShellOption.Nounset,
         BraceExpandFlag => ShellOption.BraceExpand,
         _ => ShellOption.None
     };
 
     private static int MutableSetIndex(ShellOption enabled) =>
         ((enabled & ShellOption.Errexit) != 0 ? 1 : 0) | ((enabled & ShellOption.Noglob) != 0 ? 2 : 0)
-        | ((enabled & ShellOption.BraceExpand) != 0 ? 4 : 0);
+        | ((enabled & ShellOption.BraceExpand) != 0 ? 4 : 0) | ((enabled & ShellOption.Nounset) != 0 ? 8 : 0);
 
     internal static ShellValue SetBinding(ShellOption enabled) => SetProjections.Bindings[MutableSetIndex(enabled)];
 
@@ -135,7 +145,9 @@ internal static class ShellOptions
         internal static readonly ShellValue[] Flags =
         [
             ShellValue.Empty, ShellValue.FromText("e"), ShellValue.FromText("f"), ShellValue.FromText("ef"),
-            ShellValue.FromText("B"), ShellValue.FromText("eB"), ShellValue.FromText("fB"), ShellValue.FromText("efB")
+            ShellValue.FromText("B"), ShellValue.FromText("eB"), ShellValue.FromText("fB"), ShellValue.FromText("efB"),
+            ShellValue.FromText("u"), ShellValue.FromText("eu"), ShellValue.FromText("fu"), ShellValue.FromText("efu"),
+            ShellValue.FromText("uB"), ShellValue.FromText("euB"), ShellValue.FromText("fuB"), ShellValue.FromText("efuB")
         ];
     }
 
