@@ -920,7 +920,7 @@ during application, preserving any changes already applied. After `-`,
 
 `shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`,
 `inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, `nullglob`,
-`shift_verbose`, `sourcepath`, and `xpg_echo`.
+`patsub_replacement`, `shift_verbose`, `sourcepath`, and `xpg_echo`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -1386,9 +1386,15 @@ quoted groups and selected parameter operands before the final match.
 Each expansion uses its current IFS to record which quote bytes are
 exposed, and the later selection uses the IFS in effect at that point.
 
-In parameter replacement text, later empty fields from quoted `$@` or
-`${array[@]}` emit a DEL byte (`0x7F`) in the recorded Bash profile. A leading
-or single empty field contributes zero bytes. A literal DEL remains data.
+`patsub_replacement` is enabled by default. In parameter replacement text,
+an unquoted `&` inserts the matched bytes, and an unquoted backslash can
+escape an ampersand or another backslash. Later empty fields from quoted
+`$@` or `${array[@]}` emit a DEL byte (`0x7F`) with the option enabled.
+A leading or single empty field contributes zero bytes. With the option
+off, the expanded replacement supplies literal bytes and empty fields
+contribute zero bytes. A literal DEL remains data in either mode.
+Command substitutions and subshells inherit the reached option. Changes
+inside a function persist after return, including functions using `local -`.
 
 Word and arithmetic `for` loops accept a brace body as well as `do ... done`.
 A word loop needs a semicolon or line break before the opening brace. An

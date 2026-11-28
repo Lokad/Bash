@@ -12,6 +12,59 @@ namespace Lokad.Bash.Tests;
 public sealed class ParameterTransformTests
 {
     [Theory]
+    [InlineData(":", "<a!ba><&!ba><&ba>")]
+    [InlineData("shopt -u patsub_replacement", "<&!ba><&!ba><\\&ba>")]
+    [InlineData("shopt -u patsub_replacement; shopt -s patsub_replacement", "<a!ba><&!ba><&ba>")]
+    public async Task ReplacementOptionControlsMatchAndEscapeProcessing(string options, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{options}}
+            value=aba
+            escaped='\&'
+            printf '<%s>' "${value/a/&!}" "${value/a/'&!'}" "${value/a/$escaped}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData(":", "< & \u007fba>")]
+    [InlineData("shopt -u patsub_replacement", "< & ba>")]
+    public async Task ReplacementOptionControlsEmptyAggregateFields(string options, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            {{options}}
+            value=aba
+            set -- '' '&' ''
+            IFS=:
+            printf '<%s>' "${value/a/"$@"}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task ReplacementOptionPersistsOutsideFunctionAndIsInheritedByCaptures()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            value=aba
+            f() { local -; shopt -u patsub_replacement; }
+            f
+            shopt -p patsub_replacement
+            printf '<%s><%s><%s>' "$(printf %s "${value/a/&!}")" \
+                "$(shopt -s patsub_replacement; printf %s "${value/a/&!}")" "${value/a/&!}"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("shopt -u patsub_replacement\n<&!ba><a!ba><&!ba>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("^")]
     [InlineData("^^")]
     [InlineData("@U")]

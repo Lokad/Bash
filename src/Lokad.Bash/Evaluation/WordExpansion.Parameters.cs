@@ -1099,7 +1099,8 @@ internal static partial class WordExpansion
                     operand = operand[1..];
                 }
                 var separator = FindReplacementSeparator(operand, mode);
-                var pattern = await ExpandOperandAsync(separator < 0 ? operand : operand[..separator], ExpansionPurpose.Scalar)
+                var pattern = await ExpandOperandAsync(separator < 0 ? operand : operand[..separator],
+                    ExpansionPurpose.Scalar, needsMask: true)
                     .ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
@@ -1113,8 +1114,10 @@ internal static partial class WordExpansion
                         new GlobMask(patternMask.Memory.IsEmpty ? ReadOnlyMemory<byte>.Empty : patternMask.Memory[1..]));
                 }
                 var canMatch = TryUnescapePattern(pattern, out pattern);
+                var matchReplacement = scope.Effects.PatternReplacementExpandsMatch;
                 var replacement = await ExpandOperandAsync(separator < 0 ? ShellSource.Empty : operand[(separator + 1)..],
-                    ExpansionPurpose.ParameterReplacement).ConfigureAwait(false);
+                    matchReplacement ? ExpansionPurpose.ParameterReplacement : ExpansionPurpose.Scalar,
+                    needsMask: matchReplacement).ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
                 var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken,
@@ -1345,10 +1348,12 @@ internal static partial class WordExpansion
                 return success;
             }
 
-            async Task<ParameterOperand> ExpandOperandAsync(ShellSource source, ExpansionPurpose purpose)
+            async Task<ParameterOperand> ExpandOperandAsync(ShellSource source, ExpansionPurpose purpose, bool needsMask)
             {
                 var operand = await ExpandOperandWordAsync(source, purpose, ImplicitEmptyPolicy.Preserve).ConfigureAwait(false);
-                return JoinOperandFields(operand?.Build() ?? []);
+                var fields = operand?.Build() ?? [];
+                return needsMask ? JoinOperandFields(fields)
+                    : new ParameterOperand(ExpandedWord.JoinValuesWithSpaces(fields, budget), null);
             }
 
             Task<ExpandedWordBuilder?> ExpandOperandWordAsync(

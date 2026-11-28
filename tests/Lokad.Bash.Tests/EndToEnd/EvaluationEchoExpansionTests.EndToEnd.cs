@@ -36,7 +36,7 @@ public sealed class EvaluationEchoExpansionTestsEndToEnd
             """);
 
         Assert.Equal("initial:1\n<child\nline\nliteral\\nline>\n"
-            + "options:globskipdots:sourcepath:xpg_echo/braceexpand:pipefail\nparent\\nline\n", result.StdOut);
+            + "options:globskipdots:patsub_replacement:sourcepath:xpg_echo/braceexpand:pipefail\nparent\\nline\n", result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }

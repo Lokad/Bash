@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `shopt -u patsub_replacement` and hosted `bash +O patsub_replacement`
+  to use literal replacement text in parameter expansion.
 - Support `set -u`, including Bash's command-unit recovery for absent array
   lengths and the reader and child status rules for here-documents.
 - Support `shopt -u sourcepath` and hosted `bash +O sourcepath` to open

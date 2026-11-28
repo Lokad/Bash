@@ -252,6 +252,7 @@ public sealed partial class Evaluation : IFileTester
     internal bool BraceExpansionEnabled => _state.HasOption(ShellOption.BraceExpand);
     internal bool NounsetEnabled => _state.HasOption(ShellOption.Nounset);
     internal bool IgnoreCaseInPatterns => _state.HasOption(ShellOption.NoCaseMatch);
+    internal bool PatternReplacementExpandsMatch => _state.HasOption(ShellOption.PatsubReplacement);
 
     /// <summary> Gets the last recorded exit code, if any. </summary>
     public int? LastExitCode => _state.LastExitCode;

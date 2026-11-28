@@ -3,6 +3,23 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task BashLaunchAppliesExplicitReplacementOptionAndKeepsTheFreshDefault()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            code='value=aba; printf "<%s>" "${value/a/&!}"'
+            bash +O patsub_replacement -c "$code" bash
+            bash -O patsub_replacement -c "$code" bash
+            shopt -u patsub_replacement
+            export BASHOPTS
+            bash -c "$code" bash
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<&!ba><a!ba><a!ba>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
     public async Task ShiftVerboseLaunchUsesExplicitAndExportedSettings()
     {
         await using var host = new TestHost();
@@ -166,8 +183,8 @@ public sealed class ChildShellLaunchTests
             """, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("child:globskipdots:localvar_inherit:sourcepath/braceexpand:errexit:pipefail\n"
-            + "cleared:globskipdots:sourcepath/braceexpand:pipefail\n", host.StandardOutput.TextContent);
+        Assert.Equal("child:globskipdots:localvar_inherit:patsub_replacement:sourcepath/braceexpand:errexit:pipefail\n"
+            + "cleared:globskipdots:patsub_replacement:sourcepath/braceexpand:pipefail\n", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
     }

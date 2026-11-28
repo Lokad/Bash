@@ -25,13 +25,14 @@ internal enum ShellOption
     XpgEcho = 4096,
     SourcePath = 8192,
     ShiftVerbose = 16384,
-    Nounset = 32768
+    Nounset = 32768,
+    PatsubReplacement = 65536
 }
 
 internal static class ShellOptions
 {
     internal const ShellOption Fixed = ShellOption.Pipefail;
-    private const ShellOption DefaultBashFlags = ShellOption.GlobSkipDots | ShellOption.SourcePath;
+    private const ShellOption DefaultBashFlags = ShellOption.GlobSkipDots | ShellOption.PatsubReplacement | ShellOption.SourcePath;
     internal const ShellOption Default = Fixed | ShellOption.BraceExpand | DefaultBashFlags;
     internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.Nounset | ShellOption.BraceExpand;
     internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.ShiftVerbose
@@ -65,6 +66,7 @@ internal static class ShellOptions
         new(ShellValue.FromText("nocaseglob"), ShellOption.NoCaseGlob),
         new(ShellValue.FromText("nocasematch"), ShellOption.NoCaseMatch),
         new(ShellValue.FromText("nullglob"), ShellOption.Nullglob),
+        new(ShellValue.FromText("patsub_replacement"), ShellOption.PatsubReplacement),
         new(ShellValue.FromText("shift_verbose"), ShellOption.ShiftVerbose),
         new(ShellValue.FromText("sourcepath"), ShellOption.SourcePath),
         new(ShellValue.FromText("xpg_echo"), ShellOption.XpgEcho)

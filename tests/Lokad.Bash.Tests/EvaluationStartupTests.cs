@@ -28,7 +28,7 @@ public sealed class EvaluationStartupTests
         var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("set:chosen:first:globskipdots:localvar_inherit:sourcepath\n", host.StandardOutput.TextContent);
+        Assert.Equal("set:chosen:first:globskipdots:localvar_inherit:patsub_replacement:sourcepath\n", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Contains("BASHOPTS", evaluation.ExportedVariables);
         Assert.Contains("BASHOPTS", evaluation.ReadonlyVariables);
