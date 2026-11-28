@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Expose the active call stack through `BASH_SOURCE`, `BASH_LINENO` and
+  `FUNCNAME`. In named files and inherited command strings, `caller`
+  reports the call site's line and enclosing source, with the function
+  name for indexed lookups. Unnamed input retains compact `0 name` output.
+
+- Expose `BASH_ARGC` and `BASH_ARGV` under default shell options. The
+  first top-level lookup snapshots the argument count and reversed
+  positional arguments, including the arguments of a top-level source.
+
+- Expose the live directory stack through `DIRSTACK`. Named reads see
+  the current entries. Operand-free listings retain the last observed
+  stack for the selected binding.
+
+- Link `BASH_ARGV0` to the active shell name and expose the current
+  subshell level as `BASH_SUBSHELL`. Preserve the original command bytes
+  in `BASH_EXECUTION_STRING` for inherited `bash -c` launches.
+
+- Initialize the exported `SHLVL` on new shell launches. Apply the
+  reached launch-level adjustment for explicit and eligible implicit
+  shell replacement.
+
 - Accept explicit logical `cd -L`, including repeated options and grouped
   forms that select logical navigation. Accept `-e` without changing logical
   navigation.
