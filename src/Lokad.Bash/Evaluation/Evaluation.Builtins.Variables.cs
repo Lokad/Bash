@@ -421,7 +421,7 @@ public sealed partial class Evaluation
         {
             var flag = group.Bytes.Slice(flagIndex, 1);
             // Recognized Bash flags outside the mutable option profile keep the unsupported-option diagnostic.
-            if ("bhkmprtvxCEHPT"u8.Contains(flag.Span[0]))
+            if ("bhkmprvxCEHPT"u8.Contains(flag.Span[0]))
                 return await InvalidOptionAsync(group, ": unsupported option", exitCode).ConfigureAwait(false);
 
             if (CanWriteOptionDiagnostic())

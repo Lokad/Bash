@@ -19,6 +19,9 @@ internal abstract record CommandUnitParseResult
     internal CommandReadDiagnostics ReadDiagnostics { get; init; }
     internal int UnitReadLine { get; init; }
 
+    /// <summary>A blank or comment-only line selected by the one-command reader.</summary>
+    internal sealed record Empty : CommandUnitParseResult;
+
     /// <summary>A complete unit whose syntax and here-document bodies have been parsed.</summary>
     internal sealed record Parsed(ICommand Command) : CommandUnitParseResult
     {

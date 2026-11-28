@@ -660,6 +660,9 @@ public sealed partial class Evaluation : IFileTester
         RootFlowHandling rootFlowHandling) =>
         await EvaluateParsedScriptAsync(_state.Script, scope, rootFlowHandling).ConfigureAwait(false);
 
+    private bool StopsAfterCommandUnit => _state.ForkKind == null && !_state.UsesCommandStringExpansionExit
+        && _state.HasOption(ShellOption.OneCommand);
+
     /// <summary>
     /// Evaluates each command in a parsed script sequentially, honoring flow-control outcomes.
     /// </summary>
@@ -682,6 +685,7 @@ public sealed partial class Evaluation : IFileTester
             CheckCancellation();
             var result = await EvaluateCommandAsync(command, scope, negated: false)
                 .ConfigureAwait(false);
+            var completedUnit = result.Flow == FlowControlKind.None;
 
             if (result.DiscardsCommandUnit && rootFlowHandling == RootFlowHandling.Normalize)
                 result = await RecoverDiscardedCommandUnitAsync(scope, result, scope.InNestedCommandUnits).ConfigureAwait(false);
@@ -703,6 +707,8 @@ public sealed partial class Evaluation : IFileTester
             }
 
             exitCode = result.ExitCode;
+            if (completedUnit && StopsAfterCommandUnit)
+                break;
         }
 
         return EvaluationResult.FromExitCode(exitCode);

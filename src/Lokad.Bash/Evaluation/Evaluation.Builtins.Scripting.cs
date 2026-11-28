@@ -382,6 +382,7 @@ public sealed partial class Evaluation
         using var commands = Parser.TryParseCommandUnits(source.Bytes, scanContext).GetEnumerator();
         var streamedRoot = kind == ScriptExecutionKind.Root
             && diagnosticOrigin is SyntaxDiagnosticOrigin.Script or SyntaxDiagnosticOrigin.CommandString;
+        var fileReader = streamedRoot && diagnosticOrigin == SyntaxDiagnosticOrigin.Script;
         var usesImmediateParserExit = streamedRoot || sourceOrEval || kind == ScriptExecutionKind.Trap;
         while (true)
         {
@@ -394,9 +395,10 @@ public sealed partial class Evaluation
             scanContext.ReadQuotedRecovery = !stopAfterPrimaryDiagnostic;
             scanContext.ReadArrayRecovery = (streamedRoot || sourceOrEval)
                 && _state.ForkKind == null && !stopAfterPrimaryDiagnostic;
+            scanContext.ReadEmptyCommandUnit = fileReader && StopsAfterCommandUnit;
             try
             {
-                if (!commands.MoveNext())
+                if (!commands.MoveNext() || commands.Current is CommandUnitParseResult.Empty)
                     break;
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
                 var path = scope.Context.DiagnosticName;
@@ -519,6 +521,8 @@ public sealed partial class Evaluation
                     // A suppressed loaded unit reports success to its caller.
                     if (sourceOrEval)
                         result = EvaluationResult.FromExitCode(0);
+                    if (scanContext.ReadEmptyCommandUnit)
+                        break;
                     continue;
                 }
 
@@ -579,6 +583,8 @@ public sealed partial class Evaluation
                     if (result.Flow == FlowControlKind.Exit)
                         return result;
                 }
+                else if (fileReader && StopsAfterCommandUnit)
+                    break;
                 if (failedUnit != null)
                     break;
             }

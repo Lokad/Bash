@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Support `set -t` and hosted `bash -t` for the script-file reader's one-command mode.
 - Support `set -n` and hosted `bash -n` to check syntax with command execution disabled.
 - Include the reached line in ambiguous redirection diagnostics from
   anonymous readers and failed descriptor-variable closes.

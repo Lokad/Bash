@@ -226,6 +226,12 @@ public static class Parser
         while (true)
         {
             tokenizer.BeginCommandUnit();
+            if (scanContext.ReadEmptyCommandUnit && tokenizer.PeekTokenCore().Kind == TokenKind.Newline)
+            {
+                tokenizer.NextTokenCore();
+                yield return new CommandUnitParseResult.Empty();
+                continue;
+            }
             SkipNewlines(tokenizer);
             var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], TokenKind.Newline);
             var trailing = tokenizer.PeekTokenCore();

@@ -11,6 +11,88 @@ public sealed class ScriptCommandUnitTests
     private const string PrintParserStatus = "printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"";
 
     [Theory]
+    [InlineData("set -t; printf first; printf pair\nprintf skipped", "firstpair", 0)]
+    [InlineData("set -o onecmd; false\nprintf skipped", "", 1)]
+    [InlineData("set -t; set +t; printf first\nprintf second", "firstsecond", 0)]
+    [InlineData("f(){ local -; set -t; printf inner; }; f; printf outer\nprintf next", "innerouternext", 0)]
+    [InlineData("set -t; printf before; cat <<END\nbody\nEND\nprintf skipped", "beforebody\n", 0)]
+    public async Task OneCommandStopsAfterTheCompletedFileUnit(string script, string output, int exitCode)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(exitCode, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData("printf first; printf pair\nprintf skipped", "firstpair:0")]
+    [InlineData("# initial comment\nprintf skipped\n", ":0")]
+    [InlineData("set +t; printf first\nprintf second", "firstsecond:0")]
+    public async Task HostedOneCommandCountsTheFirstFileUnit(string child, string output)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/child", child);
+
+        var result = await host.RunAsync("bash -t ./child; printf ':%s' \"$?\"", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task OneCommandKeepsTheCommandStringReaderRunning()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("bash -tc $'printf first\\nprintf second'; printf ':%s' \"$?\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("firstsecond:0", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData(". ./child")]
+    [InlineData("eval $'set -t; printf first\\nprintf second'")]
+    public async Task OneCommandFromALoadedReaderAppliesAtTheCallerUnit(string load)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/child", "set -t; printf first\nprintf second");
+            var script = load + "; printf caller\nprintf skipped";
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("firstsecondcaller", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Fact]
+    public async Task OneCommandDoesNotReadTheNextFileUnit()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("set -t; printf first\nif then; fi\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("first", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+    }
+
+    [Theory]
     [InlineData("set -n")]
     [InlineData("set -o noexec")]
     [InlineData("shopt -os noexec")]

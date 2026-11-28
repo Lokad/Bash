@@ -269,6 +269,7 @@ public sealed partial class Evaluation
                 var traversal = listCommand.GetTraversal(CancellationToken).Steps;
                 var result = EvaluationResult.FromExitCode(0);
                 var unitScope = listScope;
+                var recoveredUnit = false;
                 for (var index = 0; index < traversal.Count; index++)
                 {
                     CheckCancellation();
@@ -280,6 +281,12 @@ public sealed partial class Evaluation
                         continue;
                     }
 
+                    if (step.StartsCommandUnit)
+                    {
+                        if (!recoveredUnit && StopsAfterCommandUnit)
+                            break;
+                        recoveredUnit = false;
+                    }
                     if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
                         unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
                     else if (step.StartsReaderUnit)
@@ -314,6 +321,7 @@ public sealed partial class Evaluation
                             ? await RecoverDiscardedCommandUnitAsync(listScope, result, listScope.InNestedCommandUnits).ConfigureAwait(false)
                             : ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus.GetValueOrDefault(), listScope,
                                 loadedReader: false).ConfigureAwait(false), negated: false);
+                        recoveredUnit = true;
                     }
                 }
                 return ApplyNegation(result, listNegated);
