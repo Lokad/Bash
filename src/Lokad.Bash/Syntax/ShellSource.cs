@@ -1,5 +1,7 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
@@ -39,6 +41,32 @@ public readonly struct ShellSource
     public ShellSource Slice(int start, int length) => new(Bytes.Slice(start, length));
     public ReadOnlySpan<byte> AsSpan() => Bytes.Span;
     public ReadOnlySpan<byte> AsSpan(int start, int length) => Bytes.Span.Slice(start, length);
+
+    /// <summary>Finds a borrowed view's physical offset on this source's backing.</summary>
+    internal bool TryGetViewOffset(ShellSource view, out int offset)
+    {
+        if (view.Bytes.Equals(Bytes))
+        {
+            offset = 0;
+            return true;
+        }
+        if (MemoryMarshal.TryGetArray(Bytes, out var origin) && MemoryMarshal.TryGetArray(view.Bytes, out var slice)
+            && ReferenceEquals(origin.Array, slice.Array))
+        {
+            offset = slice.Offset - origin.Offset;
+            return offset >= 0 && view.Length <= Length - offset;
+        }
+        if (MemoryMarshal.TryGetMemoryManager<byte, MemoryManager<byte>>(Bytes, out var owner, out var start, out _)
+            && MemoryMarshal.TryGetMemoryManager<byte, MemoryManager<byte>>(view.Bytes, out var other, out var index, out _)
+            && ReferenceEquals(owner, other))
+        {
+            offset = index - start;
+            return offset >= 0 && view.Length <= Length - offset;
+        }
+
+        offset = 0;
+        return false;
+    }
 
     /// <summary>Returns the physical source line at a read position, excluding its terminating LF.</summary>
     internal ShellSource GetPhysicalLine(int position, out int start)

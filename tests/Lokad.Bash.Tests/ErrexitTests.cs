@@ -11,8 +11,8 @@ namespace Lokad.Bash.Tests;
 public sealed class ErrexitTests
 {
     private const string ReportOption = "flag(){ if [[ -o errexit ]]; then printf on; else printf off; fi; }; ";
-    private const string SetUsage = "set: usage: set [-aefntuB|+aefntuB] [-o name|+o name] [-|+|--] [arg ...]\n";
-    private const string DefaultSetInspection = "allexport\toff\nbraceexpand\ton\nerrexit\toff\nnoexec\toff\nnoglob\toff\nnounset\toff\nonecmd\toff\n";
+    private const string SetUsage = "set: usage: set [-aefntuvB|+aefntuvB] [-o name|+o name] [-|+|--] [arg ...]\n";
+    private const string DefaultSetInspection = "allexport\toff\nbraceexpand\ton\nerrexit\toff\nnoexec\toff\nnoglob\toff\nnounset\toff\nonecmd\toff\nverbose\toff\n";
     private const string SetClosedOutput = "set: write error: Bad file descriptor\n";
     private const string TopLevelSetClosedOutput = "line 1: " + SetClosedOutput;
 
@@ -40,7 +40,7 @@ public sealed class ErrexitTests
             "set -- keep; set -o; set -e; set +o; set +e; set -o; printf '%s' \"$1\"", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(DefaultSetInspection + "set +o allexport\nset -o braceexpand\nset -o errexit\nset +o noexec\nset +o noglob\nset +o nounset\nset +o onecmd\n" + DefaultSetInspection + "keep",
+        Assert.Equal(DefaultSetInspection + "set +o allexport\nset -o braceexpand\nset -o errexit\nset +o noexec\nset +o noglob\nset +o nounset\nset +o onecmd\nset +o verbose\n" + DefaultSetInspection + "keep",
             host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
     }
@@ -48,17 +48,17 @@ public sealed class ErrexitTests
     [Fact]
     public void SetOptionProjectionsReuseTheReachedStateAcrossConcurrentReads()
     {
-        var order = new[] { ShellOption.Allexport, ShellOption.Errexit, ShellOption.Noglob, ShellOption.NoExec, ShellOption.OneCommand, ShellOption.Nounset, ShellOption.BraceExpand };
-        var names = new[] { "allexport", "errexit", "noglob", "noexec", "onecmd", "nounset", "braceexpand" };
+        var order = new[] { ShellOption.Allexport, ShellOption.Errexit, ShellOption.Noglob, ShellOption.NoExec, ShellOption.OneCommand, ShellOption.Nounset, ShellOption.Verbose, ShellOption.BraceExpand };
+        var names = new[] { "allexport", "errexit", "noglob", "noexec", "onecmd", "nounset", "verbose", "braceexpand" };
 
-        Parallel.For(0, 256, pass =>
+        Parallel.For(0, 512, pass =>
         {
             var active = Enumerable.Range(0, order.Length).Where(i => (pass & (1 << i)) != 0).ToArray();
             var enabled = active.Aggregate(ShellOption.Pipefail | ShellOption.PatsubReplacement,
                 (flags, i) => flags | order[i]);
             var flagsValue = ShellOptions.Flags(enabled);
             var binding = ShellOptions.SetBinding(enabled);
-            Assert.Equal(new string(active.Select(i => "aefntuB"[i]).ToArray()), flagsValue.ToUtf8String());
+            Assert.Equal(new string(active.Select(i => "aefntuvB"[i]).ToArray()), flagsValue.ToUtf8String());
             Assert.Equal(string.Join(':', active.Select(i => names[i]).Append("pipefail").Order(StringComparer.Ordinal)),
                 binding.ToUtf8String());
             var ordered = Enumerable.Range(0, order.Length).OrderBy(i => names[i], StringComparer.Ordinal);
@@ -273,8 +273,8 @@ public sealed class ErrexitTests
     }
 
     [Theory]
-    [InlineData('-', "+e", DefaultSetInspection, "allexport\toff\nbraceexpand\ton\nerrexit\ton\nnoexec\toff\nnoglob\toff\nnounset\toff\nonecmd\toff\n", "eB")]
-    [InlineData('+', "-e", "set +o allexport\nset -o braceexpand\nset -o errexit\nset +o noexec\nset +o noglob\nset +o nounset\nset +o onecmd\n", "set +o allexport\nset -o braceexpand\nset +o errexit\nset +o noexec\nset +o noglob\nset +o nounset\nset +o onecmd\n", "B")]
+    [InlineData('-', "+e", DefaultSetInspection, "allexport\toff\nbraceexpand\ton\nerrexit\ton\nnoexec\toff\nnoglob\toff\nnounset\toff\nonecmd\toff\nverbose\toff\n", "eB")]
+    [InlineData('+', "-e", "set +o allexport\nset -o braceexpand\nset -o errexit\nset +o noexec\nset +o noglob\nset +o nounset\nset +o onecmd\nset +o verbose\n", "set +o allexport\nset -o braceexpand\nset +o errexit\nset +o noexec\nset +o noglob\nset +o nounset\nset +o onecmd\nset +o verbose\n", "B")]
     public async Task GroupedSetInspectionsObserveFlagRunsAndReuseStableOutput(
         char sign, string initial, string before, string after, string flags)
     {
@@ -411,7 +411,7 @@ public sealed class ErrexitTests
             + "printf '<%s><%s>' \"$status\" \"$1\"; flag", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.StartsWith("set: set [-aefntuB|+aefntuB]", host.StandardOutput.TextContent);
+        Assert.StartsWith("set: set [-aefntuvB|+aefntuvB]", host.StandardOutput.TextContent);
         Assert.EndsWith("<2><keep>" + expectedMode, host.StandardOutput.TextContent);
         Assert.True(host.StandardError.Content.IsEmpty);
     }
@@ -535,7 +535,7 @@ public sealed class ErrexitTests
             CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("allexport\toff\nbraceexpand\ton\nerrexit\ton\nnoexec\toff\nnoglob\toff\nnounset\toff\nonecmd\toff\n<new><eB>", host.StandardOutput.TextContent);
+        Assert.Equal("allexport\toff\nbraceexpand\ton\nerrexit\ton\nnoexec\toff\nnoglob\toff\nnounset\toff\nonecmd\toff\nverbose\toff\n<new><eB>", host.StandardOutput.TextContent);
         Assert.True(host.StandardError.Content.IsEmpty);
     }
 

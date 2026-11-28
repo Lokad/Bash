@@ -11,6 +11,79 @@ public sealed class ScriptCommandUnitTests
     private const string PrintParserStatus = "printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"";
 
     [Theory]
+    [InlineData("set -v")]
+    [InlineData("set -o verbose")]
+    [InlineData("shopt -os verbose")]
+    public async Task VerboseEmitsInputBeforeCommandEffects(string enable)
+    {
+        var script = $"exec 2>&1; {enable}; printf first\n# comment\n\nprintf second 2>report\nset -\nprintf last";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("first# comment\n\nprintf second 2>report\nsecondset -\nlast",
+                host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal("", host.ReadFile("/report"));
+        }
+    }
+
+    [Theory]
+    [InlineData("value=$(printf first\nprintf second)", "value=$(printf first\n")]
+    [InlineData("value=`printf first\nprintf second`", "value=`printf first\nprintf second`\n")]
+    [InlineData("value=$(cat <<END\nfirstsecond\nEND\n)", "value=$(cat <<END\nfirstsecond\nEND\n")]
+    public async Task VerboseUsesTheReaderThatConsumedThePhysicalLine(string capture, string echoedCapture)
+    {
+        var script = $"set -v\n{capture}\nprintf '%s' \"$value\"\n# end";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("firstsecond", host.StandardOutput.TextContent);
+            Assert.Equal(echoedCapture + "printf '%s' \"$value\"\n# end\n", host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task VerboseReadsTheFullOffendingLineBeforeReportingSyntax()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("set -vn\nprintf skipped\nif then; fi # tail\n# unread",
+            CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal("printf skipped\nif then; fi # tail\nsyntax error near unexpected token `then'\n`if then; fi # tail'\n",
+            host.StandardError.TextContent);
+    }
+
+    [Fact]
+    public async Task VerboseEchoesLoadedBytesIncludingTheUnterminatedTail()
+    {
+        byte[] body = [.. "# "u8, 0xff, (byte)'\r', .. " remark\nprintf data\n# tail"u8];
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/child", body);
+            const string script = "set -v; . ./child 2>report; set +v\nprintf after";
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("dataafter", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal([.. body, (byte)'\n'], host.ReadFileBytes("/report"));
+        }
+    }
+
+    [Theory]
     [InlineData("set -t; printf first; printf pair\nprintf skipped", "firstpair", 0)]
     [InlineData("set -o onecmd; false\nprintf skipped", "", 1)]
     [InlineData("set -t; set +t; printf first\nprintf second", "firstsecond", 0)]

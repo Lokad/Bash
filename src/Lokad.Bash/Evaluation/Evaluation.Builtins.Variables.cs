@@ -355,6 +355,7 @@ public sealed partial class Evaluation
             }
             if (bytes.SequenceEqual("-"u8))
             {
+                _state.SetOption(ShellOption.Verbose, false);
                 index++;
                 break;
             }
@@ -421,7 +422,7 @@ public sealed partial class Evaluation
         {
             var flag = group.Bytes.Slice(flagIndex, 1);
             // Recognized Bash flags outside the mutable option profile keep the unsupported-option diagnostic.
-            if ("bhkmprvxCEHPT"u8.Contains(flag.Span[0]))
+            if ("bhkmprxCEHPT"u8.Contains(flag.Span[0]))
                 return await InvalidOptionAsync(group, ": unsupported option", exitCode).ConfigureAwait(false);
 
             if (CanWriteOptionDiagnostic())

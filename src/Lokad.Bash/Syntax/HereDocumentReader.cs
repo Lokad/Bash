@@ -54,6 +54,7 @@ internal sealed class HereDocumentReader
             var documentLineAdvance = eofLineAdvance;
             var complete = tokenizer.TryReadHereDocument(delimiter, redirection.Kind == RedirectionKind.HereDocumentStripTabs,
                 joinContinuations: allowExpansion, out var content, out var continuedFinalLine, out var documentLineFeeds);
+            tokenizer.RecordCaptureDocumentRead(bodyStart);
             lineFeeds += documentLineFeeds;
             if (continuedFinalLine)
                 eofLineAdvance = 1;

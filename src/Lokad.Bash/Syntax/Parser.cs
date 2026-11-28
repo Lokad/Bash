@@ -149,7 +149,7 @@ public static class Parser
     /// <remarks>Retains input storage; do not mutate it while the parsed syntax is in use.</remarks>
     public static bool TryParse(ReadOnlyMemory<byte> input,
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error) =>
-        TryParse(input, new ShellScanContext(), out script, out error);
+        TryParse(input, new ShellScanContext { RetainAuthoredReader = true }, out script, out error);
 
     internal static bool TryParse(ReadOnlyMemory<byte> input, ShellScanContext context,
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out SyntaxError? error)
@@ -180,8 +180,11 @@ public static class Parser
             TrackUnexpectedTokens = context.RetainCaptureEofDelimiter,
             AllowEofHereDocuments = true
         };
+        var unitEnds = context.RetainAuthoredReader ? new List<int>() : null;
+        var emptyFirstUnitEnd = unitEnds != null && tokenizer.PeekTokenCore().Kind == TokenKind.Newline
+            ? tokenizer.Position : 0;
         SkipNewlines(tokenizer);
-        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All, out var finalUnit);
+        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All, unitEnds, out var finalUnit);
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
@@ -193,6 +196,9 @@ public static class Parser
         script = CompleteScript(tokenizer, command);
         script.LastCommandEnd = finalUnit.CommandEnd;
         script.FinalUnitReachesInputEnd = finalUnit.ReaderEnd == input.Length;
+        if (unitEnds != null)
+            script.Reader = new ParsedScript.AuthoredReader(context.ScriptInput, unitEnds, emptyFirstUnitEnd,
+                context.CollectReaderSilenceRanges());
         return true;
     }
 
@@ -229,6 +235,7 @@ public static class Parser
             if (scanContext.ReadEmptyCommandUnit && tokenizer.PeekTokenCore().Kind == TokenKind.Newline)
             {
                 tokenizer.NextTokenCore();
+                scanContext.ReaderEnd = PhysicalReaderEnd();
                 yield return new CommandUnitParseResult.Empty();
                 continue;
             }
@@ -252,6 +259,7 @@ public static class Parser
                 var nextUnit = scanContext.ReadArrayRecovery
                     && failure is { Kind: ParserFailureKind.ArrayDelimiter, UnexpectedToken: { } rejected }
                     ? tokenizer.ArrayRecoveryStart(rejected.ReadPosition) : input.Length;
+                scanContext.ReaderEnd = PhysicalReaderEnd();
                 yield return new CommandUnitParseResult.Failed(failure)
                 {
                     CompletedPrefix = prefix,
@@ -278,12 +286,16 @@ public static class Parser
                 continue;
             }
             if (command == null)
+            {
+                scanContext.ReaderEnd = PhysicalReaderEnd();
                 yield break;
+            }
 
             var completed = CompleteHereDocuments(tokenizer, command);
             tokenizer.HereDocuments = null;
             if (trailing.Kind == TokenKind.Newline)
                 tokenizer.NextTokenCore();
+            scanContext.ReaderEnd = PhysicalReaderEnd();
             yield return new CommandUnitParseResult.Parsed(completed)
             {
                 Locations = tokenizer.Locations,
@@ -291,6 +303,13 @@ public static class Parser
                 UnitReadLine = tokenizer.CompletedUnitReadLine,
                 ReachesInputEnd = tokenizer.Position == input.Length
             };
+        }
+
+        int PhysicalReaderEnd()
+        {
+            var end = Math.Max(tokenizer.Position, scanContext.HereDocumentReadAhead?.BufferedBodyEnd ?? 0);
+            return end == 0 || end == input.Length || input.Span[end - 1] == (byte)'\n'
+                ? end : HereDocumentReadAhead.FindNextLineStart(scanContext.ScriptInput, end);
         }
     }
 
@@ -2025,7 +2044,7 @@ public static class Parser
         ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata) =>
-        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, unitMetadata, out _);
+        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, unitMetadata, null, out _);
 
     private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
         Tokenizer tokenizer,
@@ -2033,6 +2052,7 @@ public static class Parser
         ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata,
+        List<int>? unitEnds,
         out (int CommandEnd, int ReaderEnd) finalUnit)
     {
         finalUnit = default;
@@ -2110,6 +2130,12 @@ public static class Parser
         void RecordUnitRead(ICommand anchor)
         {
             tokenizer.RecordUnitReadLine(anchor);
+            if (unitEnds != null)
+            {
+                var end = lastReaderEnd ?? tokenizer.Position;
+                if (unitEnds.Count == 0 || unitEnds[^1] != end)
+                    unitEnds.Add(end);
+            }
             if (unitMetadata != CommandUnitMetadata.All)
                 return;
             var diagnostics = new CommandReadDiagnostics(

@@ -1,5 +1,3 @@
-using System.Buffers;
-using System.Runtime.InteropServices;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
 
@@ -14,6 +12,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
     private SourceLineCursor _lines;
 
     internal int CaptureCount => _headerAdvances.Count;
+    internal int BufferedBodyEnd => _bodies.Count == 0 ? 0 : _bodies[^1].End.Value;
 
     internal int FindBodyStart(int afterCloser)
     {
@@ -52,7 +51,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
 
     internal int GetBufferedLineAdvance(ShellSource view, int position)
     {
-        if (!TryGetSourceOffset(view, out var offset))
+        if (!source.TryGetViewOffset(view, out var offset))
             return 0;
         position += offset;
         var low = 0;
@@ -72,14 +71,14 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
 
     internal int SkipBodies(ShellSource view, int position)
     {
-        if (_bodies.Count == 0 || !TryGetSourceOffset(view, out var offset))
+        if (_bodies.Count == 0 || !source.TryGetViewOffset(view, out var offset))
             return position;
         return Math.Min(view.Length, SkipBodies(offset + position) - offset);
     }
 
     internal ShellSource CopyWithoutBodies(ShellSource view, ShellScanContext context)
     {
-        if (_bodies.Count == 0 || !TryGetSourceOffset(view, out var offset))
+        if (_bodies.Count == 0 || !source.TryGetViewOffset(view, out var offset))
             return view;
         var end = offset + view.Length;
         var first = FindFirstBodyEndingAfter(offset);
@@ -93,7 +92,7 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
 
     internal void AppendWithoutBodies(ByteMemoryBuilder buffer, ShellSource view)
     {
-        if (!TryGetSourceOffset(view, out var offset))
+        if (!source.TryGetViewOffset(view, out var offset))
         {
             buffer.Append(view.AsSpan());
             return;
@@ -114,31 +113,6 @@ internal sealed class HereDocumentReadAhead(ShellSource source)
             position = Math.Min(end, body.End.Value);
         }
         buffer.Append(source.AsSpan(position, end - position));
-    }
-
-    internal bool TryGetSourceOffset(ShellSource view, out int offset)
-    {
-        if (view.Bytes.Equals(source.Bytes))
-        {
-            offset = 0;
-            return true;
-        }
-        if (MemoryMarshal.TryGetArray(source.Bytes, out var origin) && MemoryMarshal.TryGetArray(view.Bytes, out var slice)
-            && ReferenceEquals(origin.Array, slice.Array))
-        {
-            offset = slice.Offset - origin.Offset;
-            return offset >= 0 && view.Length <= source.Length - offset;
-        }
-        if (MemoryMarshal.TryGetMemoryManager<byte, MemoryManager<byte>>(source.Bytes, out var owner, out var start, out _)
-            && MemoryMarshal.TryGetMemoryManager<byte, MemoryManager<byte>>(view.Bytes, out var other, out var index, out _)
-            && ReferenceEquals(owner, other))
-        {
-            offset = index - start;
-            return offset >= 0 && view.Length <= source.Length - offset;
-        }
-
-        offset = 0;
-        return false;
     }
 
     private int SkipBodies(int position)

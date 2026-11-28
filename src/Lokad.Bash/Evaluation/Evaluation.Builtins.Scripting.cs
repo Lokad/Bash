@@ -384,6 +384,8 @@ public sealed partial class Evaluation
             && diagnosticOrigin is SyntaxDiagnosticOrigin.Script or SyntaxDiagnosticOrigin.CommandString;
         var fileReader = streamedRoot && diagnosticOrigin == SyntaxDiagnosticOrigin.Script;
         var usesImmediateParserExit = streamedRoot || sourceOrEval || kind == ScriptExecutionKind.Trap;
+        var reportReaderInput = usesImmediateParserExit || kind == ScriptExecutionKind.ArrayReaderCallback;
+        var readEnd = 0;
         while (true)
         {
             CheckCancellation();
@@ -396,9 +398,17 @@ public sealed partial class Evaluation
             scanContext.ReadArrayRecovery = (streamedRoot || sourceOrEval)
                 && _state.ForkKind == null && !stopAfterPrimaryDiagnostic;
             scanContext.ReadEmptyCommandUnit = fileReader && StopsAfterCommandUnit;
+            scanContext.CollectReaderSilences = reportReaderInput && _state.HasOption(ShellOption.Verbose);
             try
             {
-                if (!commands.MoveNext() || commands.Current is CommandUnitParseResult.Empty)
+                var hasUnit = commands.MoveNext();
+                if (reportReaderInput && scanContext.ReaderEnd > readEnd)
+                {
+                    await WriteVerboseSourceAsync(source, readEnd..scanContext.ReaderEnd,
+                        scanContext.CollectReaderSilenceRanges()).ConfigureAwait(false);
+                    readEnd = scanContext.ReaderEnd;
+                }
+                if (!hasUnit || commands.Current is CommandUnitParseResult.Empty)
                     break;
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
                 var path = scope.Context.DiagnosticName;
@@ -595,6 +605,53 @@ public sealed partial class Evaluation
             }
         }
         return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
+    }
+
+    private Task WriteVerboseSourceAsync(ShellSource source, Range read, IReadOnlyList<Range>? quietLines)
+    {
+        if (read.Start.Equals(read.End) || !_state.HasOption(ShellOption.Verbose))
+            return Task.CompletedTask;
+        var descriptor = GetStdErrDescriptor();
+        return descriptor.IsClosed ? Task.CompletedTask
+            : WriteReachedInputAsync(descriptor, source.Bytes, read, quietLines);
+
+        async Task WriteReachedInputAsync(FileDescriptor descriptor, ReadOnlyMemory<byte> bytes,
+            Range read, IReadOnlyList<Range>? quietLines)
+        {
+            var start = read.Start.Value;
+            var end = read.End.Value;
+            if (quietLines != null)
+            {
+                var lower = 0;
+                var upper = quietLines.Count;
+                while (lower < upper)
+                {
+                    var middle = lower + (upper - lower) / 2;
+                    if (quietLines[middle].End.Value <= start)
+                        lower = middle + 1;
+                    else
+                        upper = middle;
+                }
+                for (var index = lower; index < quietLines.Count; index++)
+                {
+                    var quiet = quietLines[index];
+                    if (quiet.Start.Value >= end)
+                        break;
+                    if (quiet.Start.Value > start)
+                    {
+                        var write = await ExecuteWriteAsync(descriptor, bytes[start..quiet.Start.Value]).ConfigureAwait(false);
+                        if (!write.CanAcceptMore)
+                            return;
+                    }
+                    start = quiet.End.Value;
+                    if (start >= end)
+                        return;
+                }
+            }
+            var result = await ExecuteWriteAsync(descriptor, bytes[start..end]).ConfigureAwait(false);
+            if (result.CanAcceptMore && bytes.Span[end - 1] != (byte)'\n')
+                await ExecuteWriteAsync(descriptor, ShellValue.FromByte((byte)'\n').Bytes).ConfigureAwait(false);
+        }
     }
 
     private ValueTask<EvaluationResult> ExitLoadedExpansionSyntaxAsync(ScopedEvaluation scope, ExpansionFailure failure)

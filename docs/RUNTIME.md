@@ -802,6 +802,12 @@ their current unit; unrecoverable failures and explicit exit stop the script.
 Runtime source copies and parsed units retain coarse admitted ownership through
 surviving definitions and active users. Completed unrelated units release their
 metadata; deferred substitutions use the same parser with a reached syntax owner.
+Verbose readers borrow authored bytes through the ordinary stderr operation.
+Caller-prepared source trees retain the authored text and physical unit bounds.
+At execution the reader consults the current option state at each reached
+boundary, including the final trivia after the last unit. Trees constructed from
+commands alone have no authored input to echo. Runtime readers keep their
+source and parser range owners through the last pending write.
 For failed compound redirections, a function retains the brace line available
 when its definition was read. Each command unit snapshots the previous reader
 line before executing any of its commands. Later readers can publish a new

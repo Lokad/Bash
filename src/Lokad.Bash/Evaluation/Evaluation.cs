@@ -672,6 +672,12 @@ public sealed partial class Evaluation : IFileTester
         RootFlowHandling rootFlowHandling)
     {
         var exitCode = 0;
+        var authoredReader = _state.ForkKind == null ? script.Reader : null;
+        if (StopsAfterCommandUnit && authoredReader is { EmptyFirstUnitEnd: > 0 } reader)
+        {
+            await WriteVerboseSourceAsync(reader.Source, 0..reader.EmptyFirstUnitEnd, reader.QuietLines).ConfigureAwait(false);
+            return EvaluationResult.FromExitCode(0);
+        }
         if (_state.CommandLaunchEnvironment != EvaluationState.LaunchEnvironment.Pipeline && script.Commands is [var unit]
             && (_captureUsesRenderedReader || script.FinalUnitReachesInputEnd
                 && (_state.UsesCommandStringExpansionExit || _state.ForkKind == ShellForkKind.CommandSubstitution)))
@@ -683,7 +689,11 @@ public sealed partial class Evaluation : IFileTester
         foreach (var command in script.Commands)
         {
             CheckCancellation();
-            var result = await EvaluateCommandAsync(command, scope, negated: false)
+            var listReader = command is ListCommand ? authoredReader : null;
+            if (authoredReader != null && listReader == null)
+                await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.Unit(0),
+                    authoredReader.QuietLines).ConfigureAwait(false);
+            var result = await EvaluateCommandAsync(command, scope, negated: false, listReader)
                 .ConfigureAwait(false);
             var completedUnit = result.Flow == FlowControlKind.None;
 
@@ -711,6 +721,10 @@ public sealed partial class Evaluation : IFileTester
                 break;
         }
 
+        if (authoredReader != null && script.Commands is not [ListCommand]
+            && (script.Commands.Count == 0 || !StopsAfterCommandUnit))
+            await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.TrailingInput,
+                authoredReader.QuietLines).ConfigureAwait(false);
         return EvaluationResult.FromExitCode(exitCode);
     }
 

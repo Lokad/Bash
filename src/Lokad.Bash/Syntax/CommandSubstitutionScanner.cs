@@ -195,6 +195,7 @@ internal static class CommandSubstitutionScanner
                 out error);
             if (status == ShellScanStatus.Complete)
             {
+                context.RecordQuietCaptureLines(text, payloadStart, endIndex + 1);
                 var payload = text.Slice(payloadStart, endIndex - payloadStart);
                 substitution = parsed switch
                 {
@@ -206,7 +207,10 @@ internal static class CommandSubstitutionScanner
                 };
             }
             else if (status == ShellScanStatus.Incomplete && error is { UnclosedDelimiter: not null })
+            {
+                context.RecordQuietCaptureLines(text, payloadStart, text.Length);
                 error = error with { Error = error.Error with { Offset = startIndex } };
+            }
             else if (status == ShellScanStatus.Invalid && error is { UnclosedDelimiter: null } && context.LimitError == null
                 && ArithmeticExpansionScanner.TryScanAdjacentSubshell(context, text, startIndex, out var adjacentEnd))
             {

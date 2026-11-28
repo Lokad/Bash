@@ -891,7 +891,7 @@ negation and compound-command wrappers. An incomplete body is rejected rather
 than accepted with GNU's end-of-input warning. Builtins implement their documented option subsets;
 `set` sets positional parameters and supports `-a`/`+a`, `-e`/`+e`, `-f`/`+f`,
 `-u`/`+u`, and `-B`/`+B`, with named `-o`/`+o` forms for `allexport`, `errexit`,
-`noexec`, `noglob`, `nounset`, `onecmd`, and `braceexpand`. With no expanded operands, it lists visible variable
+`noexec`, `noglob`, `nounset`, `onecmd`, `verbose`, and `braceexpand`. With no expanded operands, it lists visible variable
 assignments followed by function definitions. Each group uses byte-name
 order. Like bare `declare`, this listing hides the command's own temporary
 prefixes and prints function bodies without their declaration attributes.
@@ -903,7 +903,7 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default. It inherits the setting
 with `shopt -s inherit_errexit`. Parenthesized subshells inherit it directly.
 `$-` and `${-}` expose the supported mutable flags. `set -o` and `set +o`
-inspect `allexport`, `braceexpand`, `errexit`, `noexec`, `noglob`, `nounset`, and `onecmd`. `test -o` and `[[ -o ]]` query
+inspect `allexport`, `braceexpand`, `errexit`, `noexec`, `noglob`, `nounset`, `onecmd`, and `verbose`. `test -o` and `[[ -o ]]` query
 the active settings. Unsupported option changes report a diagnostic.
 Downstream closure stops inspection output and diagnostics routed to the
 same handle. Option and positional processing continues.
@@ -928,7 +928,7 @@ Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
 they list enabled and disabled options respectively. `-o` selects the
 `set` option namespace. That namespace exposes mutable `allexport`, `braceexpand`,
-`errexit`, `noexec`, `noglob`, `nounset`, and `onecmd`, and the fixed `pipefail` setting.
+`errexit`, `noexec`, `noglob`, `nounset`, `onecmd`, and `verbose`, and the fixed `pipefail` setting.
 
 `set -n` enables `noexec` after applying the reached builtin's options. Later
 commands skip execution, including expansion and redirection setup. Streamed
@@ -948,6 +948,15 @@ source and eval readers keep reading their own units. A change made by source
 or eval takes effect at the surrounding script-file boundary. A function that
 saved its options with `local -` restores them on return. Prepared scripts
 validate the full input before applying the execution boundary.
+
+`set -v` and `set -o verbose` echo the source read by subsequent command
+units to the reader's current stderr. The echo retains authored whitespace,
+comments, continuations and here-document lines. It appends LF to a reached
+unterminated line. A bare `set -` clears verbose. The option also works with
+`noexec` and through hosted `bash -v`, source, eval and EXIT readers.
+Continuation lines of modern command substitutions are quiet except for
+here-document collection. Lokad.Bash echoes those collected lines once.
+The pinned Bash builds can echo them again during capture preparation.
 
 `allexport` is off at startup. `set -a` marks reached scalar assignments
 and function definitions for export. New global scalar declarations can
@@ -1066,7 +1075,7 @@ reached shell state, including a capture's errexit setting, and appear in
 operand-free `set` and `declare -p` listings. They can
 be explicitly exported. An inherited list enables its recognized
 options in a fresh hosted launch after the leading launch options are
-applied. The supported `-a`, `+a`, `-e`, `+e`, `-f`, `+f`, `-n`, `+n`, `-t`, `+t`, `-u`, `+u`, `-B`, and `+B` flags and the
+applied. The supported `-a`, `+a`, `-e`, `+e`, `-f`, `+f`, `-n`, `+n`, `-t`, `+t`, `-u`, `+u`, `-v`, `+v`, `-B`, and `+B` flags and the
 `-o`/`+o` and `-O`/`+O` option-name pairs precede `-c` or a script operand. The
 application host supplies the selected source and positional parameters.
 `$_` holds the last expanded argument of a completed simple command. A command
@@ -1169,7 +1178,7 @@ invalid identifier. A source integer or case flag prepares the reached
 array and its attribute without selecting the stored index or key.
 
 Inside a function, `local -` saves `allexport`, `braceexpand`, `errexit`, `noexec`, `noglob`,
-`nounset`, `onecmd`, `inherit_errexit`, `shift_verbose`, and `sourcepath` and restores them on
+`nounset`, `onecmd`, `verbose`, `inherit_errexit`, `shift_verbose`, and `sourcepath` and restores them on
 return. A second `local -` keeps the first snapshot, as in the pinned
 Bash 5.2.37 build.
 `local -p -` inspects the current function's snapshot.
@@ -2107,7 +2116,7 @@ decimal. A nonnumeric token stays in the expression and the predicate is false. 
 required operand and returns false for an invalid descriptor.
 
 The unary `-o` predicate in `[[ … ]]`, `test` and `[` reports the current
-settings for `allexport`, `errexit`, `noexec`, `noglob`, `nounset`, `onecmd`, and `braceexpand` and the fixed `pipefail` option.
+settings for `allexport`, `errexit`, `noexec`, `noglob`, `nounset`, `onecmd`, `verbose`, and `braceexpand` and the fixed `pipefail` option.
 All other option names return false.
 
 `[[ … ]]`, `test` and `[` recognize `-v` and `-R`. An assigned empty value counts as

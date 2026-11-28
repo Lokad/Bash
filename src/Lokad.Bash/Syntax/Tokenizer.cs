@@ -190,6 +190,12 @@ internal sealed class Tokenizer
 
     internal int GetHereDocumentWarningLine(int position) => _readingAhead?.GetLine(position) ?? GetLine(position);
 
+    internal void RecordCaptureDocumentRead(int start)
+    {
+        if (IsCommandSubstitution)
+            _scanContext.RecordEchoedCaptureDocument(_input, start, Position);
+    }
+
     internal int HereDocumentHeaderLineAdvance
     {
         get

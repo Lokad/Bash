@@ -15,10 +15,17 @@ public sealed partial class Evaluation
     /// <summary>
     /// Dispatches evaluation based on the concrete command kind, handling negation chaining.
     /// </summary>
+    private Task<EvaluationResult> EvaluateCommandAsync(
+        ICommand command,
+        ScopedEvaluation scope,
+        bool negated) =>
+        EvaluateCommandAsync(command, scope, negated, authoredReader: null);
+
     private async Task<EvaluationResult> EvaluateCommandAsync(
         ICommand command,
         ScopedEvaluation scope,
-        bool negated)
+        bool negated,
+        ParsedScript.AuthoredReader? authoredReader)
     {
         // Async calls can all complete synchronously. Resume on a fresh stack
         // before nested functions/source/eval exhaust the embedding thread's stack.
@@ -47,7 +54,7 @@ public sealed partial class Evaluation
         using var activeLine = lineScope;
 
         // A script node owns a reader. It keeps parsing even when execution is disabled.
-        var skipExecution = _state.NoExecEnabled && command is not ScriptCommand;
+        var skipExecution = _state.NoExecEnabled && command is not ScriptCommand && authoredReader == null;
         var captureEnvironment = !skipExecution && command is SimpleCommand or PipelineCommand
             && scope.Context.CaptureEnvironment is { CommandActive: false } environment ? environment : null;
         EvaluationResult result;
@@ -270,6 +277,7 @@ public sealed partial class Evaluation
                 var result = EvaluationResult.FromExitCode(0);
                 var unitScope = listScope;
                 var recoveredUnit = false;
+                var readerUnit = 0;
                 for (var index = 0; index < traversal.Count; index++)
                 {
                     CheckCancellation();
@@ -287,6 +295,9 @@ public sealed partial class Evaluation
                             break;
                         recoveredUnit = false;
                     }
+                    if (authoredReader != null && (index == 0 || step.StartsCommandUnit))
+                        await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.Unit(readerUnit++),
+                            authoredReader.QuietLines).ConfigureAwait(false);
                     if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
                         unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
                     else if (step.StartsReaderUnit)
@@ -324,6 +335,9 @@ public sealed partial class Evaluation
                         recoveredUnit = true;
                     }
                 }
+                if (authoredReader != null && !StopsAfterCommandUnit)
+                    await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.TrailingInput,
+                        authoredReader.QuietLines).ConfigureAwait(false);
                 return ApplyNegation(result, listNegated);
             }
         }

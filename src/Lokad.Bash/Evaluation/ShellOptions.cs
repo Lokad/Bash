@@ -19,7 +19,7 @@ internal enum ShellOption
     Allexport = 16,
     NoExec = 32,
     OneCommand = 64,
-    NoCaseMatch = 128,
+    Verbose = 128,
     GlobSkipDots = 256,
     Dotglob = 512,
     Pipefail = 1024,
@@ -32,7 +32,8 @@ internal enum ShellOption
     Failglob = 131072,
     Globstar = 262144,
     Nullglob = 524288,
-    NoCaseGlob = 1048576
+    NoCaseGlob = 1048576,
+    NoCaseMatch = 2097152
 }
 
 internal static class ShellOptions
@@ -57,7 +58,8 @@ internal static class ShellOptions
         new(ShellValue.FromText("noglob"), ShellOption.Noglob, (byte)'f'),
         new(ShellValue.FromText("nounset"), ShellOption.Nounset, (byte)'u'),
         new(ShellValue.FromText("onecmd"), ShellOption.OneCommand, (byte)'t'),
-        new(ShellValue.FromText("pipefail"), ShellOption.Pipefail)
+        new(ShellValue.FromText("pipefail"), ShellOption.Pipefail),
+        new(ShellValue.FromText("verbose"), ShellOption.Verbose, (byte)'v')
     ];
 
     private static readonly Entry[] BashOptions =
@@ -136,7 +138,7 @@ internal static class ShellOptions
 
     private enum ProjectionKind { Binding, Flags, Listing, Commands }
     private sealed record Projection(ShellValue Value);
-    private const int ProjectionCapacity = 128;
+    private const int ProjectionCapacity = 256;
     private static Projection?[]? _setBindings, _shortFlags, _setListings, _setCommands;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

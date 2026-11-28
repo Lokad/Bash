@@ -507,6 +507,43 @@ public sealed class SourceMemoryLifetimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task VerboseKeepsTheLoadedSourceThroughACanceledWrite(bool prepared)
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        var scopes = new ConcurrentBag<RecordedScope>();
+        var budget = new RecordingBudget(governor, depth: 0, scopes);
+        var body = "#" + new string('a', PaddingBytes) + "\nprintf unreached\n";
+        await using var host = new PendingHost(close: false, Encoding.UTF8.GetBytes(body)) { MemoryBudget = budget };
+        host.AddFile("/child", body);
+        const string script = "set -v; . ./child";
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var owner = budget.CreateScope();
+        var running = prepared
+            ? new Engine().RunAsync(new Eval(Parser.Parse(script)), host, owner, cancellation.Token)
+            : BashScript.RunAsync(host, script, Evaluation.EvaluationOptions.Default, cancellation.Token);
+        try
+        {
+            await host.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var admitted = Assert.Single(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+            cancellation.Cancel();
+            Assert.False(running.IsCompleted);
+            Assert.True(admitted.OwnBytes >= PaddingBytes);
+        }
+        finally
+        {
+            host.Release.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await running);
+        }
+
+        Assert.DoesNotContain(scopes, scope => scope.Depth > 1 && scope.OwnBytes >= PaddingBytes);
+        Assert.Equal(0, host.OpenFileCount);
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task AChildBorrowsTheActiveSourceThroughACanceledCallerWrite(bool prepared)
     {
         var governor = new MemoryGovernor(1024 * 1024);

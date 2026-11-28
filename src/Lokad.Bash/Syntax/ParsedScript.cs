@@ -7,7 +7,8 @@ namespace Lokad.Bash.Syntax;
 /// Holds the AST for a parsed script.
 /// </summary>
 /// <remarks>
-/// The AST contains the syntax needed for evaluation and definition output without the original source.
+/// Trees created by the parser retain the original reader text for verbose input echoing.
+/// Trees constructed from commands alone have no authored reader.
 /// Callers must not mutate retained collections anywhere in the AST.
 /// </remarks>
 public sealed class ParsedScript
@@ -27,6 +28,15 @@ public sealed class ParsedScript
     public IReadOnlyList<ICommand> Commands { get; }
 
     internal CommandLocations? Locations { get; init; }
+    internal AuthoredReader? Reader { get; set; }
+
+    internal sealed record AuthoredReader(ShellSource Source, IReadOnlyList<int> UnitEnds,
+        int EmptyFirstUnitEnd, IReadOnlyList<Range>? QuietLines)
+    {
+        internal Range Unit(int index) => (index == 0 ? 0 : UnitEnds[index - 1])..UnitEnds[index];
+
+        internal Range TrailingInput => (UnitEnds.Count == 0 ? 0 : UnitEnds[^1])..Source.Length;
+    }
     internal int? RenderedLineBreaks { get; set; }
     internal int RenderedFunctionBraceLine { get; set; }
     internal char TruncatedAdjacentDelimiter { get; set; }

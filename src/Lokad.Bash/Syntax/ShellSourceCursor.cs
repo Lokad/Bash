@@ -824,6 +824,11 @@ internal sealed class ShellScanContext
     /// <summary>One reached command unit's coarse syntax and payload allowance; null denotes caller-owned parsing.</summary>
     internal MemoryCapacity? SyntaxMemory { get; set; }
     internal bool ReadEmptyCommandUnit { get; set; }
+    internal bool RetainAuthoredReader { get; init; }
+    internal bool CollectReaderSilences { get; set; }
+    internal int ReaderEnd { get; set; }
+    private List<Range>? _readerSilences;
+    private List<Range>? _readerDocuments;
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
@@ -853,6 +858,103 @@ internal sealed class ShellScanContext
     {
         _commandSubstitutions = null;
         HereDocumentReadAhead = null;
+        _readerSilences = null;
+        _readerDocuments = null;
+    }
+
+    internal void RecordQuietCaptureLines(ShellSource source, int payloadStart, int consumedEnd)
+    {
+        if (!(CollectReaderSilences || RetainAuthoredReader)
+            || consumedEnd <= payloadStart || consumedEnd > source.Length
+            || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
+            return;
+
+        // The enclosing reader has already echoed the opener's line. The
+        // modern capture reader consumes the following physical lines quietly.
+        var newline = source.AsSpan(payloadStart, consumedEnd - payloadStart).IndexOf((byte)'\n');
+        if (newline < 0)
+            return;
+        var start = sourceOffset + payloadStart + newline + 1;
+        var end = sourceOffset + consumedEnd;
+        if (end <= start)
+            return;
+        end = HereDocumentReadAhead.FindNextLineStart(ScriptInput, end);
+
+        _readerSilences ??= [];
+        SyntaxMemory?.PrepareListCapacity(_readerSilences, 1);
+        _readerSilences.Add(start..end);
+    }
+
+    internal void RecordEchoedCaptureDocument(ShellSource source, int start, int end)
+    {
+        if (!(CollectReaderSilences || RetainAuthoredReader) || start == end
+            || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
+            return;
+        _readerDocuments ??= [];
+        SyntaxMemory?.PrepareListCapacity(_readerDocuments, 1);
+        _readerDocuments.Add((sourceOffset + start)..(sourceOffset + end));
+    }
+
+    internal IReadOnlyList<Range>? CollectReaderSilenceRanges()
+    {
+        var ranges = _readerSilences;
+        var documents = _readerDocuments;
+        _readerSilences = null;
+        _readerDocuments = null;
+        if (ranges == null)
+            return ranges;
+        CombineOverlapping(ranges);
+        if (documents == null)
+            return ranges;
+        CombineOverlapping(documents);
+
+        // Here-document collection reads its own physical lines even within a quiet capture.
+        var silences = new List<Range>();
+        var documentIndex = 0;
+        foreach (var range in ranges)
+        {
+            var start = range.Start.Value;
+            var end = range.End.Value;
+            while (documentIndex < documents.Count && documents[documentIndex].End.Value <= start)
+                documentIndex++;
+            while (documentIndex < documents.Count && documents[documentIndex].Start.Value < end)
+            {
+                var document = documents[documentIndex];
+                AddSilence(start, document.Start.Value);
+                start = document.End.Value;
+                if (start >= end)
+                    break;
+                documentIndex++;
+            }
+            AddSilence(start, end);
+        }
+        return silences.Count == 0 ? null : silences;
+
+        void AddSilence(int start, int end)
+        {
+            if (end <= start)
+                return;
+            SyntaxMemory?.PrepareListCapacity(silences, 1);
+            silences.Add(start..end);
+        }
+
+        static void CombineOverlapping(List<Range> spans)
+        {
+            if (spans.Count < 2)
+                return;
+            spans.Sort(static (left, right) => left.Start.Value.CompareTo(right.Start.Value));
+            var count = 1;
+            for (var index = 1; index < spans.Count; index++)
+            {
+                var current = spans[index];
+                var previous = spans[count - 1];
+                if (current.Start.Value <= previous.End.Value)
+                    spans[count - 1] = previous.Start..Math.Max(previous.End.Value, current.End.Value);
+                else
+                    spans[count++] = current;
+            }
+            spans.RemoveRange(count, spans.Count - count);
+        }
     }
 
     internal bool CanReadAhead(ShellSource source) => !ScriptInput.IsEmpty && source.Bytes.Equals(ScriptInput.Bytes);
