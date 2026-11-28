@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Match `GLOBIGNORE` patterns using Bash's pathname separator rules and
+  retain colons inside bracket expressions.
 - Support `shopt -s globstar` and hosted `bash -O globstar` for recursive
   pathname expansion through host directory listings.
 - Support `set -a`, `set -o allexport`, and hosted launch flags for automatic

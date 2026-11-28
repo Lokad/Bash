@@ -437,6 +437,23 @@ public sealed class GlobPatternTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public void GlobIgnoreCachedBracketsRespectMemberOrderAtSeparators()
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        using (var ignore = new GlobIgnorePatterns(ShellValue.FromText("a[xxxxxxxxxxxxxxxxxy/]*"), false, memory))
+        {
+            Assert.True(ignore.Excludes("ax/leaf", CancellationToken.None));
+            Assert.False(ignore.Excludes("ay/leaf", CancellationToken.None));
+            Assert.False(ignore.Excludes("a/leaf", CancellationToken.None));
+            Assert.True(ignore.Excludes("ax/other", CancellationToken.None));
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

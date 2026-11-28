@@ -205,14 +205,15 @@ public static class TextGlobMatcher
         public bool Matches(ReadOnlySpan<char> name, CancellationToken cancellationToken)
         {
             return MatchRepeated(new GlobInput(pattern.Span, scalarCharacters: true), new GlobMaskSpan(mask.Span),
-                new GlobInput(name, scalarCharacters: true), memory, ignoreAsciiCase, ref _brackets, cancellationToken);
+                new GlobInput(name, scalarCharacters: true), memory, ignoreAsciiCase, pathname: false, ref _brackets,
+                cancellationToken);
         }
 
         public void Dispose() => _brackets.Release(memory);
     }
 
     /// <summary>Reuses bracket decisions across valid UTF-8 subjects owned by one pathname expansion.</summary>
-    internal struct Utf8PatternMatcher(
+    internal struct Utf8PathMatcher(
         ReadOnlyMemory<byte> pattern, GlobMask mask, MemoryCapacity memory, bool ignoreAsciiCase)
     {
         private readonly bool _byteCharacters = !System.Text.Unicode.Utf8.IsValid(pattern.Span);
@@ -220,17 +221,19 @@ public static class TextGlobMatcher
 
         public bool Matches(ReadOnlySpan<byte> subject, CancellationToken cancellationToken) =>
             MatchRepeated(new GlobInput(pattern.Span, _byteCharacters, reverse: false), mask.AsSpan(),
-                new GlobInput(subject, _byteCharacters, reverse: false), memory, ignoreAsciiCase, ref _brackets, cancellationToken);
+                new GlobInput(subject, _byteCharacters, reverse: false), memory, ignoreAsciiCase, pathname: true, ref _brackets,
+                cancellationToken);
     }
 
     private static bool MatchRepeated(GlobInput pattern, GlobMaskSpan mask, GlobInput text, MemoryCapacity memory,
-        bool ignoreAsciiCase, ref PatternBrackets brackets, CancellationToken cancellationToken)
+        bool ignoreAsciiCase, bool pathname, ref PatternBrackets brackets, CancellationToken cancellationToken)
     {
         var input = new PatternInput(pattern, mask, default, PatternTraversal.Forward, memory)
         {
             Brackets = brackets,
             RepeatedMatches = true,
-            IgnoreAsciiCase = ignoreAsciiCase
+            IgnoreAsciiCase = ignoreAsciiCase,
+            Pathname = pathname
         };
         try
         {
@@ -258,6 +261,7 @@ public static class TextGlobMatcher
         var p = 0;
         var t = 0;
         var star = -1;
+        var starSuffix = 0;
         var match = 0;
         var origin = 0;
         while (true)
@@ -272,7 +276,7 @@ public static class TextGlobMatcher
             }
             if (t == text.Length)
                 break;
-            if (p < pattern.Length && pattern.IsActive(p, '?'))
+            if (p < pattern.Length && pattern.IsActive(p, '?') && (!pattern.Pathname || !text.IsSlash(t)))
             {
                 p = pattern.Next(p);
                 t += text.Width(t);
@@ -282,7 +286,26 @@ public static class TextGlobMatcher
             {
                 star = p;
                 p = pattern.Next(p);
-                // An authored final wildcard supplies the longest match at this origin.
+                if (pattern.Pathname)
+                {
+                    if (!ReadPathnameWildcards(ref p, ref t, ref pattern, text, cancellationToken))
+                        return GlobMatchResult.NoMatch;
+                    // An unescaped slash immediately after a wildcard run selects the component boundary.
+                    if (p < pattern.Length && pattern.IsActive(p, '/'))
+                    {
+                        t = text.FindSlash(t, cancellationToken);
+                        if (t < 0)
+                            return GlobMatchResult.NoMatch;
+                        p = pattern.Next(p);
+                        t++;
+                        star = -1;
+                        continue;
+                    }
+                    if (p < pattern.Length && (t == text.Length || text.IsSlash(t)))
+                        return GlobMatchResult.NoMatch;
+                }
+                // Bash's terminal pathname wildcard run can accept the remaining subject, including slashes.
+                // In other contexts an authored final wildcard supplies the longest match at this origin.
                 // The implicit search wildcard still selects the leftmost empty match.
                 if (p == pattern.Length && !shortestPrefix && !pattern.IsSearchStar(star))
                 {
@@ -290,6 +313,7 @@ public static class TextGlobMatcher
                     length = text.Length - origin;
                     return GlobMatchResult.Match;
                 }
+                starSuffix = p;
                 match = t;
                 continue;
             }
@@ -304,7 +328,7 @@ public static class TextGlobMatcher
                 }
                 if (bracketEnd != p)
                 {
-                    if (!TryAdvanceStar(ref p, ref t, star, ref match, ref origin, ref pattern, text, length >= 0))
+                    if (!TryAdvanceStar(ref p, ref t, star, starSuffix, ref match, ref origin, ref pattern, text, length >= 0))
                         break;
                     continue;
                 }
@@ -315,7 +339,7 @@ public static class TextGlobMatcher
                 t += text.Width(t);
                 continue;
             }
-            if (TryAdvanceStar(ref p, ref t, star, ref match, ref origin, ref pattern, text, length >= 0))
+            if (TryAdvanceStar(ref p, ref t, star, starSuffix, ref match, ref origin, ref pattern, text, length >= 0))
                 continue;
             break;
         }
@@ -331,17 +355,42 @@ public static class TextGlobMatcher
         }
         return length >= 0 ? GlobMatchResult.Match : GlobMatchResult.NoMatch;
 
-        static bool TryAdvanceStar(ref int p, ref int t, int star, ref int match, ref int origin,
+        static bool TryAdvanceStar(ref int p, ref int t, int star, int suffix, ref int match, ref int origin,
             ref PatternInput pattern, scoped GlobInput text, bool found)
         {
             // Once a search matches, keep its leftmost start while extending its own stars.
             if (star < 0 || match == text.Length || found && pattern.IsSearchStar(star))
                 return false;
-            p = pattern.Next(star);
             match += text.Width(match);
+            if (pattern.Pathname && match < text.Length && text.IsSlash(match))
+                return false;
+            p = suffix;
             t = match;
             if (pattern.IsSearchStar(star))
                 origin = match;
+            return true;
+        }
+
+        static bool ReadPathnameWildcards(ref int p, ref int t, ref PatternInput pattern, scoped GlobInput text,
+            CancellationToken cancellationToken)
+        {
+            // Bash consumes the '?' atoms in a consecutive wildcard run before finding its suffix.
+            while (p < pattern.Length)
+            {
+                var token = pattern[p];
+                if (token is not ('*' or '?') || !pattern.IsActive(p, token))
+                    break;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (t < text.Length && text.IsSlash(t))
+                    return false;
+                if (token == '?')
+                {
+                    if (t == text.Length)
+                        return false;
+                    t += text.Width(t);
+                }
+                p = pattern.Next(p);
+            }
             return true;
         }
     }
@@ -378,6 +427,10 @@ public static class TextGlobMatcher
                 return false;
             }
             var next = member.End;
+            // A slash in member lookahead ends pathname matching while the bracket spelling still parses.
+            if (members.Pathname && !member.IsSet && next < pattern.Length && pattern[next] == '/'
+                && mask[next] == GlobMask.Active)
+                members.StopBeforeSlash();
             if (!member.IsSet && next + 1 < pattern.Length && pattern[next] == '-' && mask[next] == GlobMask.Active
                 && (pattern[next + 1] != ']' || mask[next + 1] != GlobMask.Active))
             {
@@ -489,13 +542,30 @@ public static class TextGlobMatcher
     {
         private readonly Span<ulong> _ranges = ranges;
         private readonly int _rangeValue = ignoreAsciiCase ? AsciiByte.ToLowerAscii(value) : value;
+        private bool _stopped;
+        public bool Pathname { get; init; }
         public int RangeCount { get; private set; }
         public uint Classes { get; private set; }
         public bool Negate { get; set; }
         public bool Matched { get; private set; }
 
+        public void StopBeforeSlash()
+        {
+            _stopped = true;
+            if (Negate)
+            {
+                // The separator ends the bracket check before negation can admit a subject.
+                RangeCount = 0;
+                Classes = 0;
+                Matched = false;
+                Negate = false;
+            }
+        }
+
         public void AddRange(int lower, int upper)
         {
+            if (_stopped)
+                return;
             if (ignoreAsciiCase)
             {
                 lower = AsciiByte.ToLowerAscii(lower);
@@ -511,6 +581,8 @@ public static class TextGlobMatcher
 
         public void AddClass(ShellCharacterClass.Kind kind)
         {
+            if (_stopped)
+                return;
             Matched |= ShellCharacterClass.Matches(kind, value);
             if (kind != ShellCharacterClass.Kind.None)
                 Classes |= 1u << (int)kind;
@@ -634,6 +706,7 @@ public static class TextGlobMatcher
         public PatternBrackets Brackets;
         public bool RepeatedMatches { get; init; }
         public bool IgnoreAsciiCase { get; init; }
+        public bool Pathname { get; init; }
         private bool Reverse => _traversal == PatternTraversal.Reverse;
         private bool Search => _traversal == PatternTraversal.Search;
 
@@ -683,7 +756,7 @@ public static class TextGlobMatcher
                     return false; // Atom preparation already established a literal '['.
             }
             var end = original;
-            var members = new BracketMembership(value, default, IgnoreAsciiCase);
+            var members = new BracketMembership(value, default, IgnoreAsciiCase) { Pathname = Pathname };
             if (!TryReadBracket(_source, in _mask, ref end, ref members, ref Brackets.Scan, cancellationToken))
                 return false;
 
@@ -712,7 +785,7 @@ public static class TextGlobMatcher
                 ChargeBracketMemory(MemoryCapacity.ArrayBackingBytes<ulong>(rangeCount));
                 cancellationToken.ThrowIfCancellationRequested();
                 var ranges = new ulong[rangeCount];
-                var members = new BracketMembership(-1, ranges, IgnoreAsciiCase);
+                var members = new BracketMembership(-1, ranges, IgnoreAsciiCase) { Pathname = Pathname };
                 _ = TryReadBracket(_source, in _mask, ref original, ref members, ref Brackets.Scan, cancellationToken);
                 ranges.AsSpan().Sort();
                 var used = 0;
@@ -791,6 +864,24 @@ public static class TextGlobMatcher
             _reverse = reverse;
         }
         public int Length => _utf8 ? _bytes.Length : _text.Length;
+
+        // Only the forward byte pathname matcher uses these operations.
+        public bool IsSlash(int index) => _bytes[index] == (byte)'/';
+
+        public int FindSlash(int start, CancellationToken cancellationToken)
+        {
+            const int ScanBytes = 4096;
+            for (var position = start; position < _bytes.Length;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var length = Math.Min(ScanBytes, _bytes.Length - position);
+                var offset = _bytes.Slice(position, length).IndexOf((byte)'/');
+                if (offset >= 0)
+                    return position + offset;
+                position += length;
+            }
+            return -1;
+        }
 
         // Advance over pairs while keeping indices in the original UTF-16 mask coordinates.
         private bool HasSurrogatePair(int index) =>

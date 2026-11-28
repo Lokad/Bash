@@ -12,7 +12,7 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
 {
     private static readonly GlobMask AllActive = new(ReadOnlyMemory<byte>.Empty);
     private MemoryCapacity? _owner;
-    private List<TextGlobMatcher.Utf8PatternMatcher>? _patterns;
+    private List<TextGlobMatcher.Utf8PathMatcher>? _patterns;
     private ByteMemoryBuilder? _longPath;
 
     internal bool Excludes(string path, CancellationToken cancellationToken)
@@ -41,27 +41,32 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
         }
     }
 
-    private List<TextGlobMatcher.Utf8PatternMatcher> PreparePatterns(CancellationToken cancellationToken)
+    private List<TextGlobMatcher.Utf8PathMatcher> PreparePatterns(CancellationToken cancellationToken)
     {
         var owner = _owner ??= new MemoryCapacity(memory.Budget, 0);
         memory.Charge(owner, 128);
-        List<TextGlobMatcher.Utf8PatternMatcher> patterns = [];
+        List<TextGlobMatcher.Utf8PathMatcher> patterns = [];
         var bytes = value.Bytes.Span;
         var start = 0;
+        var brackets = 0;
         for (var index = 0; index <= bytes.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (index < bytes.Length && bytes[index] != (byte)':')
+            if (index < bytes.Length && (bytes[index] != (byte)':' || brackets != 0))
             {
-                if (bytes[index] == (byte)'\\' && index + 1 < bytes.Length)
-                    index++;
+                switch (bytes[index])
+                {
+                    case (byte)'\\' when index + 1 < bytes.Length: index++; break;
+                    case (byte)'[': brackets++; break;
+                    case (byte)']' when brackets != 0: brackets--; break;
+                }
                 continue;
             }
             if (index > start && AllActive.TryUnescape(ShellValue.FromBytes(value.Bytes[start..index]), memory, owner,
                     cancellationToken, out var pattern, out var mask))
             {
                 memory.PrepareListCapacity(owner, patterns, 1);
-                patterns.Add(new TextGlobMatcher.Utf8PatternMatcher(pattern.Bytes, mask, owner, ignoreAsciiCase));
+                patterns.Add(new TextGlobMatcher.Utf8PathMatcher(pattern.Bytes, mask, owner, ignoreAsciiCase));
             }
             start = index + 1;
         }

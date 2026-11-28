@@ -998,8 +998,10 @@ directories. An inherited subshell starts with the parent's setting. A fresh
 hosted launch can enable it with `-O globstar` or an exported `BASHOPTS`.
 
 `GLOBIGNORE` filters the full paths returned by pathname expansion before
-the no-match policy runs. Its colon-delimited shell patterns match the
-published spelling, including slashes, and use `nocaseglob` when enabled.
+the no-match policy runs. Its shell patterns use Bash's pathname separator
+rules on the published spelling and honor `nocaseglob`. Colons inside a
+bracket expression stay in the pattern. For example, `dir/*/leaf` filters
+`dir/sub/leaf`, and a terminal `dir/*` can also filter deeper paths.
 A nonempty assignment enables `dotglob` and excludes path spellings ending
 in `.` or `..` as a complete component. A trailing slash leaves those
 spellings eligible for pattern matching. Assigning an empty value clears

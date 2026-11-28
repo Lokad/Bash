@@ -171,6 +171,47 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("a/*/leaf.txt", "<axleaf.txt><a/leaf.txt><a/xleaf.txt><a//xleaf.txt><a/b/c/leaf.txt>")]
+    [InlineData("a/**/leaf.txt", "<axleaf.txt><a/leaf.txt><a/xleaf.txt><a//leaf.txt><a//xleaf.txt><a/b/c/leaf.txt>")]
+    [InlineData("a/*", "<axleaf.txt>")]
+    [InlineData("a/**", "<axleaf.txt><a//leaf.txt><a//xleaf.txt>")]
+    [InlineData("a?leaf.txt", "<a/leaf.txt><a/xleaf.txt><a//leaf.txt><a//xleaf.txt><a/b/leaf.txt><a/b/c/leaf.txt>")]
+    [InlineData("a[[:punct:]]leaf.txt:a/xleaf.txt", "<axleaf.txt><a//leaf.txt><a//xleaf.txt><a/b/leaf.txt><a/b/c/leaf.txt>")]
+    [InlineData("a[/x]leaf.txt", "<a/xleaf.txt><a//leaf.txt><a//xleaf.txt><a/b/leaf.txt><a/b/c/leaf.txt>")]
+    [InlineData("a[x/]leaf.txt", "<axleaf.txt><a/leaf.txt><a/xleaf.txt><a//leaf.txt><a//xleaf.txt><a/b/leaf.txt><a/b/c/leaf.txt>")]
+    [InlineData(@"a/*\/leaf.txt", "<axleaf.txt><a/leaf.txt><a/xleaf.txt><a//leaf.txt><a//xleaf.txt><a/b/leaf.txt><a/b/c/leaf.txt>")]
+    public async Task GlobIgnoreUsesBashSeparatorRulesForPublishedPaths(string ignore, string expected)
+    {
+        var host = EndToEndHarness.BuildTree([("/axleaf.txt", ""), ("/a/leaf.txt", ""),
+            ("/a/xleaf.txt", ""), ("/a/b/leaf.txt", ""), ("/a/b/c/leaf.txt", "")]);
+        var result = await EvaluationTestHelper.RunAsync($"""
+            shopt -s nullglob
+            GLOBIGNORE='{ignore}'
+            for path in *.txt a/*.txt a//*.txt a/*/*.txt a/*/*/*.txt; do printf '<%s>' "$path"; done
+            """, tree: host);
+
+        Assert.Equal(expected, result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ShellWordPatternsCanMatchSlashWithGlobIgnoreSet()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            GLOBIGNORE='a?b'
+            value=a/b
+            case "$value" in a?b) printf 'case\n';; esac
+            [[ $value == a*b ]] && printf 'conditional\n'
+            printf 'trim:<%s>\n' "${value#a?}"
+            """);
+
+        Assert.Equal("case\nconditional\ntrim:<b>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Fact]
     public async Task GlobIgnoreFiltersCompletedDotPathsAndKeepsTheirSpelling()
     {
