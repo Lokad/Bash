@@ -804,6 +804,9 @@ internal enum BracedParameterRecognition
 /// <summary>How the reader presents a final unpaired, unquoted backslash.</summary>
 internal enum FinalBackslash { Invalid, Continuation, Literal }
 
+/// <summary>Physical bytes omitted from verbose input and the string reader's synthetic EOF byte.</summary>
+internal readonly record struct ReaderSpelling(IReadOnlyList<Range>? Omissions, bool EscapedEof);
+
 /// <summary>Owns recursion bounds and temporary lookahead parses for one source traversal.</summary>
 internal sealed class ShellScanContext
 {
@@ -825,10 +828,13 @@ internal sealed class ShellScanContext
     internal MemoryCapacity? SyntaxMemory { get; set; }
     internal bool ReadEmptyCommandUnit { get; set; }
     internal bool RetainAuthoredReader { get; init; }
-    internal bool CollectReaderSilences { get; set; }
+    internal bool TrackReaderSpelling { get; set; }
     internal int ReaderEnd { get; set; }
     private List<Range>? _readerSilences;
     private List<Range>? _readerDocuments;
+    private List<Range>? _readerSplices;
+    private bool _readerEscapedEof;
+    private bool RecordsReaderSpelling => TrackReaderSpelling || RetainAuthoredReader;
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
@@ -860,11 +866,13 @@ internal sealed class ShellScanContext
         HereDocumentReadAhead = null;
         _readerSilences = null;
         _readerDocuments = null;
+        _readerSplices = null;
+        _readerEscapedEof = false;
     }
 
     internal void RecordQuietCaptureLines(ShellSource source, int payloadStart, int consumedEnd)
     {
-        if (!(CollectReaderSilences || RetainAuthoredReader)
+        if (!RecordsReaderSpelling
             || consumedEnd <= payloadStart || consumedEnd > source.Length
             || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
             return;
@@ -887,7 +895,7 @@ internal sealed class ShellScanContext
 
     internal void RecordEchoedCaptureDocument(ShellSource source, int start, int end)
     {
-        if (!(CollectReaderSilences || RetainAuthoredReader) || start == end
+        if (!RecordsReaderSpelling || start == end
             || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
             return;
         _readerDocuments ??= [];
@@ -895,47 +903,83 @@ internal sealed class ShellScanContext
         _readerDocuments.Add((sourceOffset + start)..(sourceOffset + end));
     }
 
-    internal IReadOnlyList<Range>? CollectReaderSilenceRanges()
+    internal void RecordHereDocumentSplice(ShellSource source, int position)
+    {
+        if (!RecordsReaderSpelling || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
+            return;
+        var start = sourceOffset + position;
+        _readerSplices ??= [];
+        SyntaxMemory?.PrepareListCapacity(_readerSplices, 1);
+        _readerSplices.Add(start..(start + 2));
+    }
+
+    internal void RecordHereDocumentEscapedEof(ShellSource source)
+    {
+        if (RecordsReaderSpelling && ScriptInput.TryGetViewOffset(source, out var offset)
+            && offset + source.Length == ScriptInput.Length)
+            _readerEscapedEof = true;
+    }
+
+    internal ReaderSpelling TakeReaderSpelling()
     {
         var ranges = _readerSilences;
         var documents = _readerDocuments;
+        var splices = _readerSplices;
+        var escapedEof = _readerEscapedEof;
         _readerSilences = null;
         _readerDocuments = null;
-        if (ranges == null)
-            return ranges;
-        CombineOverlapping(ranges);
-        if (documents == null)
-            return ranges;
-        CombineOverlapping(documents);
-
-        // Here-document collection reads its own physical lines even within a quiet capture.
-        var silences = new List<Range>();
-        var documentIndex = 0;
-        foreach (var range in ranges)
+        _readerSplices = null;
+        _readerEscapedEof = false;
+        if (ranges != null && documents != null)
+            ranges = ExcludeDocuments(ranges, documents);
+        else if (ranges != null && splices == null)
+            CombineOverlapping(ranges);
+        if (splices != null)
         {
-            var start = range.Start.Value;
-            var end = range.End.Value;
-            while (documentIndex < documents.Count && documents[documentIndex].End.Value <= start)
-                documentIndex++;
-            while (documentIndex < documents.Count && documents[documentIndex].Start.Value < end)
+            if (ranges == null)
+                ranges = splices;
+            else
             {
-                var document = documents[documentIndex];
-                AddSilence(start, document.Start.Value);
-                start = document.End.Value;
-                if (start >= end)
-                    break;
-                documentIndex++;
+                SyntaxMemory?.PrepareListCapacity(ranges, splices.Count);
+                ranges.AddRange(splices);
             }
-            AddSilence(start, end);
+            CombineOverlapping(ranges);
         }
-        return silences.Count == 0 ? null : silences;
+        return new ReaderSpelling(ranges, escapedEof);
 
-        void AddSilence(int start, int end)
+        List<Range>? ExcludeDocuments(List<Range> quietRanges, List<Range> documents)
         {
-            if (end <= start)
-                return;
-            SyntaxMemory?.PrepareListCapacity(silences, 1);
-            silences.Add(start..end);
+            CombineOverlapping(quietRanges);
+            CombineOverlapping(documents);
+            // Here-document collection reads its own physical lines even within a quiet capture.
+            var silences = new List<Range>();
+            var documentIndex = 0;
+            foreach (var range in quietRanges)
+            {
+                var start = range.Start.Value;
+                var end = range.End.Value;
+                while (documentIndex < documents.Count && documents[documentIndex].End.Value <= start)
+                    documentIndex++;
+                while (documentIndex < documents.Count && documents[documentIndex].Start.Value < end)
+                {
+                    var document = documents[documentIndex];
+                    AddSilence(start, document.Start.Value);
+                    start = document.End.Value;
+                    if (start >= end)
+                        break;
+                    documentIndex++;
+                }
+                AddSilence(start, end);
+            }
+            return silences.Count == 0 ? null : silences;
+
+            void AddSilence(int start, int end)
+            {
+                if (end <= start)
+                    return;
+                SyntaxMemory?.PrepareListCapacity(silences, 1);
+                silences.Add(start..end);
+            }
         }
 
         static void CombineOverlapping(List<Range> spans)

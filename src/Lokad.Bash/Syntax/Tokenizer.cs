@@ -1311,6 +1311,7 @@ internal sealed class Tokenizer
                     }
                     if (span[Position + 1] == (byte)'\n')
                     {
+                        _scanContext.RecordHereDocumentSplice(_input, Position);
                         content ??= StartContent();
                         hasContinuedBytes |= Position != runStart;
                         AppendRun(content, span[runStart..Position]);
@@ -1340,7 +1341,10 @@ internal sealed class Tokenizer
                 AppendRun(content, run);
                 // Bash's string reader supplies the byte from pushing EOF back after the escape.
                 if (escapedStringEof)
+                {
                     content.Append((byte)0xff);
+                    _scanContext.RecordHereDocumentEscapedEof(_input);
+                }
                 line = content.ToMemory().Span[lineStart..];
             }
             else if (stripTabs)

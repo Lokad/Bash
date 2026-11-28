@@ -675,7 +675,7 @@ public sealed partial class Evaluation : IFileTester
         var authoredReader = _state.ForkKind == null ? script.Reader : null;
         if (StopsAfterCommandUnit && authoredReader is { EmptyFirstUnitEnd: > 0 } reader)
         {
-            await WriteVerboseSourceAsync(reader.Source, 0..reader.EmptyFirstUnitEnd, reader.QuietLines).ConfigureAwait(false);
+            await WriteVerboseSourceAsync(reader.Source, 0..reader.EmptyFirstUnitEnd, reader.Spelling).ConfigureAwait(false);
             return EvaluationResult.FromExitCode(0);
         }
         if (_state.CommandLaunchEnvironment != EvaluationState.LaunchEnvironment.Pipeline && script.Commands is [var unit]
@@ -721,7 +721,7 @@ public sealed partial class Evaluation : IFileTester
         if (authoredReader != null && script.Commands is not [ListCommand]
             && (script.Commands.Count == 0 || !StopsAfterCommandUnit))
             await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.TrailingInput,
-                authoredReader.QuietLines).ConfigureAwait(false);
+                authoredReader.Spelling).ConfigureAwait(false);
         return EvaluationResult.FromExitCode(exitCode);
     }
 
@@ -6977,7 +6977,7 @@ public sealed partial class Evaluation : IFileTester
     {
         if (warnings == null)
         {
-            await WriteVerboseSourceAsync(input.Source, input.Read, input.QuietLines).ConfigureAwait(false);
+            await WriteVerboseSourceAsync(input.Source, input.Read, input.Spelling).ConfigureAwait(false);
             return;
         }
 
@@ -6994,7 +6994,7 @@ public sealed partial class Evaluation : IFileTester
                 : Math.Clamp(warning.SourceEchoOffset, remainingStart, readEnd);
             if (next != remainingStart)
             {
-                await WriteVerboseSourceAsync(input.Source, remainingStart..next, input.QuietLines).ConfigureAwait(false);
+                await WriteVerboseSourceAsync(input.Source, remainingStart..next, input.Spelling).ConfigureAwait(false);
                 remainingStart = next;
             }
             var warningLine = warning.Line + offset;
@@ -7014,7 +7014,7 @@ public sealed partial class Evaluation : IFileTester
                     warning.Delimiter.ToValue(), HereDocumentWarningClose], scope: null, reachedPrefix).ConfigureAwait(false);
         }
         if (remainingStart < readEnd)
-            await WriteVerboseSourceAsync(input.Source, remainingStart..readEnd, input.QuietLines).ConfigureAwait(false);
+            await WriteVerboseSourceAsync(input.Source, remainingStart..readEnd, input.Spelling).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -198,7 +198,7 @@ public static class Parser
         script.FinalUnitReachesInputEnd = finalUnit.ReaderEnd == input.Length;
         if (unitEnds != null)
             script.Reader = new ParsedScript.AuthoredReader(context.ScriptInput, unitEnds, emptyFirstUnitEnd,
-                context.CollectReaderSilenceRanges());
+                context.TakeReaderSpelling());
         return true;
     }
 

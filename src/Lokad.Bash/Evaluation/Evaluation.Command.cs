@@ -152,7 +152,7 @@ public sealed partial class Evaluation
             var readDiagnostics = scope.Context.Coordinates.Locations?.GetReadDiagnostics(command) ?? default;
             ApplyReadFunctionBraceLine(scope.Context.Coordinates.Offset, readDiagnostics.FunctionBraceLine);
             if (authoredReader != null && readerUnit >= 0)
-                await ReportReaderHereDocumentsAsync(new ReaderInput(authoredReader.Source, authoredReader.Unit(readerUnit), authoredReader.QuietLines),
+                await ReportReaderHereDocumentsAsync(new ReaderInput(authoredReader.Source, authoredReader.Unit(readerUnit), authoredReader.Spelling),
                     readDiagnostics.HereDocumentWarnings, scope.Context.Coordinates.Offset, scope.Context.DiagnosticName,
                     useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
             else if (readDiagnostics.HereDocumentWarnings is { } warnings)
@@ -342,7 +342,7 @@ public sealed partial class Evaluation
                 }
                 if (authoredReader != null && !StopsAfterCommandUnit)
                     await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.TrailingInput,
-                        authoredReader.QuietLines).ConfigureAwait(false);
+                        authoredReader.Spelling).ConfigureAwait(false);
                 return ApplyNegation(result, listNegated);
             }
         }

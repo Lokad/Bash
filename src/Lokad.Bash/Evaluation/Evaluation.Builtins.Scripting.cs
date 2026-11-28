@@ -398,19 +398,19 @@ public sealed partial class Evaluation
             scanContext.ReadArrayRecovery = (streamedRoot || sourceOrEval)
                 && _state.ForkKind == null && !stopAfterPrimaryDiagnostic;
             scanContext.ReadEmptyCommandUnit = fileReader && StopsAfterCommandUnit;
-            scanContext.CollectReaderSilences = reportReaderInput && _state.HasOption(ShellOption.Verbose);
+            scanContext.TrackReaderSpelling = reportReaderInput && _state.HasOption(ShellOption.Verbose);
             try
             {
                 var hasUnit = commands.MoveNext();
                 var readerInput = default(ReaderInput);
                 if (reportReaderInput && scanContext.ReaderEnd > readEnd)
                 {
-                    readerInput = new ReaderInput(source, readEnd..scanContext.ReaderEnd, scanContext.CollectReaderSilenceRanges());
+                    readerInput = new ReaderInput(source, readEnd..scanContext.ReaderEnd, scanContext.TakeReaderSpelling());
                     readEnd = scanContext.ReaderEnd;
                 }
                 if (!hasUnit || commands.Current is CommandUnitParseResult.Empty)
                 {
-                    await WriteVerboseSourceAsync(readerInput.Source, readerInput.Read, readerInput.QuietLines).ConfigureAwait(false);
+                    await WriteVerboseSourceAsync(readerInput.Source, readerInput.Read, readerInput.Spelling).ConfigureAwait(false);
                     break;
                 }
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
@@ -607,51 +607,62 @@ public sealed partial class Evaluation
         return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
     }
 
-    private readonly record struct ReaderInput(ShellSource Source, Range Read, IReadOnlyList<Range>? QuietLines);
+    private readonly record struct ReaderInput(ShellSource Source, Range Read, ReaderSpelling Spelling);
+    private static readonly ReadOnlyMemory<byte> EscapedReaderEof = new byte[] { 0xff, (byte)'\n' };
 
-    private Task WriteVerboseSourceAsync(ShellSource source, Range read, IReadOnlyList<Range>? quietLines)
+    private Task WriteVerboseSourceAsync(ShellSource source, Range read, ReaderSpelling spelling)
     {
         if (read.Start.Equals(read.End) || !_state.HasOption(ShellOption.Verbose))
             return Task.CompletedTask;
         var descriptor = GetStdErrDescriptor();
         return descriptor.IsClosed ? Task.CompletedTask
-            : WriteReachedInputAsync(descriptor, source.Bytes, read, quietLines);
+            : WriteReachedInputAsync(descriptor, source.Bytes, read, spelling);
 
         async Task WriteReachedInputAsync(FileDescriptor descriptor, ReadOnlyMemory<byte> bytes,
-            Range read, IReadOnlyList<Range>? quietLines)
+            Range read, ReaderSpelling spelling)
         {
             var start = read.Start.Value;
             var end = read.End.Value;
-            if (quietLines != null)
+            var needsLf = false;
+            if (spelling.Omissions is { } omissions)
             {
                 var lower = 0;
-                var upper = quietLines.Count;
+                var upper = omissions.Count;
                 while (lower < upper)
                 {
                     var middle = lower + (upper - lower) / 2;
-                    if (quietLines[middle].End.Value <= start)
+                    if (omissions[middle].End.Value <= start)
                         lower = middle + 1;
                     else
                         upper = middle;
                 }
-                for (var index = lower; index < quietLines.Count; index++)
+                for (var index = lower; index < omissions.Count; index++)
                 {
-                    var quiet = quietLines[index];
-                    if (quiet.Start.Value >= end)
+                    var omission = omissions[index];
+                    if (omission.Start.Value >= end)
                         break;
-                    if (quiet.Start.Value > start)
+                    if (omission.Start.Value > start)
                     {
-                        var write = await ExecuteWriteAsync(descriptor, bytes[start..quiet.Start.Value]).ConfigureAwait(false);
+                        var write = await ExecuteWriteAsync(descriptor, bytes[start..omission.Start.Value]).ConfigureAwait(false);
                         if (!write.CanAcceptMore)
                             return;
+                        needsLf = bytes.Span[omission.Start.Value - 1] != (byte)'\n';
                     }
-                    start = quiet.End.Value;
+                    start = omission.End.Value;
                     if (start >= end)
-                        return;
+                        break;
                 }
             }
-            var result = await ExecuteWriteAsync(descriptor, bytes[start..end]).ConfigureAwait(false);
-            if (result.CanAcceptMore && bytes.Span[end - 1] != (byte)'\n')
+            if (start < end)
+            {
+                var result = await ExecuteWriteAsync(descriptor, bytes[start..end]).ConfigureAwait(false);
+                if (!result.CanAcceptMore)
+                    return;
+                needsLf = bytes.Span[end - 1] != (byte)'\n';
+            }
+            if (spelling.EscapedEof && end == bytes.Length)
+                await ExecuteWriteAsync(descriptor, EscapedReaderEof).ConfigureAwait(false);
+            else if (needsLf)
                 await ExecuteWriteAsync(descriptor, ShellValue.FromByte((byte)'\n').Bytes).ConfigureAwait(false);
         }
     }

@@ -31,7 +31,7 @@ public sealed class ParsedScript
     internal AuthoredReader? Reader { get; set; }
 
     internal sealed record AuthoredReader(ShellSource Source, IReadOnlyList<int> UnitEnds,
-        int EmptyFirstUnitEnd, IReadOnlyList<Range>? QuietLines)
+        int EmptyFirstUnitEnd, ReaderSpelling Spelling)
     {
         internal Range Unit(int index) => (index == 0 ? 0 : UnitEnds[index - 1])..UnitEnds[index];
 

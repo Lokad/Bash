@@ -11,6 +11,61 @@ public sealed class ScriptCommandUnitTests
     private const string PrintParserStatus = "printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"";
 
     [Theory]
+    [InlineData("cat <<END", "first\\\n$value\nEND", "first$value\nEND", "firstnext\n")]
+    [InlineData("cat <<'END'", "first\\\n$value\nEND", "first\\\n$value\nEND", "first\\\n$value\n")]
+    [InlineData("cat <<-END", "\tfirst\\\n\tnext\n\tEND", "\tfirst\tnext\n\tEND", "first\tnext\n")]
+    [InlineData("cat <<END", "body\nE\\\nND", "body\nEND", "body\n")]
+    [InlineData("cat <<END", "first\\\\\nnext\nEND", "first\\\\\nnext\nEND", "first\\\nnext\n")]
+    public async Task VerboseEchoesTheCollectedHereDocumentSpelling(
+        string header, string authored, string echoed, string output)
+    {
+        var script = $"value=next; set -v\n{header}\n{authored}\n# tail\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(header + "\n" + echoed + "\n# tail\n", host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData("first", "first\n", 4)]
+    [InlineData("", "", 3)]
+    public async Task VerboseCompletesOnlyACollectedLineAtSplicedEof(string prefix, string output, int readerLine)
+    {
+        var script = $"set -v\ncat <<END\n{prefix}\\\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal($"cat <<END\n{output}line {readerLine}: warning: here-document at line 2 delimited by end-of-file (wanted `END')\n",
+                host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task VerboseEchoesTheEscapedStringReaderEofByte()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("set -v; eval $'cat <<END\\nfirst\\\\'\n", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal([.. "first\\"u8, 0xff, (byte)'\n'], host.StandardOutput.Content.ToArray());
+        Assert.Equal([.. "cat <<END\nfirst\\"u8, 0xff, (byte)'\n',
+                .. "line 2: warning: here-document at line 1 delimited by end-of-file (wanted `END')\n"u8],
+            host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
     [InlineData("set -vn", "value=$(cat <<ONE)$(cat <<TWO)")]
     [InlineData("set -v", "false && value=$(cat <<ONE)$(cat <<TWO)")]
     public async Task VerboseInterleavesCaptureWarningsWithTheirBodyReads(string options, string header)

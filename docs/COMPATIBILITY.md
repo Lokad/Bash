@@ -957,8 +957,12 @@ unterminated line. A bare `set -` clears verbose. The option also works with
 Continuation lines of modern command substitutions are quiet except for
 here-document collection. A compact capture's pending-document warning
 precedes its body's echoed lines, and an EOF warning follows the available
-body. Lokad.Bash echoes collected lines once. The pinned Bash builds can
-echo them again during capture expansion.
+body. An unquoted here-document echoes its joined backslash-LF lines,
+including a delimiter formed by a join. It preserves the leading tabs
+that `<<-` strips from delivered input. Quoted delimiters preserve their
+body's physical lines. The echo includes the string reader's synthetic
+byte when it escapes EOF. Lokad.Bash echoes collected lines once. The
+pinned Bash builds can echo them again during capture expansion.
 
 `allexport` is off at startup. `set -a` marks reached scalar assignments
 and function definitions for export. New global scalar declarations can
