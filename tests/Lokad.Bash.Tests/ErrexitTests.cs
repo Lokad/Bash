@@ -46,6 +46,41 @@ public sealed class ErrexitTests
     }
 
     [Fact]
+    public void SetOptionProjectionsReuseTheReachedStateAcrossConcurrentReads()
+    {
+        var order = new[] { ShellOption.Errexit, ShellOption.Noglob, ShellOption.Nounset, ShellOption.BraceExpand };
+        var names = new[] { "errexit", "noglob", "nounset", "braceexpand" };
+
+        Parallel.For(0, 128, pass =>
+        {
+            var active = Enumerable.Range(0, order.Length).Where(i => (pass & (1 << i)) != 0).ToArray();
+            var enabled = active.Aggregate(ShellOption.Pipefail | ShellOption.PatsubReplacement,
+                (flags, i) => flags | order[i]);
+            var flagsValue = ShellOptions.Flags(enabled);
+            var binding = ShellOptions.SetBinding(enabled);
+            Assert.Equal(new string(active.Select(i => "efuB"[i]).ToArray()), flagsValue.ToUtf8String());
+            Assert.Equal(string.Join(':', active.Select(i => names[i]).Append("pipefail").Order(StringComparer.Ordinal)),
+                binding.ToUtf8String());
+            var ordered = Enumerable.Range(0, order.Length).OrderBy(i => names[i], StringComparer.Ordinal);
+            foreach (var listing in new[] { false, true })
+            {
+                var expected = string.Concat(ordered.Select(i => (listing, active.Contains(i)) switch
+                {
+                    (true, true) => $"{names[i]}\ton\n",
+                    (true, false) => $"{names[i]}\toff\n",
+                    (false, true) => $"set -o {names[i]}\n",
+                    _ => $"set +o {names[i]}\n"
+                }));
+                var projection = ShellOptions.InspectSetOptions(enabled, listing);
+                Assert.Equal(expected, projection.ToUtf8String());
+                Assert.True(projection.Bytes.Equals(ShellOptions.InspectSetOptions(enabled & ~ShellOption.PatsubReplacement, listing).Bytes));
+            }
+            Assert.True(flagsValue.Bytes.Equals(ShellOptions.Flags(enabled & ~ShellOption.PatsubReplacement).Bytes));
+            Assert.True(binding.Bytes.Equals(ShellOptions.SetBinding(enabled & ~ShellOption.PatsubReplacement).Bytes));
+        });
+    }
+
+    [Fact]
     public async Task ShoptReportsReachedStateAndProcessesLaterNamesAfterAnError()
     {
         await using var host = new TestHost();

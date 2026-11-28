@@ -1,7 +1,8 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Text;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Evaluation;
@@ -10,22 +11,23 @@ namespace Lokad.Bash.Evaluation;
 internal enum ShellOption
 {
     None = 0,
+    // Keep the frequently reached set options in the low bits for direct projection lookup.
     Errexit = 1,
-    InheritErrexit = 2,
-    LocalVariableInheritance = 4,
-    Dotglob = 8,
+    Noglob = 2,
+    Nounset = 4,
+    BraceExpand = 8,
     Failglob = 16,
     Nullglob = 32,
     NoCaseGlob = 64,
     NoCaseMatch = 128,
     GlobSkipDots = 256,
-    BraceExpand = 512,
+    Dotglob = 512,
     Pipefail = 1024,
-    Noglob = 2048,
+    InheritErrexit = 2048,
     XpgEcho = 4096,
     SourcePath = 8192,
     ShiftVerbose = 16384,
-    Nounset = 32768,
+    LocalVariableInheritance = 32768,
     PatsubReplacement = 65536
 }
 
@@ -34,25 +36,20 @@ internal static class ShellOptions
     internal const ShellOption Fixed = ShellOption.Pipefail;
     private const ShellOption DefaultBashFlags = ShellOption.GlobSkipDots | ShellOption.PatsubReplacement | ShellOption.SourcePath;
     internal const ShellOption Default = Fixed | ShellOption.BraceExpand | DefaultBashFlags;
-    internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.Nounset | ShellOption.BraceExpand;
-    internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.ShiftVerbose
-        | ShellOption.SourcePath;
-    internal const byte ErrexitFlag = (byte)'e';
-    internal const byte NoglobFlag = (byte)'f';
-    internal const byte NounsetFlag = (byte)'u';
-    internal const byte BraceExpandFlag = (byte)'B';
-    internal static readonly SearchValues<byte> ShortSetFlags = SearchValues.Create("efuB"u8);
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
-    internal readonly record struct Entry(ShellValue Name, ShellOption Option);
+    internal readonly record struct Entry(ShellValue Name, ShellOption Option, byte ShortFlag)
+    {
+        internal Entry(ShellValue name, ShellOption option) : this(name, option, 0) { }
+    }
 
     private static readonly Entry[] SetOptions =
     [
-        new(ShellValue.FromText("braceexpand"), ShellOption.BraceExpand),
-        new(ShellValue.FromText("errexit"), ShellOption.Errexit),
-        new(ShellValue.FromText("noglob"), ShellOption.Noglob),
-        new(ShellValue.FromText("nounset"), ShellOption.Nounset),
+        new(ShellValue.FromText("braceexpand"), ShellOption.BraceExpand, (byte)'B'),
+        new(ShellValue.FromText("errexit"), ShellOption.Errexit, (byte)'e'),
+        new(ShellValue.FromText("noglob"), ShellOption.Noglob, (byte)'f'),
+        new(ShellValue.FromText("nounset"), ShellOption.Nounset, (byte)'u'),
         new(ShellValue.FromText("pipefail"), ShellOption.Pipefail)
     ];
 
@@ -72,17 +69,12 @@ internal static class ShellOptions
         new(ShellValue.FromText("xpg_echo"), ShellOption.XpgEcho)
     ];
 
-    private static readonly ShellOption BashMask = CollectBashFlags();
-    private static readonly ShellOption[] SetStates =
-    [
-        ShellOption.None, ShellOption.Errexit, ShellOption.Noglob, ShellOption.Errexit | ShellOption.Noglob,
-        ShellOption.BraceExpand, ShellOption.BraceExpand | ShellOption.Errexit,
-        ShellOption.BraceExpand | ShellOption.Noglob, MutableSet & ~ShellOption.Nounset,
-        ShellOption.Nounset, ShellOption.Nounset | ShellOption.Errexit, ShellOption.Nounset | ShellOption.Noglob,
-        ShellOption.Nounset | ShellOption.Errexit | ShellOption.Noglob,
-        ShellOption.Nounset | ShellOption.BraceExpand, ShellOption.Nounset | ShellOption.BraceExpand | ShellOption.Errexit,
-        ShellOption.Nounset | ShellOption.BraceExpand | ShellOption.Noglob, MutableSet
-    ];
+    private static readonly ShellOption BashMask = CollectFlags(BashOptions);
+    private static readonly (byte[] Order, SearchValues<byte> Flags) ShortSet = BuildShortSet();
+    internal static readonly ShellOption MutableSet = CollectFlags(SetOptions) & ~Fixed;
+    internal static readonly ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.ShiftVerbose
+        | ShellOption.SourcePath;
+    internal static SearchValues<byte> ShortSetFlags => ShortSet.Flags;
 
     internal static ShellValue DefaultBashBinding { get; } = Format(BashOptions, DefaultBashFlags, memory: null, out _);
 
@@ -96,28 +88,24 @@ internal static class ShellOptions
         return ShellOption.None;
     }
 
-    internal static ShellOption FindShortSetOption(byte flag) => flag switch
+    internal static ShellOption FindShortSetOption(byte flag)
     {
-        ErrexitFlag => ShellOption.Errexit,
-        NoglobFlag => ShellOption.Noglob,
-        NounsetFlag => ShellOption.Nounset,
-        BraceExpandFlag => ShellOption.BraceExpand,
-        _ => ShellOption.None
-    };
-
-    private static int MutableSetIndex(ShellOption enabled) =>
-        ((enabled & ShellOption.Errexit) != 0 ? 1 : 0) | ((enabled & ShellOption.Noglob) != 0 ? 2 : 0)
-        | ((enabled & ShellOption.BraceExpand) != 0 ? 4 : 0) | ((enabled & ShellOption.Nounset) != 0 ? 8 : 0);
-
-    internal static ShellValue SetBinding(ShellOption enabled) => SetProjections.Bindings[MutableSetIndex(enabled)];
-
-    internal static ShellValue Flags(ShellOption enabled) => SetProjections.Flags[MutableSetIndex(enabled)];
-
-    internal static ShellValue InspectSetOptions(ShellOption enabled, bool listing)
-    {
-        var inspection = SetInspections.Values[MutableSetIndex(enabled)];
-        return listing ? inspection.Listing : inspection.Commands;
+        if (flag != 0)
+            foreach (var entry in SetOptions)
+                if (entry.ShortFlag == flag)
+                    return entry.Option;
+        return ShellOption.None;
     }
+
+    internal static ShellValue SetBinding(ShellOption enabled) =>
+        ReadProjection(ref _setBindings, enabled, ProjectionKind.Binding);
+
+    internal static ShellValue Flags(ShellOption enabled) =>
+        ReadProjection(ref _shortFlags, enabled, ProjectionKind.Flags);
+
+    internal static ShellValue InspectSetOptions(ShellOption enabled, bool listing) => listing
+        ? ReadProjection(ref _setListings, enabled, ProjectionKind.Listing)
+        : ReadProjection(ref _setCommands, enabled, ProjectionKind.Commands);
 
     internal static ShellOption SelectBashFlags(ShellOption enabled) => enabled & BashMask;
 
@@ -138,40 +126,88 @@ internal static class ShellOptions
         return enabled;
     }
 
-    private static class SetProjections
-    {
-        internal static readonly ShellValue[] Bindings = Array.ConvertAll(SetStates,
-            static enabled => Format(SetOptions, Fixed | enabled, memory: null, out _));
+    private enum ProjectionKind { Binding, Flags, Listing, Commands }
+    private sealed record Projection(ShellValue Value);
+    private const int ProjectionCapacity = 16;
+    private static Projection?[]? _setBindings, _shortFlags, _setListings, _setCommands;
 
-        // Keep the fixed spellings here so the general byte cache starts on its first ordinary use.
-        internal static readonly ShellValue[] Flags =
-        [
-            ShellValue.Empty, ShellValue.FromText("e"), ShellValue.FromText("f"), ShellValue.FromText("ef"),
-            ShellValue.FromText("B"), ShellValue.FromText("eB"), ShellValue.FromText("fB"), ShellValue.FromText("efB"),
-            ShellValue.FromText("u"), ShellValue.FromText("eu"), ShellValue.FromText("fu"), ShellValue.FromText("efu"),
-            ShellValue.FromText("uB"), ShellValue.FromText("euB"), ShellValue.FromText("fuB"), ShellValue.FromText("efuB")
-        ];
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ShellValue ReadProjection(ref Projection?[]? slots, ShellOption enabled, ProjectionKind kind)
+    {
+        enabled &= MutableSet;
+        var index = (int)enabled;
+        var cache = Volatile.Read(ref slots);
+        if (cache != null && (uint)index < ProjectionCapacity && Volatile.Read(ref cache[index]) is { } found)
+            return found.Value;
+        return PublishProjection(ref slots, cache, enabled, kind);
     }
 
-    private static class SetInspections
+    private static ShellValue PublishProjection(ref Projection?[]? slots, Projection?[]? cache,
+        ShellOption enabled, ProjectionKind kind)
     {
-        internal static readonly (ShellValue Listing, ShellValue Commands)[] Values =
-            Array.ConvertAll(SetStates, Create);
-
-        private static (ShellValue Listing, ShellValue Commands) Create(ShellOption enabled)
+        var index = (int)enabled;
+        // Any additional bits outside the fixed cache use the same formatter on demand.
+        if ((uint)index >= ProjectionCapacity)
+            return RenderProjection(enabled, kind);
+        if (cache == null)
         {
-            var listing = new StringBuilder();
-            var commands = new StringBuilder();
-            foreach (var entry in SetOptions)
-            {
-                if ((entry.Option & MutableSet) == 0)
-                    continue;
-                var active = (enabled & entry.Option) != 0;
-                var name = entry.Name.ToUtf8String();
-                listing.Append(name).Append(active ? "\ton\n" : "\toff\n");
-                commands.Append(active ? "set -o " : "set +o ").Append(name).Append('\n');
-            }
-            return (ShellValue.FromText(listing.ToString()), ShellValue.FromText(commands.ToString()));
+            cache = new Projection?[ProjectionCapacity];
+            cache = Interlocked.CompareExchange(ref slots, cache, null) ?? cache;
+        }
+        ref var slot = ref cache[index];
+        var found = Volatile.Read(ref slot);
+        if (found != null)
+            return found.Value;
+        var candidate = new Projection(RenderProjection(enabled, kind));
+        return (Interlocked.CompareExchange(ref slot, candidate, null) ?? candidate).Value;
+    }
+
+    private static ShellValue RenderProjection(ShellOption enabled, ProjectionKind kind) => kind switch
+    {
+        ProjectionKind.Binding => Format(SetOptions, Fixed | enabled, memory: null, out _),
+        ProjectionKind.Flags => FormatShortFlags(enabled),
+        _ => FormatInspection(enabled, listing: kind == ProjectionKind.Listing)
+    };
+
+    private static ShellValue FormatShortFlags(ShellOption enabled)
+    {
+        Span<byte> flags = stackalloc byte[ShortSet.Order.Length];
+        var count = 0;
+        foreach (var flag in ShortSet.Order)
+            if ((enabled & FindShortSetOption(flag)) != 0)
+                flags[count++] = flag;
+        // Keep option reporting independent of the general single-byte value cache.
+        return count == 0 ? ShellValue.Empty : ShellValue.FromBytes(flags[..count].ToArray());
+    }
+
+    private static ShellValue FormatInspection(ShellOption enabled, bool listing)
+    {
+        var length = 0;
+        const int commandDecorationBytes = 7 + 1;
+        foreach (var entry in SetOptions)
+            if ((entry.Option & MutableSet) != 0)
+                length += entry.Name.Bytes.Length + (listing ? ListingEnd(enabled, entry.Option).Length : commandDecorationBytes);
+
+        var bytes = new byte[length];
+        var remaining = bytes.AsSpan();
+        foreach (var entry in SetOptions)
+        {
+            if ((entry.Option & MutableSet) == 0)
+                continue;
+            if (!listing)
+                remaining = Copy((enabled & entry.Option) != 0 ? "set -o "u8 : "set +o "u8, remaining);
+            remaining = Copy(entry.Name.Bytes.Span, remaining);
+            remaining = Copy(listing ? ListingEnd(enabled, entry.Option) : "\n"u8, remaining);
+        }
+        return ShellValue.FromBytes(bytes);
+
+        static ReadOnlySpan<byte> ListingEnd(ShellOption flags, ShellOption option) =>
+            (flags & option) != 0 ? "\ton\n"u8 : "\toff\n"u8;
+
+        static Span<byte> Copy(ReadOnlySpan<byte> source, Span<byte> destination)
+        {
+            source.CopyTo(destination);
+            return destination[source.Length..];
         }
     }
 
@@ -210,10 +246,25 @@ internal static class ShellOptions
         return ShellValue.FromBytes(bytes);
     }
 
-    private static ShellOption CollectBashFlags()
+    private static (byte[] Order, SearchValues<byte> Flags) BuildShortSet()
+    {
+        Span<byte> flags = stackalloc byte[SetOptions.Length];
+        var count = 0;
+        // Swap the ASCII case bits while sorting to put lowercase flags first.
+        foreach (var entry in SetOptions)
+            if (entry.ShortFlag != 0)
+                flags[count++] = (byte)(entry.ShortFlag ^ 0x20);
+        var order = flags[..count];
+        order.Sort();
+        for (var index = 0; index < order.Length; index++)
+            order[index] ^= 0x20;
+        return (order.ToArray(), SearchValues.Create(order));
+    }
+
+    private static ShellOption CollectFlags(Entry[] entries)
     {
         var options = ShellOption.None;
-        foreach (var entry in BashOptions)
+        foreach (var entry in entries)
             options |= entry.Option;
         return options;
     }
