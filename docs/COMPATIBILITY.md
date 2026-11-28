@@ -936,6 +936,19 @@ the reached command unit. With errexit off, the surrounding script reader
 can resume with status 1. The pathname options persist across a function
 return, including after `local -`.
 
+`GLOBIGNORE` filters the full paths returned by pathname expansion before
+the no-match policy runs. Its colon-delimited shell patterns match the
+published spelling, including slashes, and use `nocaseglob` when enabled.
+A nonempty assignment enables `dotglob` and excludes returned paths whose
+final component is `.` or `..`. Assigning an empty value clears the filter
+and preserves the option. Unsetting the binding clears the filter and
+disables `dotglob`. Function and loaded-reader prefixes apply the filter
+after caller operands are expanded, and restoration reapplies the caller
+binding. A fresh child imports the variable value with filtering inactive.
+An assignment in that child activates the filter. `mapfile` and `read -a`
+can update array cells while the active filter retains the last assignment
+value.
+
 `nocaseglob` folds ASCII letters in wildcard pathname components. Fixed
 path components keep exact spelling and each returned wildcard match keeps
 the entry's spelling. `nocasematch` folds ASCII letters in `case`,

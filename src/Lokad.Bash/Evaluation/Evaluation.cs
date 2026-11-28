@@ -31,10 +31,11 @@ public sealed partial class Evaluation : IFileTester
     private EvaluationState _state;
     // In-process subshells borrow parent maps while their state is installed.
     private long _savedDescriptorMemoryBytes;
-    private long _savedDirectoryStackBytes;
+    private long _savedShellStateBytes;
 
     internal long RetainedDescriptorMemoryBytes => checked(_savedDescriptorMemoryBytes + _state.RetainedDescriptorMemoryBytes);
-    internal long RetainedDirectoryStackBytes => checked(_savedDirectoryStackBytes + _state.RetainedDirectoryStackBytes);
+    internal long RetainedShellStateBytes =>
+        checked(_savedShellStateBytes + _state.RetainedDirectoryStackBytes + _state.RetainedGlobIgnoreBytes);
     /// <summary> Holds the active variable state; temporarily replaced while evaluating subshells. </summary>
     private Variables _vars;
     /// <summary> Stores the base STDIN descriptor for command invocations. </summary>
@@ -242,7 +243,7 @@ public sealed partial class Evaluation : IFileTester
         _rootFlowHandling = rootFlowHandling;
         _borrowedDescriptors = descriptorSetup.BorrowedDescriptors;
         Memory = new EvaluationMemory(memoryBudget);
-        _state.SetDirectoryListingMemory(Memory);
+        _state.SetShellMemory(Memory);
     }
 
     /// <summary> Gets evaluation options. </summary>
@@ -894,15 +895,15 @@ public sealed partial class Evaluation : IFileTester
         var inheritedExitBindings = exitBoundary.KeepsReachedBindings ? null
             : parentState.CaptureInheritedExitBindings(scope.PipelineExitReader.RedirectionDepth, Memory);
         var childState = parentState.CloneForSubshell(Memory, inheritedExitBindings);
-        childState.SetDirectoryListingMemory(Memory);
+        childState.SetShellMemory(Memory);
         childVars.RebindShellState(childState);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
         var savedDescriptorBytes = parentState.RetainedDescriptorMemoryBytes;
-        var savedDirectoryStackBytes = parentState.RetainedDirectoryStackBytes;
+        var savedShellStateBytes = checked(parentState.RetainedDirectoryStackBytes + parentState.RetainedGlobIgnoreBytes);
         _savedDescriptorMemoryBytes = checked(_savedDescriptorMemoryBytes + savedDescriptorBytes);
-        _savedDirectoryStackBytes = checked(_savedDirectoryStackBytes + savedDirectoryStackBytes);
+        _savedShellStateBytes = checked(_savedShellStateBytes + savedShellStateBytes);
         _state = childState;
         _vars = childVars;
         _subshellBorrowedDescriptorScopes.Push(borrowedDescriptors);
@@ -966,7 +967,7 @@ public sealed partial class Evaluation : IFileTester
                 childState.ReleaseFunctions();
                 _state = parentState;
                 _savedDescriptorMemoryBytes -= savedDescriptorBytes;
-                _savedDirectoryStackBytes -= savedDirectoryStackBytes;
+                _savedShellStateBytes -= savedShellStateBytes;
                 _vars = parentVars;
                 _ = _subshellBorrowedDescriptorScopes.Pop();
             }
@@ -1778,7 +1779,10 @@ public sealed partial class Evaluation : IFileTester
                     : new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames,
                         _state.SuppressTemporaryLookup, Memory, _cancellationToken);
                 if (bindings != null)
+                {
+                    bindings.ActivateGlobIgnorePrefix();
                     commandVars = builtinScope.Variables;
+                }
 
                 var enclosingFunction = builtinScope.Context.FunctionContext;
                 using var scriptFunction = enclosingFunction != null && bindings != null
@@ -1936,6 +1940,7 @@ public sealed partial class Evaluation : IFileTester
                 using var bindings = prefixNames == null ? null
                     : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames,
                         _state.SuppressTemporaryLookup, Memory, _cancellationToken);
+                bindings?.ActivateGlobIgnorePrefix();
                 commandResult = await RunExitTrapAsync(scope, EvaluationResult.Exit(commandResult.ExitCode)).ConfigureAwait(false);
             }
             return CompleteCommandResult(commandResult, executable.Completion, commandInvoked: true);
@@ -3387,7 +3392,10 @@ public sealed partial class Evaluation : IFileTester
                     var hasReferenceValue = (options.Nameref || initializingReference) && operand.Value != null;
                     var localOperand = new VariableOperand(
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
-                        reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
+                        reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty)
+                    {
+                        HasDeferredInitializer = operand.Value.HasValue && !hasReferenceValue
+                    };
                     var checkInheritedReadonly = !existingTargetLocal && inheritLocals
                         && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear);
                     var inheritedReadonly = checkInheritedReadonly && targetVars.IsReadonlyBinding(localDeclarationTarget);
@@ -5728,6 +5736,9 @@ public sealed partial class Evaluation : IFileTester
     {
         var skipUnmatched = _state.HasOption(ShellOption.Nullglob);
         var rejectUnmatched = _state.HasOption(ShellOption.Failglob);
+        var ignored = _state.GlobIgnore;
+        using var ignoreMemory = ignored.IsEmpty ? null : new MemoryCapacity(Memory.Budget, 0);
+        GlobIgnorePatterns? ignorePatterns = null;
         var count = expanded.Count;
         if (count > 1 && !skipUnmatched && !rejectUnmatched)
             Memory.PrepareListCapacity(backingOwner, results, count);
@@ -5753,28 +5764,49 @@ public sealed partial class Evaluation : IFileTester
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
                 globMemory, _cancellationToken, _state.EnabledOptions);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
-            if (matches.Count == 0)
+            var previousCount = results.Count;
+            if (matches.Count != 0)
             {
-                if (rejectUnmatched)
-                {
-                    await ReportUnitExpansionFailureAsync([ShellValue.FromText("no match")], [pattern.Original], scope,
-                        ExpansionFailureKind.PathnameNoMatch, GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
-                    return false;
-                }
-                if (!skipUnmatched)
-                {
-                    Memory.PrepareListCapacity(backingOwner, results, 1);
-                    results.Add(createItem(pattern.Original));
-                }
-                continue;
+                if (ignoreMemory == null)
+                    Memory.PrepareListCapacity(backingOwner, results, matches.Count);
+                else
+                    ignorePatterns ??= new GlobIgnorePatterns(ignored, _state.HasOption(ShellOption.NoCaseGlob),
+                        Memory, ignoreMemory, _cancellationToken);
             }
-            Memory.PrepareListCapacity(backingOwner, results, matches.Count);
+
             foreach (var match in matches)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
+                if (ignorePatterns != null && GlobIgnorePatterns.IsDotEntry(match))
+                    continue;
                 // Glob paths are UTF-16; reserve their UTF-8 copies before building argument values.
-                Memory.Charge(checked(256L + 4L * (Encoding.UTF8.GetByteCount(match))));
-                results.Add(createItem(ShellValue.FromText(match)));
+                var valueStart = Memory.Workspace.Bytes;
+                Memory.Charge(checked(256L + 4L * Encoding.UTF8.GetByteCount(match)));
+                var value = ShellValue.FromText(match);
+                if (ignorePatterns != null)
+                {
+                    if (ignorePatterns.Matches(value, _cancellationToken))
+                    {
+                        Memory.Workspace.Resize(valueStart);
+                        Memory.Workspace.TrimExcess();
+                        continue;
+                    }
+                    Memory.PrepareListCapacity(backingOwner, results, 1);
+                }
+                results.Add(createItem(value));
+            }
+            if (results.Count != previousCount)
+                continue;
+            if (rejectUnmatched)
+            {
+                await ReportUnitExpansionFailureAsync([ShellValue.FromText("no match")], [pattern.Original], scope,
+                    ExpansionFailureKind.PathnameNoMatch, GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
+                return false;
+            }
+            if (!skipUnmatched)
+            {
+                Memory.PrepareListCapacity(backingOwner, results, 1);
+                results.Add(createItem(pattern.Original));
             }
         }
 
@@ -5803,6 +5835,8 @@ public sealed partial class Evaluation : IFileTester
     {
         if (name == ShellOptions.BashOptionsName || name == ShellOptions.SetOptionsName)
             _state.EnabledOptions |= ShellOptions.ParseImported(value.Bytes.Span, setOptions: name == ShellOptions.SetOptionsName);
+        else if (name == global::Lokad.Bash.Evaluation.Variables.GlobIgnoreName)
+            _vars.ImportGlobIgnore(value);
         else
         {
             _vars.KeepImportedFunctionName(name);

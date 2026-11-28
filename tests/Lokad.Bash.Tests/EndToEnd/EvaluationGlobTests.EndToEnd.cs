@@ -7,6 +7,100 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationGlobTestsEndToEnd
 {
     [Fact]
+    public async Task GlobIgnoreFiltersFinalPathSpellingsBeforeApplyingNoMatchPolicy()
+    {
+        var host = EndToEndHarness.BuildTree(["/dir", "/dir/sub"],
+            [("/dir/sub/a.txt", ""), ("/dir/visible.txt", ""), ("/dir/.hidden.txt", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            GLOBIGNORE='dir/*'
+            printf 'fallback:<%s>\n' dir/*/*.txt
+            shopt -s nullglob
+            set -- dir/*/*.txt
+            printf 'null:%s\n' "$#"
+            GLOBIGNORE='dir/sub/a.txt'
+            printf 'prefix:<%s>\n' dir//sub/*.txt
+            shopt -s failglob
+            printf wrong dir/*/*.txt; printf skipped
+            printf 'status:%s\n' "$?"
+            """, tree: host);
+
+        Assert.Equal("fallback:<dir/*/*.txt>\nnull:0\nprefix:<dir//sub/a.txt>\nstatus:1\n", result.StdOut);
+        Assert.Equal("line 9: no match: dir/*/*.txt\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreFollowsFunctionPrefixesAndEmptyLocalAssignments()
+    {
+        var host = EndToEndHarness.BuildTree([("/.hidden", ""), ("/skip", ""), ("/visible", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            GLOBIGNORE=skip
+            shopt -u dotglob
+            f() {
+                printf 'prefix:<%s>\n' *
+                local GLOBIGNORE=''
+                printf 'empty:<%s>\n' *
+            }
+            GLOBIGNORE=visible f
+            printf 'restored:<%s>\n' *
+            unset GLOBIGNORE
+            printf 'unset:<%s>\n' *
+            """, tree: host);
+
+        Assert.Equal("prefix:<.hidden>\nprefix:<skip>\nempty:<.hidden>\nempty:<skip>\nempty:<visible>\n"
+            + "restored:<.hidden>\nrestored:<visible>\nunset:<skip>\nunset:<visible>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreRetainsTheSelectedNamerefValueUntilTheBindingChanges()
+    {
+        var host = EndToEndHarness.BuildTree([("/.hidden", ""), ("/skip", ""), ("/visible", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            pattern=skip
+            declare -n GLOBIGNORE=pattern
+            pattern=visible
+            printf 'cached:<%s>\n' *
+            unset -n GLOBIGNORE
+            printf 'unset:<%s>\n' *
+            """, tree: host);
+
+        Assert.Equal("cached:<.hidden>\ncached:<visible>\nunset:<skip>\nunset:<visible>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreArrayInputLeavesTheFilterUntilAnAssignmentOrUnset()
+    {
+        var host = EndToEndHarness.BuildTree([("/.hidden", ""), ("/skip", ""), ("/visible", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            read -r GLOBIGNORE <<'ROW'
+            skip
+            ROW
+            mapfile -t GLOBIGNORE <<'ROWS'
+            visible
+            other
+            ROWS
+            printf 'mapfile:<%s>\n' *
+            GLOBIGNORE[1]=replacement
+            printf 'assignment:<%s>\n' *
+            unset 'GLOBIGNORE[0]'
+            printf 'unset:<%s>\n' *
+            read -a GLOBIGNORE <<'FIELDS'
+            skip other
+            FIELDS
+            printf 'read-array:<%s>\n' *
+            """, tree: host);
+
+        Assert.Equal("mapfile:<.hidden>\nmapfile:<visible>\nassignment:<.hidden>\nassignment:<skip>\n"
+            + "unset:<skip>\nunset:<visible>\nread-array:<skip>\nread-array:<visible>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task ExplicitDotWildcardsUseSuccessfulListingsAndKeepLookupSpelling()
     {
         var host = EndToEndHarness.BuildTree(["/dir", "/dir/.hidden", "/empty"],

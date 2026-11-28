@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `GLOBIGNORE` filtering and its `dotglob` transitions.
+
 - Support `globskipdots` and leading `+O globskipdots` in hosted launches.
 
 - Support `nocaseglob` for wildcard pathname components and `nocasematch`

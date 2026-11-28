@@ -204,22 +204,40 @@ public static class TextGlobMatcher
 
         public bool Matches(ReadOnlySpan<char> name, CancellationToken cancellationToken)
         {
-            var input = new PatternInput(new GlobInput(pattern.Span, scalarCharacters: true), new GlobMaskSpan(mask.Span),
-                default, PatternTraversal.Forward, memory)
-            {
-                Brackets = _brackets,
-                RepeatedMatches = true,
-                IgnoreAsciiCase = ignoreAsciiCase
-            };
-            try
-            {
-                return MatchCore(ref input, new GlobInput(name, scalarCharacters: true), requireEnd: true,
-                    shortestPrefix: false, cancellationToken, out _, out _) == GlobMatchResult.Match;
-            }
-            finally { _brackets = input.Brackets; }
+            return MatchRepeated(new GlobInput(pattern.Span, scalarCharacters: true), new GlobMaskSpan(mask.Span),
+                new GlobInput(name, scalarCharacters: true), memory, ignoreAsciiCase, ref _brackets, cancellationToken);
         }
 
         public void Dispose() => _brackets.Release(memory);
+    }
+
+    /// <summary>Reuses bracket decisions across valid UTF-8 subjects owned by one pathname expansion.</summary>
+    internal struct Utf8PatternMatcher(
+        ReadOnlyMemory<byte> pattern, GlobMask mask, MemoryCapacity memory, bool ignoreAsciiCase)
+    {
+        private readonly bool _byteCharacters = !System.Text.Unicode.Utf8.IsValid(pattern.Span);
+        private PatternBrackets _brackets;
+
+        public bool Matches(ReadOnlySpan<byte> subject, CancellationToken cancellationToken) =>
+            MatchRepeated(new GlobInput(pattern.Span, _byteCharacters, reverse: false), mask.AsSpan(),
+                new GlobInput(subject, _byteCharacters, reverse: false), memory, ignoreAsciiCase, ref _brackets, cancellationToken);
+    }
+
+    private static bool MatchRepeated(GlobInput pattern, GlobMaskSpan mask, GlobInput text, MemoryCapacity memory,
+        bool ignoreAsciiCase, ref PatternBrackets brackets, CancellationToken cancellationToken)
+    {
+        var input = new PatternInput(pattern, mask, default, PatternTraversal.Forward, memory)
+        {
+            Brackets = brackets,
+            RepeatedMatches = true,
+            IgnoreAsciiCase = ignoreAsciiCase
+        };
+        try
+        {
+            return MatchCore(ref input, text, requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _)
+                == GlobMatchResult.Match;
+        }
+        finally { brackets = input.Brackets; }
     }
 
     private static GlobMatchResult Match(PatternInput pattern, GlobInput text, bool requireEnd,

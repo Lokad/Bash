@@ -131,7 +131,7 @@ internal sealed class EvaluationMemory
         var savedBytes = scope.Context.FunctionContext?.Locals.SavedMemoryTracker?.Bytes ?? 0;
         return checked(scope.Variables.EstimatedMemoryBytes + scope.Effects.RetainedTrapMemoryBytes
             + scope.Effects.RetainedFunctionMemoryBytes + scope.Effects.RetainedDescriptorMemoryBytes
-            + scope.Effects.RetainedDirectoryStackBytes + savedBytes);
+            + scope.Effects.RetainedShellStateBytes + savedBytes);
     }
 
     // Active scopes read this total at command boundaries. Frames enter and leave in stack order,

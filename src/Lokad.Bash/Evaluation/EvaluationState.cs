@@ -278,7 +278,7 @@ internal sealed class EvaluationState
     private readonly List<DirectoryStackEntry> _directoryStack;
     private long _ownedDirectoryPathBytes;
     private const int ResolvedPathValueOverheadBytes = 64;
-    private EvaluationMemory? _directoryListingMemory;
+    private EvaluationMemory? _shellMemory;
     private DirectoryStackListing? _directoryListing;
     private int _directoryListingChangedFrom = int.MaxValue;
     private HashSet<int>? _directoryListingChangedSlots;
@@ -406,6 +406,33 @@ internal sealed class EvaluationState
 
     internal void SetOption(ShellOption option, bool enabled) =>
         EnabledOptions = enabled ? EnabledOptions | option : EnabledOptions & ~option;
+
+    internal ShellValue GlobIgnore { get; private set; }
+
+    internal long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore);
+
+    internal void RefreshGlobIgnore(ShellValue? selected)
+    {
+        var value = selected.GetValueOrDefault();
+        if (!GlobIgnore.Bytes.Equals(value.Bytes))
+        {
+            if (!value.IsEmpty)
+            {
+                var bytes = Variables.EstimateValueBytes(value);
+                if (value.TryGetCompactArrayCapacity(out _))
+                    _shellMemory?.PrepareRetainedStorage(Math.Max(0, bytes - RetainedGlobIgnoreBytes));
+                else
+                {
+                    _shellMemory?.PrepareRetainedStorage(bytes);
+                    value = ShellValue.FromBytes(value.Bytes.ToArray());
+                }
+            }
+            GlobIgnore = value;
+        }
+        if (!selected.HasValue || !value.IsEmpty)
+            SetOption(ShellOption.Dotglob, !value.IsEmpty);
+    }
+
     internal bool UsesCommandStringExpansionExit { get; set; }
     internal LaunchEnvironment CommandLaunchEnvironment { get; private set; }
     internal enum LaunchEnvironment { Ordinary, Pipeline, Parenthesized }
@@ -433,7 +460,7 @@ internal sealed class EvaluationState
     private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
     private int DirectoryStackSlot(int index) => _directoryStack.Count - 1 - index;
 
-    internal void SetDirectoryListingMemory(EvaluationMemory memory) => _directoryListingMemory = memory;
+    internal void SetShellMemory(EvaluationMemory memory) => _shellMemory = memory;
 
     /// <summary>Refreshes only the changed slots of the listing projection.</summary>
     internal DirectoryStackListing ReadDirectoryStackListing(DirectoryStackListing? previousRead)
@@ -451,7 +478,7 @@ internal sealed class EvaluationState
         ImmutableList<ShellValue> values;
         if (shared == 0 || _directoryListing == null)
         {
-            _directoryListingMemory?.Charge(128L + 96L * count);
+            _shellMemory?.Charge(128L + 96L * count);
             values = ImmutableList.CreateRange(ValuesFromTop(0));
         }
         else
@@ -461,13 +488,13 @@ internal sealed class EvaluationState
             var tailChanged = shared < count || shared < old.Count;
             var depth = BitOperations.Log2((uint)Math.Max(count, old.Count)) + 1;
             var paths = (long)depth * (dirty + (tailChanged ? 2L : 0L)) * 3;
-            _directoryListingMemory?.Charge(128L + 96L * (count - shared)
+            _shellMemory?.Charge(128L + 96L * (count - shared)
                 + 64L * Math.Min(paths, (long)count + old.Count));
             var builder = old.ToBuilder();
             if (_directoryListingChangedSlots is { Count: > 0 } slots)
                 foreach (var slot in slots)
                 {
-                    _directoryListingMemory?.CancellationToken.ThrowIfCancellationRequested();
+                    _shellMemory?.CancellationToken.ThrowIfCancellationRequested();
                     if (slot < shared)
                         builder[old.Count - 1 - slot] = _directoryStack[slot].Value;
                 }
@@ -494,14 +521,14 @@ internal sealed class EvaluationState
             var bindingIncrease = next.EstimatedMemoryBytes - (previousRead?.EstimatedMemoryBytes ?? 0);
             var additional = Math.Max(0, stateIncrease) + Math.Max(0, bindingIncrease);
             if (additional != 0)
-                _directoryListingMemory?.PrepareRetainedStorage(additional);
+                _shellMemory?.PrepareRetainedStorage(additional);
         }
 
         IEnumerable<ShellValue> ValuesFromTop(int firstSharedSlot)
         {
             for (var slot = _directoryStack.Count - 1; slot >= firstSharedSlot; slot--)
             {
-                _directoryListingMemory?.CancellationToken.ThrowIfCancellationRequested();
+                _shellMemory?.CancellationToken.ThrowIfCancellationRequested();
                 yield return _directoryStack[slot].Value;
             }
         }
@@ -525,7 +552,7 @@ internal sealed class EvaluationState
         if (_directoryListing == null || slot >= _directoryListingChangedFrom)
             return;
         _directoryListingChangedSlots ??= [];
-        _directoryListingMemory?.Workspace.PrepareSetCapacity(_directoryListingChangedSlots, slot, bytesPerEntry: 24);
+        _shellMemory?.Workspace.PrepareSetCapacity(_directoryListingChangedSlots, slot, bytesPerEntry: 24);
         _directoryListingChangedSlots.Add(slot);
     }
 
@@ -818,6 +845,7 @@ internal sealed class EvaluationState
             FunctionBraceLine = FunctionBraceLine,
             EnabledOptions = kind == ShellForkKind.CommandSubstitution && !InheritErrexit
                 ? EnabledOptions & ~ShellOption.Errexit : EnabledOptions,
+            GlobIgnore = GlobIgnore,
             UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,

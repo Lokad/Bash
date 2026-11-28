@@ -69,6 +69,23 @@ public sealed class ChildShellLaunchTests
     }
 
     [Fact]
+    public async Task ImportedGlobIgnoreRemainsInactiveUntilAssigned()
+    {
+        var host = EndToEndHarness.BuildTree([("/.hidden.txt", ""), ("/visible.txt", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            export GLOBIGNORE=visible.txt
+            bash -c 'printf "value:%s\n" "$GLOBIGNORE"
+                printf "before:<%s>\n" *.txt
+                GLOBIGNORE="$GLOBIGNORE"
+                printf "after:<%s>\n" *.txt'
+            """, tree: host);
+
+        Assert.Equal("value:visible.txt\nbefore:<visible.txt>\nafter:<.hidden.txt>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task LeadingPlusOCanDisableAnEnabledDefaultBeforeImport()
     {
         var result = await EvaluationTestHelper.RunAsync("""

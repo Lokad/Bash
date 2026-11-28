@@ -47,6 +47,7 @@ public sealed partial class Variables
     internal const int BindingNameSelectionBytes = 4 * BindingNameSetEntryBytes;
     private const int PositionalEntryBytes = 32;
     internal static readonly BindingName LastArgumentName = "_";
+    internal static readonly BindingName GlobIgnoreName = "GLOBIGNORE";
     private static readonly BindingName LineNumberName = "LINENO";
     private static readonly BindingName ArgumentZeroName = "BASH_ARGV0";
     private static readonly BindingName DirectoryStackName = "DIRSTACK";
@@ -68,6 +69,7 @@ public sealed partial class Variables
     private long _bindingBytes;
     private LocalBindings? _savedLocalBindings;
     private EvaluationState? _shellState;
+    private bool _suppressGlobIgnoreRefresh;
     private EvaluationState? VisibleShellState => _shellState ?? _commandSource?.Variables.VisibleShellState;
 
     // Account bindings as a coarse owner. Shared values can be counted twice; no object identities
@@ -144,6 +146,40 @@ public sealed partial class Variables
     {
         _shellState = state;
         _directoryStack?.RebindDirectoryStack(state);
+    }
+
+    /// <summary>Loads the exported value through startup without activating pathname filtering.</summary>
+    internal void ImportGlobIgnore(ShellValue value)
+    {
+        var attributes = GetAssignmentAttributes(GlobIgnoreName) & ~BindingAttributes.ArrayNameref;
+        StoreBinding(GlobIgnoreName, new ScalarSlot(value), attributes);
+    }
+
+    private void RefreshGlobIgnore(BindingName name)
+    {
+        // Prepared prefixes and saved slots are detached from the shell's effective filter.
+        if (name == GlobIgnoreName && !_suppressGlobIgnoreRefresh && _shellState is { } state)
+            state.RefreshGlobIgnore(TryGetExpansionValue(name, out var value) ? value : null);
+    }
+
+    /// <summary>Allows a storage-only update without publishing a special-variable assignment.</summary>
+    internal GlobIgnoreRefreshScope SuppressGlobIgnoreRefresh(BindingName name)
+    {
+        if (name != GlobIgnoreName || _suppressGlobIgnoreRefresh)
+            return default;
+        _suppressGlobIgnoreRefresh = true;
+        return new(this);
+    }
+
+    internal readonly struct GlobIgnoreRefreshScope(Variables owner) : IDisposable
+    {
+        private readonly Variables? _owner = owner;
+
+        public void Dispose()
+        {
+            if (_owner != null)
+                _owner._suppressGlobIgnoreRefresh = false;
+        }
     }
 
     internal bool IsShellOptionBinding(BindingName name) =>
@@ -469,6 +505,11 @@ public sealed partial class Variables
         }
 
         public bool Contains(BindingName name) => _prefixes.Contains(name);
+        internal void ActivateGlobIgnorePrefix()
+        {
+            if (Contains(GlobIgnoreName))
+                _owner.RefreshGlobIgnore(GlobIgnoreName);
+        }
         internal bool RetainsBinding(BindingName name) => _retainedNames.Contains(name);
         internal Variables SavedVariables => _saved;
         internal IReadOnlySet<BindingName> PrefixNames => _prefixes;
@@ -513,6 +554,7 @@ public sealed partial class Variables
                     _owner.CopyBindingFrom(visible, name);
                 _saved.ClearBinding(name);
             }
+            _owner.RefreshGlobIgnore(name);
             if (_ownsPrefixNames)
                 _prefixes.Remove(name);
             else
@@ -680,6 +722,7 @@ public sealed partial class Variables
                 // Pending users have settled. The selected store can give its slot back to the caller.
                 _owner.TransferBindingFrom(retained ? _retained : _saved, name);
                 (retained ? _saved : _retained).ClearBinding(name);
+                _owner.RefreshGlobIgnore(name);
                 // Functions restore their entry cursor. Simple commands keep the reached bundle
                 // and reselect its index from the restored binding.
                 if (_functionGetoptsPrefix is { } getopts && name == getopts.Name)
@@ -1015,6 +1058,8 @@ public sealed partial class Variables
             // eval/source prefix lifetimes are represented by WithTemporaryPrefixes instead.
             if (!ReferenceEquals(active, command))
                 active.CopyBindingFrom(command, name);
+            if (!operand.HasDeferredInitializer && (!ReferenceEquals(active, command) || !ReferenceEquals(updated, command)))
+                active.RefreshGlobIgnore(name);
             if (declarationOwner.IsScriptPrefix(name))
                 declarationOwner._declaredPrefixes.Add(name);
             // An inherited dynamic local can write shell state after its binding is published.
@@ -1141,6 +1186,7 @@ public sealed partial class Variables
                     var isOptind = name.CachedText == "OPTIND";
                     var isOptindReference = isOptind && _owner.HasNamerefAttribute(name);
                     _owner.TransferBindingFrom(_saved, name);
+                    _owner.RefreshGlobIgnore(name);
                     if (isOptindReference)
                         _owner._getoptsCursor = _owner.SelectGetoptsIndex();
                     else if (isOptind)
@@ -1379,10 +1425,11 @@ public sealed partial class Variables
             return;
         if (slot is ScalarSlot scalar)
         {
-            using var memory = TrackBindingMemory(resolved);
-            scalar.Value = value;
+            using (TrackBindingMemory(resolved))
+                scalar.Value = value;
             ResetGetoptsPosition(resolved);
             UpdateFieldSeparatorBinding(resolved);
+            RefreshGlobIgnore(resolved);
         }
         else
             ReplaceValue(resolved, new ScalarSlot(value));
@@ -1442,7 +1489,10 @@ public sealed partial class Variables
         if (flags == UnsetFlags.NamerefOnly)
         {
             if (RemoveValue<NamerefSlot>(name))
+            {
                 SetAttribute(name, BindingAttributes.Exported, false);
+                RefreshGlobIgnore(name);
+            }
             return true;
         }
 
@@ -1469,6 +1519,7 @@ public sealed partial class Variables
                 && entry is IndexedSlot { Value.DirectoryStack: { } stack } && !IsBorrowedBinding(name))
                 stack.ClearDirectoryListingTracking();
             ClearBinding(name);
+            RefreshGlobIgnore(name);
         }
     }
 
@@ -1614,6 +1665,7 @@ public sealed partial class Variables
     {
         StoreBinding(name, new IndexedSlot(array));
         ResetGetoptsPosition(name);
+        RefreshGlobIgnore(name);
     }
 
     /// <summary>Stages an independently admitted element before replacing a hidden binding.</summary>
@@ -1654,8 +1706,9 @@ public sealed partial class Variables
             return false;
         if (IndexedArrays.TryGetValue(resolved, out var array))
         {
-            using var bindingMemory = TrackBindingMemory(resolved);
-            array.SetSequential(origin, values, memory, cancellationToken, prepaidEntryBytes);
+            using (TrackBindingMemory(resolved))
+                array.SetSequential(origin, values, memory, cancellationToken, prepaidEntryBytes);
+            RefreshGlobIgnore(resolved);
         }
         else
         {
@@ -1777,8 +1830,9 @@ public sealed partial class Variables
         }
         if (slot is IndexedSlot indexed)
         {
-            using var change = TrackBindingMemory(resolved);
-            indexed.Value.Set(index, value, memory, prepaidBytes);
+            using (TrackBindingMemory(resolved))
+                indexed.Value.Set(index, value, memory, prepaidBytes);
+            RefreshGlobIgnore(resolved);
         }
         else
         {
@@ -1836,8 +1890,9 @@ public sealed partial class Variables
             value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, assigned, memory);
         if (slot is AssociativeSlot associative)
         {
-            using var change = TrackBindingMemory(resolved);
-            associative.Value.Set(key, value, memory);
+            using (TrackBindingMemory(resolved))
+                associative.Value.Set(key, value, memory);
+            RefreshGlobIgnore(resolved);
         }
         else
         {

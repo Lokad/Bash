@@ -216,6 +216,7 @@ public sealed partial class Variables
         }
         StoreBinding(name, replacement);
         ResetGetoptsPosition(name);
+        RefreshGlobIgnore(name);
     }
 
     private void StoreBinding(BindingName name, VariableSlot slot) => StoreBinding(name, slot, slot.Attributes);
@@ -420,6 +421,7 @@ public sealed partial class Variables
                 indexed.Value.RemoveFunctionName(index, memory);
             else
                 indexed.Value.Remove(index);
+            RefreshGlobIgnore(name);
             return true;
         }
         return false;
@@ -444,6 +446,7 @@ public sealed partial class Variables
         }
         if (name == FieldSeparators.Name)
             RefreshIndexedFieldSeparators();
+        RefreshGlobIgnore(name);
     }
 
     internal BindingAttributes GetAssignmentAttributes(BindingName name) =>
@@ -529,6 +532,7 @@ public sealed partial class Variables
         internal IndexedInputAssignment(Variables owner, BindingName name, bool preserve, bool resetAttributes,
             ShellValue? namerefValue, EvaluationMemory memory)
         {
+            using var suppressGlobIgnore = owner.SuppressGlobIgnoreRefresh(name);
             _owner = owner;
             _name = name;
             owner.TryGetBinding(name, out _previous);
@@ -576,6 +580,7 @@ public sealed partial class Variables
         private bool TryStoreRecord(IndexedArrayIndex index, ShellValue value, EvaluationMemory memory,
             long prepaidBytes, long? savedInputBytes)
         {
+            using var suppressGlobIgnore = _owner.SuppressGlobIgnoreRefresh(_name);
             if (_directoryStack is not { } stack || !_owner.IsDirectoryStackBinding(_name))
                 return _owner.TrySetResolvedArrayElement(_name, index, value, memory, prepaidBytes, savedInputBytes,
                     replaceAssociative: false, initializesArrayNameref: false);

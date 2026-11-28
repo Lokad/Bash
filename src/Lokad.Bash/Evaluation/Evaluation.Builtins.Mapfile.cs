@@ -199,6 +199,7 @@ public sealed partial class Evaluation
             // Publish only after the requested records have been read and admitted.
             if ((usesDirectoryStack || origin.HasValue) && !target.RecreatesBinding)
             {
+                using var suppressGlobIgnore = variables.SuppressGlobIgnoreRefresh(resolved);
                 target.PrepareForPublication();
                 assigned = variables.TryUpdateResolvedIndexedArray(resolved, origin.GetValueOrDefault(), values, target.NamerefValue,
                     Memory, _cancellationToken, prepaidEntryBytes);
@@ -509,6 +510,7 @@ public sealed partial class Evaluation
 
         public bool TryPublish(IndexedArray array)
         {
+            using var suppressGlobIgnore = Owner.SuppressGlobIgnoreRefresh(Name);
             PrepareForPublication();
             return Owner.TryAssignResolvedIndexedArray(Name, array, RecreatesBinding);
         }

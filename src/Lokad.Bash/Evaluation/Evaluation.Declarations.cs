@@ -204,8 +204,10 @@ public sealed partial class Evaluation
                             ? kind == ArrayKind.Associative ? ArrayAssignmentKind.Associative : ArrayAssignmentKind.Indexed
                             : compoundArrayKind;
                         var localReference = literalLocal ? VariableReference.ForName(name) : declaredReference;
+                        var localOperand = new VariableOperand(VariableOperandKind.Name, localReference, ShellValue.Empty)
+                            { HasDeferredInitializer = true };
                         var declarationResult = function.Locals.TryDeclare(scope.Variables, scope.Variables,
-                                new VariableOperand(VariableOperandKind.Name, localReference, ShellValue.Empty), prefixes: null,
+                                localOperand, prefixes: null,
                                 declarationKind, isNameref: false, inherit, caseChange: default, elementAttributes: default,
                                 Memory, function.Enclosing);
                         if (declarationResult != LocalDeclarationResult.Declared)

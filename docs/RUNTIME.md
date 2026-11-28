@@ -318,6 +318,10 @@ contributes no candidates.
 The pathname matcher returns only matched paths. On a miss the expansion
 publisher uses the original byte value for literal fallback, drops the field
 under `nullglob`, or publishes a command-unit error under `failglob`.
+The active `GLOBIGNORE` snapshot follows committed variable transitions.
+Fresh environment imports leave this snapshot empty. Glob publication
+prepares the ignore patterns on demand, shares bracket decisions across
+candidate paths, and refunds candidate bytes when a path is filtered out.
 Case-insensitive pathname and shell-word patterns share the glob traversal.
 Literal parameter replacement folds into scratch once per reached subject
 and uses its original byte offsets for publication. Wildcard matching folds

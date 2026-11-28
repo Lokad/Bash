@@ -13,4 +13,8 @@ internal enum VariableOperandKind
 internal readonly record struct VariableOperand(
     VariableOperandKind Kind,
     VariableReference Reference,
-    ShellValue Value);
+    ShellValue Value)
+{
+    /// <summary>An initializer will write the binding after its declaration is prepared.</summary>
+    internal bool HasDeferredInitializer { get; init; }
+}

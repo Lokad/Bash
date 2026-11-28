@@ -438,7 +438,7 @@ public sealed class CollectionOwnershipTests
         var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
         var budget = new MemoryGovernor(8 * 1024 * 1024);
         var memory = new EvaluationMemory(budget);
-        state.SetDirectoryListingMemory(memory);
+        state.SetShellMemory(memory);
         var originalPath = ShellValue.FromText("original");
         try
         {
