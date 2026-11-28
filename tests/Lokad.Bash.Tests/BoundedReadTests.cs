@@ -60,6 +60,171 @@ public sealed class BoundedReadTests
         Assert.Equal(24, governor.PeakBytes);
     }
 
+    [Fact]
+    public async Task AlreadyCanceledLineReadSkipsTheHostRequest()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var governor = new MemoryGovernor(0);
+        var owner = new DescriptorReadBufferOwner(_ => Assert.Fail("No borrow was needed."), governor);
+        var calls = 0;
+
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            DescriptorReader.ReadLinesAsync(owner, Read, 1, null, cancellation.Token).AsTask());
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(0, calls);
+        Assert.Equal(0, owner.Position);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner _, DescriptorReadRequest __, CancellationToken ___)
+        {
+            calls++;
+            return ValueTask.FromResult(DescriptorReadBuffer.EndOfFile);
+        }
+    }
+
+    [Theory]
+    [InlineData("provider")]
+    [InlineData("destination")]
+    [InlineData("reusable")]
+    [InlineData("custom-delimiter")]
+    public async Task CanceledPendingLineReadReleasesItsBorrowWithoutConsumingBytes(string route)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var governor = new MemoryGovernor(1024);
+        using var providerBudget = governor.CreateScope();
+        using var destinationBudget = governor.CreateScope();
+        using var output = new ByteMemoryBuilder(1, destinationBudget).Append((byte)'x');
+        var pending = new TaskCompletionSource<DescriptorReadBuffer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(consumed.Add, providerBudget);
+        var custom = route == "custom-delimiter";
+        var input = custom ? "first|middle|last"u8.ToArray() : "first\nmiddle\nlast"u8.ToArray();
+        var released = 0;
+        var requests = 0;
+
+        var reading = ReadBatchAsync(cancellation.Token);
+        cancellation.Cancel();
+        var waitingForBorrow = !reading.IsCompleted;
+        pending.SetResult(Borrow());
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reading);
+
+        Assert.True(waitingForBorrow);
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(1, requests);
+        Assert.Equal(1, released);
+        Assert.Equal([0], consumed);
+        Assert.Equal(0, owner.Position);
+        Assert.False(owner.WasRetained);
+        Assert.Equal(1, governor.PeakBytes);
+        Assert.Equal("x"u8.ToArray(), output.ToMemory().ToArray());
+
+        var (content, offsets, eof) = await ReadBatchAsync(CancellationToken.None);
+        var reusable = route == "reusable";
+        var expectedLength = reusable ? 6 : 13;
+        Assert.Equal(input[..expectedLength], content.ToArray());
+        Assert.Equal(reusable ? Array.Empty<int>() : [6], offsets);
+        Assert.False(eof);
+        Assert.Equal([0, expectedLength], consumed);
+        Assert.Equal(expectedLength, owner.Position);
+        Assert.Equal(2, released);
+        output.Dispose();
+        destinationBudget.Dispose();
+        providerBudget.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        async Task<(ReadOnlyMemory<byte> Content, IReadOnlyList<int> Offsets, bool Eof)> ReadBatchAsync(CancellationToken token)
+        {
+            if (custom)
+            {
+                var records = await DescriptorReader.ReadRecordBatchAsync(owner, Read, (byte)'|', 2,
+                    destinationBudget, retainImmutable: true, token);
+                return (records.Content, records.RecordStartOffsets, records.Result.ReachedEoF);
+            }
+
+            var lines = route == "reusable"
+                ? await DescriptorReader.ReadReusableLineAsync(owner, Read, output, token)
+                : await DescriptorReader.ReadLinesAsync(owner, Read, 2, route == "destination" ? destinationBudget : null, token);
+            return (lines.Content, lines.LineStartOffsets, lines.ReachedEoF);
+        }
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner _, DescriptorReadRequest __, CancellationToken token)
+        {
+            requests++;
+            if (token == CancellationToken.None)
+                return ValueTask.FromResult(Borrow());
+            Assert.Equal(cancellation.Token, token);
+            return new ValueTask<DescriptorReadBuffer>(pending.Task);
+        }
+
+        DescriptorReadBuffer Borrow()
+        {
+            var remaining = input.AsMemory((int)owner.Position);
+            var buffer = owner.Borrow(remaining, ByteReadResult.Success(remaining.Length, reachedEoF: true), canRetain: custom);
+            buffer.ReleaseWith(() => released++);
+            return buffer;
+        }
+    }
+
+    [Fact]
+    public async Task CanceledLineLookaheadReleasesTheRefillAndPreservesThePrefix()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var governor = new MemoryGovernor(0);
+        var consumed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(consumed.Add, governor);
+        var pending = new TaskCompletionSource<DescriptorReadBuffer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        var released = 0;
+
+        var reading = DescriptorReader.ReadLinesAsync(owner, Read, 1, null, cancellation.Token).AsTask();
+        cancellation.Cancel();
+        var window = owner.Borrow("first\n"u8.ToArray(), ByteReadResult.Success(6, reachedEoF: true), canRetain: true);
+        window.ReleaseWith(() => released++);
+        pending.SetResult(window);
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reading);
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(2, reads);
+        Assert.Equal([0, 0], consumed);
+        Assert.Equal(0, owner.Position);
+        Assert.Equal(1, released);
+        Assert.False(owner.WasRetained);
+        Assert.Equal(0, governor.PeakBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner source, DescriptorReadRequest request, CancellationToken _)
+        {
+            if (reads++ == 0)
+                return ValueTask.FromResult(source.Borrow("fir"u8.ToArray(),
+                    ByteReadResult.Success(3, reachedEoF: false), canRetain: true));
+            Assert.Equal(4, request.MinimumBytes);
+            return new ValueTask<DescriptorReadBuffer>(pending.Task);
+        }
+    }
+
+    [Fact]
+    public async Task UncanceledLineReadPreservesTheTypedFailureAndReleasesItsBorrow()
+    {
+        var governor = new MemoryGovernor(0);
+        var consumed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(consumed.Add, governor);
+        var error = new OperationError("read failed\n");
+
+        var batch = await DescriptorReader.ReadLinesAsync(owner, Read, 2, governor, CancellationToken.None);
+
+        Assert.Equal(error, batch.Error);
+        Assert.True(batch.IsError);
+        Assert.Empty(batch.Content.ToArray());
+        Assert.Empty(batch.LineStartOffsets);
+        Assert.Equal([0], consumed);
+        Assert.Equal(0, owner.Position);
+        Assert.Equal(0, governor.PeakBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner source, DescriptorReadRequest _, CancellationToken __) =>
+            ValueTask.FromResult(source.Borrow("first\n"u8.ToArray(),
+                ByteReadResult.Failure(6, error, reachedEoF: false), canRetain: false));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

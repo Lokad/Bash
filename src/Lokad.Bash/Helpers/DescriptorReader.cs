@@ -41,6 +41,7 @@ public static class DescriptorReader
 
     /// <summary>Retains up to the line limit and consumes nothing until the batch is ready.
     /// A final unterminated record counts toward the limit when EOF is known.</summary>
+    /// <remarks>Cancellation is checked before requesting a window and before processing the returned bytes.</remarks>
     /// <param name="destinationBudget">Owns copied bytes and line offsets when supplied;
     /// otherwise the descriptor's owner retains the batch.</param>
     /// <param name="cancellationToken">Cancels computation and pending reads.</param>
@@ -59,6 +60,7 @@ public static class DescriptorReader
             retainImmutable, static batch => batch.AsLines(), cancellationToken);
 
     /// <summary>Copies one LF record into caller-owned storage, valid until the next read.</summary>
+    /// <remarks>A canceled acquisition leaves the caller's storage and descriptor position intact.</remarks>
     public static ValueTask<ReadResult> ReadReusableLineAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         ByteMemoryBuilder output, CancellationToken cancellationToken) =>
@@ -174,8 +176,10 @@ public static class DescriptorReader
         (DescriptorReadBufferOwner? Owner, long Offset) position = default;
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var buffer = await read(source, WindowRequest(minimum, position, destinationBudget != null || reusableLine != null),
                 cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var result = buffer.Result;
             if (result.Error is { } error)
                 return project(new DescriptorRecordBatch(default, Array.Empty<int>(),
