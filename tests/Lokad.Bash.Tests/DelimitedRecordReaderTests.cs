@@ -70,6 +70,102 @@ public sealed class DelimitedRecordReaderTests
         Assert.Equal("abcd"u8.ToArray(), remaining.Content.ToArray());
     }
 
+    [Theory]
+    [InlineData(DelimitedRecordStorage.Reusable, false)]
+    [InlineData(DelimitedRecordStorage.Reusable, true)]
+    [InlineData(DelimitedRecordStorage.Retained, false)]
+    [InlineData(DelimitedRecordStorage.Retained, true)]
+    public async Task StopLeavesATerminatedRecordAvailableForRetry(DelimitedRecordStorage storage, bool keepBorrow)
+    {
+        await using var host = new MockFileSystem();
+        host.SetStandardInput("ok|abcd|next");
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            storage, static _ => { }, keepBorrow, CancellationToken.None);
+
+        AssertRecord(await reader.ReadNextAsync(), "ok"u8.ToArray(), hasTerminator: true);
+        Assert.Equal(new DelimitedRecord(default, false) { ExceedsLimit = true },
+            await reader.ReadNextBoundedAsync(2, DelimitedRecordOverflow.Stop));
+        reader.ReleaseBorrow();
+        using (var unread = await host.ReadAsync(FileDescriptor.StdIn, DescriptorReadRequest.UpTo(16), CancellationToken.None))
+            Assert.Equal("abcd|next"u8.ToArray(), unread.Content.ToArray());
+        AssertRecord(await reader.ReadNextBoundedAsync(4, DelimitedRecordOverflow.Stop), "abcd"u8.ToArray(), hasTerminator: true);
+        AssertRecord(await reader.ReadNextAsync(), "next"u8.ToArray(), hasTerminator: false);
+        Assert.Null(await reader.ReadNextAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StopAtEofPreservesAnAdmittedPrefixAndTheUnreadSuffix(bool keepBorrow)
+    {
+        await using var host = new MockFileSystem { MaximumReadWindowBytes = 3 };
+        host.SetStandardInput("abcde");
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            DelimitedRecordStorage.Reusable, static _ => { }, keepBorrow, CancellationToken.None);
+
+        Assert.Equal(new DelimitedRecord(default, false) { ExceedsLimit = true },
+            await reader.ReadNextBoundedAsync(4, DelimitedRecordOverflow.Stop));
+        reader.ReleaseBorrow();
+        using (var unread = await host.ReadAsync(FileDescriptor.StdIn, DescriptorReadRequest.UpTo(3), CancellationToken.None))
+            Assert.Equal("de"u8.ToArray(), unread.Content.ToArray());
+        AssertRecord(await reader.ReadNextBoundedAsync(5, DelimitedRecordOverflow.Stop), "abcde"u8.ToArray(), hasTerminator: false);
+        Assert.Null(await reader.ReadNextAsync());
+    }
+
+    [Theory]
+    [InlineData(DelimitedRecordOverflow.Stop, false)]
+    [InlineData(DelimitedRecordOverflow.Discard, true)]
+    public async Task OversizedInputNeedsNoRecordBacking(DelimitedRecordOverflow overflow, bool hasTerminator)
+    {
+        await using var host = new MockFileSystem { MaximumReadWindowBytes = 3 };
+        host.SetStandardInput("abcdef|");
+        var reservations = new List<long>();
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            DelimitedRecordStorage.Retained, reservations.Add, keepBorrow: false, CancellationToken.None);
+
+        Assert.Equal(new DelimitedRecord(default, hasTerminator) { ExceedsLimit = true },
+            await reader.ReadNextBoundedAsync(2, overflow));
+        if (hasTerminator)
+            Assert.Null(await reader.ReadNextAsync());
+        Assert.Empty(reservations);
+    }
+
+    [Fact]
+    public async Task EmptyInputNeedsNoRecordBacking()
+    {
+        await using var host = new MockFileSystem();
+        host.SetStandardInput("");
+        var reservations = new List<long>();
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            DelimitedRecordStorage.Retained, reservations.Add, keepBorrow: true, CancellationToken.None);
+
+        Assert.Null(await reader.ReadNextAsync());
+        Assert.Null(await reader.ReadNextAsync());
+        Assert.Empty(reservations);
+        Assert.Equal(1, host.ReadCallCount);
+    }
+
+    [Fact]
+    public async Task RefusedRecordBackingPreservesThePendingBytes()
+    {
+        await using var host = new MockFileSystem();
+        host.SetStandardInput("ok|tail");
+        var refuse = true;
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            DelimitedRecordStorage.Retained, _ =>
+            {
+                if (refuse)
+                    throw new MemoryBudgetExceededException();
+            }, keepBorrow: false, CancellationToken.None);
+
+        await Assert.ThrowsAsync<MemoryBudgetExceededException>(async () => await reader.ReadNextAsync());
+        using (var unread = await host.ReadAsync(FileDescriptor.StdIn, DescriptorReadRequest.UpTo(8), CancellationToken.None))
+            Assert.Equal("ok|tail"u8.ToArray(), unread.Content.ToArray());
+        refuse = false;
+        AssertRecord(await reader.ReadNextAsync(), "ok"u8.ToArray(), hasTerminator: true);
+        AssertRecord(await reader.ReadNextAsync(), "tail"u8.ToArray(), hasTerminator: false);
+    }
+
     [Fact]
     public async Task TerminalFailureIsPreservedWhileDrainingBorrowedBytes()
     {

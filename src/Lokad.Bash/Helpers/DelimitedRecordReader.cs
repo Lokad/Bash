@@ -90,6 +90,8 @@ public sealed class DelimitedRecordReader : IDisposable
         ReadNextBoundedAsync(maximumContentBytes, DelimitedRecordOverflow.Discard);
 
     /// <summary>Returns an oversized marker, either after discarding the record or immediately at the limit.</summary>
+    /// <remarks>Stop leaves the fragment that exceeded the limit unread and returns a marker with
+    /// no terminator. The reader keeps any previously admitted prefix for a later read.</remarks>
     public ValueTask<DelimitedRecord?> ReadNextBoundedAsync(int maximumContentBytes, DelimitedRecordOverflow overflow)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -100,59 +102,58 @@ public sealed class DelimitedRecordReader : IDisposable
         {
             try
             {
-                while (true)
+                while (!_reachedEnd)
                 {
-                    if (_reachedEnd)
-                    {
-                        if (_splitRecord == null && !_oversized)
-                            return null;
-                        return CompleteRecord(ReadOnlyMemory<byte>.Empty, hasTerminator: false);
-                    }
-                    if (_readBuffer == null || _bufferWriteOffset == RawReadBufferSize)
-                    {
-                        _reserveMemory(RawReadBufferMemoryBytes);
-                        _readBuffer = new byte[RawReadBufferSize];
-                        _bufferWriteOffset = 0;
-                    }
-                    var destination = _readBuffer.AsMemory(_bufferWriteOffset, RawReadBufferSize - _bufferWriteOffset);
                     if (!_hasBorrow)
                     {
-                        _borrow = await _host.ReadAsync(_inputDescriptor, DescriptorReadRequest.UpTo(destination.Length), _cancellationToken)
+                        var available = _bufferWriteOffset == RawReadBufferSize ? RawReadBufferSize : RawReadBufferSize - _bufferWriteOffset;
+                        _borrow = await _host.ReadAsync(_inputDescriptor, DescriptorReadRequest.UpTo(available), _cancellationToken)
                             .ConfigureAwait(false);
                         _hasBorrow = true;
                     }
                     var bytes = _borrow.Content[_borrowOffset..];
                     if (_borrow.Result.IsError && !_readFailure.IsError)
                         _readFailure = _borrow.Result;
-                    var terminatorOffset = bytes.Span.IndexOf(_terminator);
-                    var consumed = terminatorOffset < 0 ? bytes.Length : terminatorOffset + 1;
-                    bytes[..consumed].CopyTo(destination);
-                    if (_storage == DelimitedRecordStorage.Retained)
-                        _bufferWriteOffset += consumed;
-                    if (consumed == bytes.Length)
+                    var source = bytes.Span;
+                    var terminatorOffset = source.IndexOf(_terminator);
+                    var hasTerminator = terminatorOffset >= 0;
+                    var contentLength = hasTerminator ? terminatorOffset : source.Length;
+                    var consumed = hasTerminator ? contentLength + 1 : contentLength;
+                    var completes = hasTerminator || _borrow.Result.IsError || _borrow.Result.ReachedEoF;
+                    ReadOnlyMemory<byte> content = default;
+                    if (_oversized || contentLength > maximumContentBytes - (_splitRecord?.Length ?? 0))
                     {
-                        _reachedEnd = _borrow.Result.IsError || _borrow.Result.ReachedEoF;
+                        if (overflow == DelimitedRecordOverflow.Stop)
+                            return OversizedRecord(hasTerminator: false);
+                        _oversized = true;
+                        _splitRecord = null;
                     }
-                    var content = destination[..(terminatorOffset < 0 ? consumed : terminatorOffset)];
-                    if (terminatorOffset >= 0)
+                    else if (completes && _splitRecord == null)
                     {
-                        var record = CompleteRecord(content, hasTerminator: true);
-                        Advance(consumed);
-                        return record;
+                        if (consumed != 0)
+                            content = CopyRecord(source[..consumed])[..contentLength];
                     }
-                    if (_reachedEnd && _splitRecord == null && !_oversized)
+                    else
                     {
-                        if (content.IsEmpty)
-                            return null;
-                        var record = CompleteRecord(content, hasTerminator: false);
-                        Advance(consumed);
-                        return record;
+                        AppendSplitRecord(source[..contentLength]);
+                        if (completes && _splitRecord is { } splitRecord)
+                        {
+                            content = splitRecord.ToMemory();
+                            _splitRecord = null;
+                        }
                     }
-                    AppendSplitRecord(content);
-                    if (_oversized && overflow == DelimitedRecordOverflow.Stop)
-                        return CompleteRecord(ReadOnlyMemory<byte>.Empty, hasTerminator: false);
+
                     Advance(consumed);
+                    if (!completes)
+                        continue;
+                    if (_oversized)
+                    {
+                        _oversized = false;
+                        return OversizedRecord(hasTerminator);
+                    }
+                    return hasTerminator || !content.IsEmpty ? new DelimitedRecord(content, hasTerminator) : null;
                 }
+                return null;
             }
             finally
             {
@@ -160,16 +161,25 @@ public sealed class DelimitedRecordReader : IDisposable
                     ReleaseBorrow();
             }
 
-            void AppendSplitRecord(ReadOnlyMemory<byte> content)
+            ReadOnlyMemory<byte> CopyRecord(ReadOnlySpan<byte> content)
             {
-                if (_oversized)
-                    return;
-                if (content.Length > maximumContentBytes - (_splitRecord?.Length ?? 0))
+                if (_readBuffer == null || _bufferWriteOffset == RawReadBufferSize)
                 {
-                    _splitRecord = null;
-                    _oversized = true;
-                    return;
+                    _reserveMemory(RawReadBufferMemoryBytes);
+                    _readBuffer = new byte[RawReadBufferSize];
+                    _bufferWriteOffset = 0;
                 }
+                var destination = _readBuffer.AsMemory(_bufferWriteOffset, content.Length);
+                content.CopyTo(destination.Span);
+                if (_storage == DelimitedRecordStorage.Retained)
+                    _bufferWriteOffset += content.Length;
+                return destination;
+            }
+
+            void AppendSplitRecord(ReadOnlySpan<byte> content)
+            {
+                if (content.IsEmpty)
+                    return;
                 // Geometric growth allocates less than four times the appended payload cumulatively.
                 // Include array/object overhead and reserve before the constructor or any resize.
                 _reserveMemory(4L * content.Length + 64);
@@ -177,22 +187,8 @@ public sealed class DelimitedRecordReader : IDisposable
                 _splitRecord.Append(content);
             }
 
-            DelimitedRecord CompleteRecord(ReadOnlyMemory<byte> content, bool hasTerminator)
-            {
-                if (_oversized || content.Length > maximumContentBytes - (_splitRecord?.Length ?? 0))
-                {
-                    _splitRecord = null;
-                    _oversized = false;
-                    return new DelimitedRecord(ReadOnlyMemory<byte>.Empty, hasTerminator) { ExceedsLimit = true };
-                }
-                if (_splitRecord != null)
-                {
-                    AppendSplitRecord(content);
-                    content = _splitRecord.ToMemory();
-                    _splitRecord = null;
-                }
-                return new DelimitedRecord(content, hasTerminator);
-            }
+            static DelimitedRecord OversizedRecord(bool hasTerminator) =>
+                new(ReadOnlyMemory<byte>.Empty, hasTerminator) { ExceedsLimit = true };
         }
     }
 
@@ -212,7 +208,10 @@ public sealed class DelimitedRecordReader : IDisposable
     {
         _borrowOffset += count;
         if (_borrowOffset == _borrow.Content.Length)
+        {
+            _reachedEnd = _borrow.Result.IsError || _borrow.Result.ReachedEoF;
             ReleaseBorrow();
+        }
     }
 
     /// <summary>The terminal failed read, or default when no failure has occurred.</summary>
@@ -234,6 +233,6 @@ public sealed class DelimitedRecordReader : IDisposable
 /// <summary>A delimiter-free record and whether the input contained its terminator.</summary>
 public readonly record struct DelimitedRecord(ReadOnlyMemory<byte> Content, bool HasTerminator)
 {
-    /// <summary>The reader discarded the contents because they exceeded its byte limit.</summary>
+    /// <summary>The record exceeded the caller's byte limit.</summary>
     public bool ExceedsLimit { get; init; }
 }
