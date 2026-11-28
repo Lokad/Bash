@@ -1106,6 +1106,23 @@ internal static partial class WordExpansion
                     return -1;
                 }
 
+                int NextReplacementMarker(ReadOnlySpan<byte> bytes, int start)
+                {
+                    while (start < bytes.Length)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (bytes[start] is (byte)'&' or (byte)'\\')
+                            return start;
+
+                        var block = bytes.Slice(start, Math.Min(ParameterCharacterBlockBytes, bytes.Length - start));
+                        var index = block.IndexOfAny((byte)'&', (byte)'\\');
+                        if (index >= 0)
+                            return start + index;
+                        start += block.Length;
+                    }
+                    return -1;
+                }
+
                 ReadOnlyMemory<byte> EncodeReplacement()
                 {
                     if (encoded == null)
@@ -1113,11 +1130,11 @@ internal static partial class WordExpansion
                     var bytes = replacement.Value.Bytes.Span;
                     var mask = new GlobMaskSpan(activity.Span);
                     var copiedThrough = 0;
-                    for (var index = syntaxStart; index < bytes.Length; index++)
+                    for (var index = NextReplacementMarker(bytes, syntaxStart); index >= 0;
+                        index = NextReplacementMarker(bytes, index + 1))
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
                         // Preserve quoted escapes in one stream: an earlier unquoted backslash can consume them.
-                        if (bytes[index] is not ((byte)'&' or (byte)'\\') || mask[index] == GlobMask.Active)
+                        if (mask[index] == GlobMask.Active)
                             continue;
                         encoded.Append(bytes[copiedThrough..index]).Append((byte)'\\');
                         copiedThrough = index;
@@ -1222,9 +1239,9 @@ internal static partial class WordExpansion
                         }
                         var insert = (template ??= EncodeReplacement()).Span;
                         var literalStart = 0;
-                        for (var index = syntaxStart; index < insert.Length; index++)
+                        for (var index = NextReplacementMarker(insert, syntaxStart); index >= 0;
+                            index = NextReplacementMarker(insert, index + 1))
                         {
-                            cancellationToken.ThrowIfCancellationRequested();
                             if (insert[index] == (byte)'&')
                             {
                                 Append(insert[literalStart..index]);

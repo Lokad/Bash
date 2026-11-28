@@ -212,6 +212,32 @@ public sealed class ParameterTransformTests
         }
     }
 
+    [Theory]
+    [InlineData(4094, false)]
+    [InlineData(4095, false)]
+    [InlineData(4096, false)]
+    [InlineData(4094, true)]
+    [InlineData(4095, true)]
+    [InlineData(4096, true)]
+    public async Task ReplacementMarkersPreserveLiteralRunsAcrossScanBlocks(int literalLength, bool mixed)
+    {
+        var literal = new string('x', literalLength);
+        var quoted = mixed ? "&" : "";
+        await MeasureFieldsAsync("\"${x//[ab]/$pre\"$part\"$post}\"", variables =>
+        {
+            Assert.True(variables.TrySetScalar("x", ShellValue.FromText("a.b")));
+            Assert.True(variables.TrySetScalar("pre", ShellValue.FromText("&" + literal)));
+            Assert.True(variables.TrySetScalar("part", ShellValue.FromText(quoted)));
+            Assert.True(variables.TrySetScalar("post", ShellValue.FromText(@"\&\\\q&\")));
+        }, words =>
+        {
+            var field = Assert.Single(Assert.Single(words).Segments);
+            Assert.Equal(Replace("a") + "." + Replace("b"), field.Content.ToUtf8String());
+        });
+
+        string Replace(string match) => match + literal + quoted + @"&\\q" + match + "\\";
+    }
+
     [Fact]
     public async Task EscapeDecodingKeepsThePlainByteValue()
     {
