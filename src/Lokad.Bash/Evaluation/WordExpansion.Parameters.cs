@@ -17,6 +17,18 @@ internal enum CaseTransformation { Lowercase, Uppercase, Capitalize }
 internal static partial class WordExpansion
 {
     private const int ParameterCharacterBlockBytes = 4096;
+    private static readonly SearchValues<byte> UnchangedUpperAscii = UnchangedCaseAscii((byte)'a');
+    private static readonly SearchValues<byte> UnchangedLowerAscii = UnchangedCaseAscii((byte)'A');
+
+    private static SearchValues<byte> UnchangedCaseAscii(byte firstChanged)
+    {
+        Span<byte> values = stackalloc byte[128 - 26];
+        var count = 0;
+        for (var value = 0; value < 128; value++)
+            if (value < firstChanged || value >= firstChanged + 26)
+                values[count++] = (byte)value;
+        return SearchValues.Create(values);
+    }
 
     // Array sources keep the selected owner. Some operators consume it after applying operand effects.
     private abstract record ParameterSource
@@ -1735,6 +1747,8 @@ internal static partial class WordExpansion
         MemoryCapacity? scratch, CancellationToken cancellationToken)
     {
         var bytes = value.Bytes.Span;
+        var unchangedAscii = firstOnly || matcher != null ? null
+            : conversion == CaseTransformation.Uppercase ? UnchangedUpperAscii : UnchangedLowerAscii;
         ByteMemoryBuilder? builder = null;
         Span<byte> encoded = stackalloc byte[4];
         var copiedThrough = 0;
@@ -1743,6 +1757,15 @@ internal static partial class WordExpansion
             for (var position = 0; position < bytes.Length;)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // Capitalization handles the first character separately from the lowercase suffix.
+                if (unchangedAscii != null && (position != 0 || conversion != CaseTransformation.Capitalize)
+                    && unchangedAscii.Contains(bytes[position]))
+                {
+                    var width = Math.Min(ParameterCharacterBlockBytes, bytes.Length - position);
+                    var end = bytes.Slice(position, width).IndexOfAnyExcept(unchangedAscii);
+                    position += end < 0 ? width : end;
+                    continue;
+                }
                 var valid = Rune.DecodeFromUtf8(bytes[position..], out var rune, out var length) == OperationStatus.Done;
                 if (!valid)
                     length = 1;

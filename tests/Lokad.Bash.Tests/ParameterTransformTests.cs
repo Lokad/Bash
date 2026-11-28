@@ -49,6 +49,38 @@ public sealed class ParameterTransformTests
         }
     }
 
+    [Theory]
+    [InlineData(true, 4095)]
+    [InlineData(true, 4096)]
+    [InlineData(false, 4097)]
+    public async Task CaseConversionResumesAfterUnchangedAscii(bool uppercase, int asciiLength)
+    {
+        var ascii = new byte[asciiLength];
+        ascii.AsSpan().Fill(uppercase ? (byte)'X' : (byte)'x');
+        byte[] input = [.. ascii, 0xff, .. (uppercase ? "éa"u8 : "KA"u8), .. ascii, (byte)'!'];
+        byte[] expected = [.. ascii, 0xff, .. (uppercase ? "ÉA"u8 : "ka"u8), .. ascii, (byte)'!'];
+        var source = uppercase ? "\"${x@U}\"" : "\"${x@L}\"";
+
+        await MeasureFieldsAsync(source,
+            variables => Assert.True(variables.TrySetScalar("x", ShellValue.FromBytes(input))),
+            words => Assert.Equal(expected, Assert.Single(Assert.Single(words).Segments).Content.Bytes.ToArray()));
+    }
+
+    [Theory]
+    [InlineData("A", 65)]
+    [InlineData("$'\\377'", 255)]
+    public async Task CapitalizedAssignmentLowersAsciiAfterTheFirstCharacter(string first, int firstByte)
+    {
+        var middle = new string('x', 4096);
+        var script = $"declare -c value; value={first}{middle}B; printf '%s' \"$value\"";
+        var result = await EndToEndHarness.RunScriptAsync(script, EndToEndHarness.BuildTree([]));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal<byte>([(byte)firstByte, .. System.Text.Encoding.ASCII.GetBytes(middle), (byte)'b'],
+            result.Host.StandardOutput.Content.ToArray());
+        Assert.Empty(result.StdErr);
+    }
+
     [Fact]
     public async Task UnchangedArrayCaseConversionUsesOrdinaryFieldWorkspace()
     {
