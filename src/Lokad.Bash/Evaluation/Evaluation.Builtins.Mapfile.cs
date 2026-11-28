@@ -427,44 +427,68 @@ public sealed partial class Evaluation
         // along with sparse storage while the input records and saved binding remain live.
         const int RecordMemoryBytes = IndexedArray.ElementMemoryBytes + 96;
         var prepaidBytes = checked((long)values.Count * RecordMemoryBytes);
-        Memory.Charge(prepaidBytes);
-        CheckCancellation();
-        using var assignment = new Variables.IndexedInputAssignment(target.Owner, target.Name, origin.HasValue,
-            resetAttributes: false, target.NamerefValue, Memory);
-        var first = origin.GetValueOrDefault();
-        var batchIndex = 0;
-        for (var offset = 0; offset < values.Count; offset++)
+        long stagedBytes = 0;
+        var committed = false;
+        try
         {
+            Memory.Charge(prepaidBytes);
+            stagedBytes = prepaidBytes;
             CheckCancellation();
-            var integer = await WordExpansion.EvaluateIntegerAssignmentAsync(values[offset], null, scope, command)
-                .ConfigureAwait(false);
-            if (borrowedBatches != null && batchIndex < borrowedBatches.Count)
+            using var assignment = new Variables.IndexedInputAssignment(target.Owner, target.Name, origin.HasValue,
+                resetAttributes: false, target.NamerefValue, Memory);
+            stagedBytes += assignment.SetupBytes;
+            var first = origin.GetValueOrDefault();
+            var batchIndex = 0;
+            for (var offset = 0; offset < values.Count; offset++)
             {
-                values[offset] = ShellValue.Empty;
-                var batch = borrowedBatches[batchIndex];
-                if (offset == batch.LastOffset)
+                CheckCancellation();
+                var integer = await WordExpansion.EvaluateIntegerAssignmentAsync(values[offset], null, scope, command)
+                    .ConfigureAwait(false);
+                if (borrowedBatches != null && batchIndex < borrowedBatches.Count)
                 {
-                    batch.Owner.Dispose();
-                    batchIndex++;
+                    values[offset] = ShellValue.Empty;
+                    var batch = borrowedBatches[batchIndex];
+                    if (offset == batch.LastOffset)
+                    {
+                        batch.Owner.Dispose();
+                        batchIndex++;
+                    }
                 }
+                if (!integer.HasValue)
+                {
+                    // A shell arithmetic error leaves preceding writes visible to EXIT.
+                    assignment.Commit();
+                    committed = true;
+                    return false;
+                }
+                // Like ordinary mapfile input, the destination wraps at the unsigned 32-bit boundary.
+                var position = IndexedArrayIndex.FromUnsigned(unchecked(first + (uint)offset));
+                var beforeWrite = Memory.Workspace.Bytes;
+                try
+                {
+                    if (!target.Owner.TrySetResolvedArrayElement(target.Name, position, integer.Value, Memory, prepaidBytes))
+                        return false;
+                }
+                finally { stagedBytes += Memory.Workspace.Bytes - beforeWrite; }
+                // Keep consumed credit with the written positions and decimal values.
+                prepaidBytes -= RecordMemoryBytes;
             }
-            if (!integer.HasValue)
-            {
-                // A shell arithmetic error leaves preceding writes visible to EXIT.
-                // Refusal and cancellation throw through the staged assignment and restore the old binding.
-                assignment.Commit();
-                return false;
-            }
-            // Like ordinary mapfile input, the destination wraps at the unsigned 32-bit boundary.
-            var position = IndexedArrayIndex.FromUnsigned(unchecked(first + (uint)offset));
-            if (!target.Owner.TrySetResolvedArrayElement(target.Name, position, integer.Value, Memory, prepaidBytes))
-                return false;
-            // Keep consumed credit with the written positions and decimal values.
-            prepaidBytes -= RecordMemoryBytes;
+            CheckCancellation();
+            assignment.Commit();
+            committed = true;
+            return true;
         }
-        CheckCancellation();
-        assignment.Commit();
-        return true;
+        finally
+        {
+            // The assignment restores its previous binding before releasing its unpublished
+            // credit. Arithmetic evaluation can leave independent writes in other bindings.
+            if (!committed)
+            {
+                if (stagedBytes != 0)
+                    Memory.Workspace.Resize(Memory.Workspace.Bytes - stagedBytes);
+                Memory.ReleaseUnusedCapacity();
+            }
+        }
     }
 
     private enum IndexedInputTargetKind { ExistingOrNew, CircularNameref, UnassignedNameref, RecreatedBinding }

@@ -632,6 +632,60 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData("read -ra a")]
+    [InlineData("mapfile -tn128 a")]
+    public async Task IntegerInputSetupRefundsPrepaidRecordsBeforeRefusalDiagnostic(string command)
+    {
+        var byLine = command.StartsWith("mapfile", StringComparison.Ordinal);
+        var record = Utf8Bytes(byLine ? string.Concat(Enumerable.Repeat("visits++\n", 128))
+            : string.Concat(Enumerable.Repeat("visits++ ", 128)) + "\n");
+        var offsets = byLine ? Enumerable.Range(1, 127).Select(index => 9 * index).ToArray() : [];
+        var early = await ObserveRefusalAsync(16 * 1024);
+        var late = await ObserveRefusalAsync(96 * 1024);
+        Assert.Equal(early, late);
+
+        async Task<(long Workspace, long Reserved)> ObserveRefusalAsync(long available)
+        {
+            var state = new Eval(Parser.Parse(command));
+            var variables = Assert.IsType<Variables>(typeof(Eval)
+                .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
+            var saved = ShellValue.FromText("7");
+            Assert.True(variables.TryAssignArray("a", Enumerable.Repeat(saved, 1024).ToArray(), ArrayKind.Indexed));
+            variables.SetIntegerBinding("a", true);
+            Assert.True(variables.TrySetScalar("visits", ShellValue.FromText("0")));
+            var original = variables.IndexedArrays["a"];
+            var budget = new MemoryGovernor(4 * 1024 * 1024);
+            using var owner = budget.CreateScope();
+            state.Memory.Budget = owner;
+
+            var read = await NextReadAsync(state);
+            state.Memory.ReleaseUnusedCapacity();
+            var workspaceBefore = state.Memory.Workspace.Bytes;
+            var reservedBefore = budget.ReservedBytes;
+            using var held = budget.Reserve(budget.LimitBytes - reservedBefore - available);
+            read.SetResult(ReadResult.Success(record, offsets, reachedEoF: true));
+
+            var diagnostic = await NextWriteAsync(state);
+            var workspace = state.Memory.Workspace.Bytes - workspaceBefore;
+            var reserved = budget.ReservedBytes - held.Bytes - reservedBefore;
+            Assert.Same(original, variables.IndexedArrays["a"]);
+            Assert.Equal(1024, original.Count);
+            Assert.Equal(ShellValue.FromText("0"), variables.Scalars["visits"]);
+            var error = Text(diagnostic.Content);
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+            Assert.Null(await NextStepAsync(state));
+
+            Assert.Equal(byLine ? 2 : 1, state.LastExitCode);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Equal((byLine ? "mapfile" : "read") + ": shared memory budget exhausted\n", error);
+            owner.Dispose();
+            held.Dispose();
+            Assert.Equal(0, budget.ReservedBytes);
+            return (workspace, reserved);
+        }
+    }
+
+    [Theory]
     [InlineData(0U, 0, "saved", 1)]
     [InlineData(0U, 1024, "0", 1024)]
     [InlineData(3U, 1024, "saved", 1025)]
@@ -762,6 +816,7 @@ public partial class EvaluationTests
         var read = await NextReadAsync(state);
         Assert.Equal(2, read.Limit);
         state.Memory.ReleaseUnusedCapacity();
+        var workspaceBeforeInput = state.Memory.Workspace.Bytes;
         var backing = CollectionBacking.ArrayPayloadBytes(elements);
         // Leave room for the staged integer binding, one workspace increment, and the input list.
         var cloneBytes = integer ? variables.EstimateBindingBytes("arr") : 0;
@@ -771,6 +826,7 @@ public partial class EvaluationTests
             : ReadResult.Success(Utf8Bytes("first\nsecond\n"), [6], reachedEoF: false));
         var operation = await NextStepAsync(state);
         var diagnostic = operation as WriteOperation;
+        var workspaceDuringDiagnostic = state.Memory.Workspace.Bytes;
         if (diagnostic != null)
         {
             diagnostic.SetResult(DescriptorWriteResult.Open);
@@ -793,6 +849,8 @@ public partial class EvaluationTests
             Assert.Equal(capacity, array.Count);
             Assert.Equal(2, state.LastExitCode);
             Assert.NotNull(diagnostic);
+            if (integer)
+                Assert.InRange(workspaceDuringDiagnostic - workspaceBeforeInput, 0, 4096);
             Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
             Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
         }

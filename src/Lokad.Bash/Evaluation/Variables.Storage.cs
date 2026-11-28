@@ -394,6 +394,7 @@ public sealed partial class Variables
         private bool _committed;
 
         internal long SavedBytes { get; }
+        internal long SetupBytes { get; }
 
         internal IndexedInputAssignment(Variables owner, BindingName name, bool preserve, bool resetAttributes,
             ShellValue? namerefValue, EvaluationMemory memory)
@@ -406,9 +407,15 @@ public sealed partial class Variables
             {
                 SavedBytes = EstimateSlotBytes(name, _previous);
                 memory.Charge(SavedBytes);
+                SetupBytes = SavedBytes;
             }
             else
-                memory.PrepareRetainedStorage(BindingOverheadBytes + (long)ValueCapacityMultiplier * name.ByteLength);
+            {
+                var before = memory.Workspace.Bytes;
+                var bindingBytes = BindingOverheadBytes + (long)ValueCapacityMultiplier * name.ByteLength;
+                memory.PrepareRetainedStorage(bindingBytes);
+                SetupBytes = Math.Min(bindingBytes, memory.Workspace.Bytes - before);
+            }
             var staged = preserve && _previous is IndexedSlot indexed
                 ? indexed.Value.Clone() : new IndexedArray(isInitialized: true);
             if (preserve && _previous is ScalarSlot scalar)
