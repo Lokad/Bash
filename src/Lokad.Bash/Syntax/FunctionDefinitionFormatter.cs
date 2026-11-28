@@ -82,6 +82,11 @@ internal static class FunctionDefinitionFormatter
         CancellationToken cancellationToken) =>
         TryAppend(new Step.Commands(script.Commands), input, input.Budget, Format.CaptureReader, cancellationToken);
 
+    internal static void CollectCaptureDocuments(CommandSubstitutionSyntax.Parsed capture, CaptureDocumentReads output,
+        CancellationToken cancellationToken) =>
+        TryAppend(new Step.Commands(capture.Script.AuthoredCaptureCommands ?? capture.Script.Commands),
+            output, output.Budget, Format.SubstitutionSource, cancellationToken);
+
     /// <summary>Renders substitution spelling for an expansion that can read part of it as word text.</summary>
     internal static bool TryAppendSubstitutionWord(
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget budget,
@@ -955,6 +960,11 @@ internal static class FunctionDefinitionFormatter
                 flushedHereDocuments = true;
             while (hereDocuments.TryDequeue(out var redirection))
             {
+                if (output is CaptureDocumentReads documentReads)
+                {
+                    documentReads.Add(redirection);
+                    continue;
+                }
                 if (!AppendUnexpandedParts(redirection.Target, singleQuoted: false)) return false;
                 var delimiter = redirection.HereDocumentDelimiter
                     ?? throw new InvalidOperationException("A here-document requires its delimiter syntax.");
@@ -1103,7 +1113,7 @@ internal static class FunctionDefinitionFormatter
         return ShellSource.FromBytes(buffer.ToCompactMemory(context.SyntaxMemory));
     }
 
-    private static int FindNextCapture(ShellSource source, ShellScanContext context, int start, bool readAheadOnly,
+    internal static int FindNextCapture(ShellSource source, ShellScanContext context, int start, bool readAheadOnly,
         CancellationToken cancellationToken, out ShellScanContext.CachedParse parsed)
     {
         var bytes = source.AsSpan();

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Echo modern capture here-documents during verbose word expansion.
 - Preserve authored verbose input in modern substitutions expanded from here-documents.
 - Echo normalized input when a modern command substitution enables verbose mode.
 - Echo reached input when a backtick substitution enables verbose mode.

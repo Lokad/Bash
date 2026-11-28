@@ -113,10 +113,11 @@ internal static partial class WordExpansion
     {
         if (!scope.Effects.BraceExpansionEnabled)
             return true;
+        var echo = scope.Effects.CanEchoCaptureSource;
         for (var index = 0; index < words.Count; index++)
         {
             var word = words[index];
-            if ((word.HasDecodedNulCapture || word.HasBraceDelimiterCandidate)
+            if ((word.HasDecodedNulCapture || word.HasBraceDelimiterCandidate || echo && word.HasCaptureDocuments)
                 && !await CheckWordSyntaxAsync(word, scope, protectSubscript: false).ConfigureAwait(false))
                 return false;
         }
@@ -130,11 +131,24 @@ internal static partial class WordExpansion
     {
         if (!scope.Effects.BraceExpansionEnabled)
             return true;
+        if (word.HasCaptureDocuments && !scope.PreserveCommandSubstitutionSpelling && scope.Effects.CanEchoCaptureSource
+            && HasOpeningBrace(word.Parts, scope))
+            await BraceExpansion.EchoDocumentReadsAsync(word, scope).ConfigureAwait(false);
         if (word.HasDecodedNulCapture
             && await RejectDecodedNulCaptureAsync(word, scope, 0, word.Parts.Count).ConfigureAwait(false))
             return false;
         return !word.HasBraceDelimiterCandidate
             || await CheckBraceCandidateAsync(word, scope, protectSubscript).ConfigureAwait(false);
+
+        static bool HasOpeningBrace(IReadOnlyList<WordPart> parts, ScopedEvaluation scope)
+        {
+            foreach (var part in parts)
+                if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed capture }
+                    ? scope.Effects.CaptureSpellingHasOpeningBrace(capture)
+                    : part.GetUnexpandedValue().Bytes.Span.Contains((byte)'{'))
+                    return true;
+            return false;
+        }
     }
 
     private static async Task<bool> RejectDecodedNulCaptureAsync(Word word, ScopedEvaluation scope, int firstPart, int endPart)
@@ -338,7 +352,7 @@ internal static partial class WordExpansion
         ExpandedWordBuilder builder,
         bool allowWordSplitting,
         TildeExpansion tildeExpansion) =>
-        ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion, 0, word.Parts.Count);
+        ExpandWordPartsAsync(word, scope, builder, allowWordSplitting, tildeExpansion, 0, word.Parts.Count, echoQuotes: true);
 
     private static async Task ExpandWordPartsAsync(
         Word word,
@@ -347,7 +361,8 @@ internal static partial class WordExpansion
         bool allowWordSplitting,
         TildeExpansion tildeExpansion,
         int firstPart,
-        int endPart)
+        int endPart,
+        bool echoQuotes)
     {
         if (!scope.CanExpand)
             return;
@@ -403,15 +418,20 @@ internal static partial class WordExpansion
         while (position.Part < endPart && scope.CanExpand)
         {
             var part = word.Parts[position.Part];
-            if (checkReachedCaptures)
+            var quoteEcho = echoQuotes && part.IsDoubleQuoted && word.HasCaptureDocuments
+                && !scope.PreserveCommandSubstitutionSpelling && scope.Effects.CanEchoCaptureSource;
+            if (checkReachedCaptures || quoteEcho)
             {
                 var checkEnd = position.Part + 1;
                 // A double-quoted segment is read before its first expansion.
                 if (part.IsDoubleQuoted)
                     while (checkEnd < endPart && word.Parts[checkEnd].DoubleQuote == DoubleQuoteBoundary.Continuation)
                         checkEnd++;
-                if (await RejectDecodedNulCaptureAsync(word, scope, position.Part, checkEnd).ConfigureAwait(false))
+                if (checkReachedCaptures
+                    && await RejectDecodedNulCaptureAsync(word, scope, position.Part, checkEnd).ConfigureAwait(false))
                     return;
+                if (quoteEcho)
+                    await EchoCaptureDocumentsAsync(word.Parts, position.Part, checkEnd, scope).ConfigureAwait(false);
             }
             if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
             {
@@ -1228,6 +1248,10 @@ internal static partial class WordExpansion
                 var parameterStatus = BracedParameterScanner.ScanExpansion(parameterScan, content, index, capturePayload: true,
                     out var closingIndex, out var payload, out var parameterError, out var subscriptFailure, out var rejectedSelector);
                 parameterScan.ReadArithmeticExpansionComments = false;
+                if (parameterStatus == BracedParameterScanStatus.Found
+                    && !scope.PreserveCommandSubstitutionSpelling && scope.Effects.CanEchoCaptureSource)
+                    await EchoScannedCaptureDocumentsAsync(content.Slice(index, closingIndex - index + 1), parameterScan, scope)
+                        .ConfigureAwait(false);
                 if (parameterScan.MissingReachedArithmeticParenthesis)
                 {
                     await ReportMissingReachedParenthesisAsync().ConfigureAwait(false);
@@ -1402,6 +1426,9 @@ internal static partial class WordExpansion
             return;
         }
 
+        if (script is CommandSubstitutionSyntax.Parsed { Script.HasHereDocuments: true } && scope.Effects.CanEchoCaptureSource)
+            await scope.Effects.EchoCaptureDocumentsAsync(script).ConfigureAwait(false);
+
         if (script is CommandSubstitutionSyntax.Parsed { Failure: not SubstitutionSyntaxFailure.None } parsed)
         {
             await scope.Effects.ReportCommandSubstitutionSyntaxAsync(parsed.Failure, parsed, scope, globQuoted, default).ConfigureAwait(false);
@@ -1472,6 +1499,9 @@ internal static partial class WordExpansion
         if (expression.Length == 0)
             return null;
 
+        var inheritedQuotes = quoteContext != ExpansionQuoteContext.Unquoted;
+        if (inheritedQuotes && !scope.PreserveCommandSubstitutionSpelling && scope.Effects.CanEchoCaptureSource)
+            await EchoScannedCaptureDocumentsAsync(expression, scanContext, scope).ConfigureAwait(false);
         var word = quoteContext == ExpansionQuoteContext.HereDocument ? null
             : Tokenizer.ReadExpansionWord(expression, GetOperandSyntax(purpose),
                 quoteContext == ExpansionQuoteContext.Unquoted ? ShellQuoteKind.None : ShellQuoteKind.Double, scanContext);
@@ -1497,7 +1527,8 @@ internal static partial class WordExpansion
         {
             if (purpose is ExpansionPurpose.Arithmetic or ExpansionPurpose.ArithmeticSource)
                 tildeExpansion = TildeExpansion.None;
-            await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, tildeExpansion).ConfigureAwait(false);
+            await ExpandWordPartsAsync(word, scope, builder, allowWordSplitting: false, tildeExpansion,
+                0, word.Parts.Count, echoQuotes: !inheritedQuotes).ConfigureAwait(false);
         }
         if (!scope.CanExpand)
             return null;

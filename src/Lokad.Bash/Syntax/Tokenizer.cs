@@ -303,11 +303,12 @@ internal sealed class Tokenizer
     }
 
     /// <summary>Collects the inner bodies and reports whether only trailing LFs follow the header.</summary>
-    internal bool ReadHereDocumentExpansionCaptureBodies(HereDocumentReader pending)
+    internal bool ReadHereDocumentExpansionCaptureBodies(HereDocumentReader pending, out Range read)
     {
         Position = HereDocumentReadAhead.FindNextLineStart(_input, Position);
         var bodyStart = Position;
         pending.TryReadBodies(this);
+        read = bodyStart..Position;
         return _input.AsSpan(bodyStart, Position - bodyStart).TrimEnd((byte)'\n').IsEmpty;
     }
 

@@ -359,6 +359,7 @@ public static class Parser
             if (rawHereDocument)
                 context.DetachedReaderInput = input;
             var readAheadBefore = context.HereDocumentReadAhead?.CaptureCount ?? 0;
+            var documentsBefore = context.HereDocumentCount;
             var tokenizer = new Tokenizer(input, payloadStart, context)
             {
                 TrackCommandLocations = true,
@@ -396,13 +397,17 @@ public static class Parser
                 }
                 if (context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument)
                 {
-                    if (tokenizer.ReadHereDocumentExpansionCaptureBodies(pending))
+                    if (tokenizer.ReadHereDocumentExpansionCaptureBodies(pending, out var read))
                     {
                         deferredWarnings = pending.Warnings;
                         return ShellScanStatus.Complete;
                     }
                     syntaxError = MissingCloser(GetCaptureWarnings(pending.Warnings, input, payloadStart),
-                        input.Length, tokenizer.EndOfInputLineAdvance, payloadLine: 0);
+                        input.Length, tokenizer.EndOfInputLineAdvance, payloadLine: 0) with
+                    {
+                        CaptureDocumentInput = new CaptureDocumentInput(input, read,
+                            rawHereDocument ? context.TakeReaderSpelling() : default)
+                    };
                     return ShellScanStatus.Invalid;
                 }
                 if (!context.CanReadAhead(input))
@@ -412,12 +417,14 @@ public static class Parser
             }
 
             parsed = CompleteScript(tokenizer, command);
+            parsed.HasHereDocuments = context.HereDocumentCount != documentsBefore;
             parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
             if (authoredUnitEnds != null)
             {
                 authoredUnitEnds[^1] = Math.Min(authoredUnitEnds[^1], closingParenthesisIndex);
+                var spelling = context.TakeReaderSpelling(out var documentReads);
                 parsed.Reader = new ParsedScript.AuthoredReader(input, payloadStart..closingParenthesisIndex,
-                    authoredUnitEnds, EmptyFirstUnitEnd: 0, context.TakeReaderSpelling());
+                    authoredUnitEnds, EmptyFirstUnitEnd: 0, spelling) { DocumentReads = documentReads };
             }
             if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
             {
@@ -474,6 +481,7 @@ public static class Parser
                         && located.HereDocuments is not { HasPending: true })
                     {
                         parsed = CompleteScript(located, locatedCommand);
+                        parsed.HasHereDocuments = context.HereDocumentCount != documentsBefore;
                         if (context.SubstitutionFailure != SubstitutionSyntaxFailure.None)
                             failure = ClassifyNestedFailure(context.SubstitutionFailure, adjacent: true);
                     }
@@ -509,6 +517,7 @@ public static class Parser
             {
                 var authoredCommands = parsed.Commands;
                 parsed = CompleteScript(replay, corrected);
+                parsed.HasHereDocuments = context.HereDocumentCount != documentsBefore;
                 parsed.AuthoredCaptureCommands = authoredCommands;
                 parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
                 if (context.SubstitutionFailure != SubstitutionSyntaxFailure.None)
@@ -1899,6 +1908,7 @@ public static class Parser
             };
             redirections.Add(redirection);
             (tokenizer.HereDocuments ??= new HereDocumentReader()).Enqueue(redirection);
+            tokenizer.ScanContext.HereDocumentCount++;
             return target.Source.Start.Value;
         }
 

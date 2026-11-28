@@ -6829,6 +6829,8 @@ public sealed partial class Evaluation : IFileTester
         ShellScanStatus status, ParserFailure? failure, ShellSource source, ScopedEvaluation scope,
         bool interruptedCapture)
     {
+        if (failure?.CaptureDocumentInput is { } input)
+            await WriteVerboseSourceAsync(input.Source, input.Read, input.Spelling).ConfigureAwait(false);
         if (failure?.CaptureWarnings is { } captureWarnings)
             await ReportHereDocumentCaptureWarningsAsync(captureWarnings.Warnings, scope).ConfigureAwait(false);
         if (failure?.UnclosedDelimiter is { } endOfInput)

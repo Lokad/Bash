@@ -1,3 +1,5 @@
+using System;
+
 namespace Lokad.Bash.Syntax;
 
 /// <summary>A parsing failure at a UTF-16 text offset or a raw-source byte offset.</summary>
@@ -18,6 +20,7 @@ internal sealed record ParserFailure(SyntaxError Error, ParserFailureKind Kind)
 {
     internal UnclosedDelimiter? UnclosedDelimiter { get; init; }
     internal CaptureHereDocumentWarnings? CaptureWarnings { get; init; }
+    internal CaptureDocumentInput? CaptureDocumentInput { get; init; }
     internal UnexpectedSyntax? UnexpectedToken { get; init; }
     internal ArithmeticForHeaderError? ArithmeticForHeader { get; init; }
     internal ConditionalEndOfInput? ConditionalEndOfInput { get; init; }
@@ -96,6 +99,8 @@ internal sealed record UnclosedDelimiter(char Delimiter, int ReadPosition)
 
 /// <summary>Warnings collected inside a capture, with each document line relative to its payload.</summary>
 internal readonly record struct CaptureHereDocumentWarnings(IReadOnlyList<HereDocumentWarning> Warnings, int LineOffset);
+
+internal sealed record CaptureDocumentInput(ShellSource Source, Range Read, ReaderSpelling Spelling);
 
 internal enum ParserFailureKind
 {

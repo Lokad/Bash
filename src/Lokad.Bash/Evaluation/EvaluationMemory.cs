@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using System.Threading;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -144,10 +145,12 @@ internal sealed class EvaluationMemory
 
     internal sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable
     {
+        private CaptureDocumentReads? _documentReads;
         internal CancellationToken CancellationToken => scope.Effects.CancellationToken;
         internal ScopedEvaluation Scope => scope;
         internal EvaluationState.GlobIgnorePrefix? PreparedGlobIgnorePrefix { get; set; }
         internal bool ExpandingGlobIgnorePrefix { get; set; }
+        internal CaptureDocumentReads DocumentReads => _documentReads ??= new CaptureDocumentReads(owner.Budget);
 
         internal void PrepareRetainedStorage(long bytes)
         {
@@ -163,6 +166,8 @@ internal sealed class EvaluationMemory
         /// <summary>Retires scratch while preserving the charge for a result still owned by this frame.</summary>
         internal void ResetWorkspace(long liveWorkspaceBytes)
         {
+            _documentReads?.Dispose();
+            _documentReads = null;
             var retained = RetainedBytes(scope);
             owner.ResizeWorkspace(retained, checked(baseline + retained + liveWorkspaceBytes));
             if (owner._refused)

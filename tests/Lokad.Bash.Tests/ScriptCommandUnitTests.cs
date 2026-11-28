@@ -109,7 +109,7 @@ public sealed class ScriptCommandUnitTests
     [Theory]
     [InlineData("value=$(printf first\nprintf second)", "value=$(printf first\n")]
     [InlineData("value=`printf first\nprintf second`", "value=`printf first\nprintf second`\n")]
-    [InlineData("value=$(cat <<END\nfirstsecond\nEND\n)", "value=$(cat <<END\nfirstsecond\nEND\n")]
+    [InlineData("value=$(cat <<END\nfirstsecond\nEND\n)", "value=$(cat <<END\nfirstsecond\nEND\nfirstsecond\nEND\n")]
     public async Task VerboseUsesTheReaderThatConsumedThePhysicalLine(string capture, string echoedCapture)
     {
         var script = $"set -v\n{capture}\nprintf '%s' \"$value\"\n# end";
@@ -318,6 +318,90 @@ public sealed class ScriptCommandUnitTests
             Assert.Equal(0, host.OpenFileCount);
             Assert.Equal(0, memory.ReservedBytes);
         }
+    }
+
+    [Theory]
+    [InlineData(false, "A-body\nONE\nB-body\nTWO\nA-body\nONE\nA-run\nB-body\nTWO\nB-run\n")]
+    [InlineData(true, "A-body\nONE\nA-body\nONE\nA-run\nB-body\nTWO\nB-body\nTWO\nB-run\n")]
+    public async Task VerboseCaptureReadsFollowTheQuoteSegment(bool separateQuotes, string echo)
+    {
+        const string first = "$(printf 'A-run\\n' >&2; printf A >>events; cat <<ONE)";
+        const string second = "$(printf 'B-run\\n' >&2; printf B >>events; cat <<TWO)";
+        var quoted = separateQuotes ? $"\"{first}\"\"{second}\"" : $"\"{first}{second}\"";
+        var script = $"set -v; printf '<%s>' {quoted}; set +v\nA-body\nONE\nB-body\nTWO\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<A-bodyB-body>", host.StandardOutput.TextContent);
+            Assert.Equal("AB", host.ReadFile("/events"));
+            Assert.Equal("line 1: warning: command substitution: 1 unterminated here-document\n"
+                + "line 3: warning: command substitution: 1 unterminated here-document\n" + echo,
+                host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData("-B", "A-body\nONE\nA-body\nONE\nA-body\nONE\n")]
+    [InlineData("+B", "A-body\nONE\nA-body\nONE\n")]
+    public async Task VerboseUnselectedParameterDefaultEchoDependsOnBraceScan(string braceFlag, string echo)
+    {
+        var script = $"kept=kept; set {braceFlag}; set -v; printf '<%s>' \"${{kept:-$(printf run >>events; cat <<ONE)}}\"; set +v\nA-body\nONE\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<kept>", host.StandardOutput.TextContent);
+            Assert.Empty(host.CaptureEntries());
+            Assert.Equal("line 1: warning: command substitution: 1 unterminated here-document\n" + echo,
+                host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task VerboseBraceArmsEchoBeforeTheirGeneratedWordsExecute()
+    {
+        const string script = "set -v; printf '<%s>' {\"$(printf 'A-run\\n' >&2; printf A >>events; cat <<ONE)\",\"$(printf 'B-run\\n' >&2; printf B >>events; cat <<TWO)\"}; set +v\nA-body\nONE\nB-body\nTWO\n";
+        const string first = "A-body\nONE\n";
+        const string second = "B-body\nTWO\n";
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<A-body><B-body>", host.StandardOutput.TextContent);
+        Assert.Equal("AB", host.ReadFile("/events"));
+        Assert.Equal("line 1: warning: command substitution: 1 unterminated here-document\n"
+            + "line 3: warning: command substitution: 1 unterminated here-document\n"
+            + first + second + first + second + first + first + second + second
+            + first + first + "A-run\n" + second + second + "B-run\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("$(printf A >>events; cat <<-ONE\n\tA-body\n\tONE\n)", "A-body\ntail",
+        "\tA-body\n\tONE\n", true)]
+    [InlineData("${absent:-$(printf A >>events; cat <<ONE)}\nA-body\nONE", "tail",
+        "A-body\nONE\nline 1: unexpected EOF while looking for matching `)'\n", false)]
+    public async Task VerboseRawCaptureReadsKeepAuthoredDocumentSpelling(string operand, string output, string echo, bool runs)
+    {
+        var script = $"set -v; cat <<OUTER; set +v\n{operand}\nOUTER\nprintf tail\n";
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Equal(echo, host.StandardError.TextContent);
+        if (runs)
+            Assert.Equal("A", host.ReadFile("/events"));
+        else
+            Assert.Empty(host.CaptureEntries());
     }
 
     [Fact]

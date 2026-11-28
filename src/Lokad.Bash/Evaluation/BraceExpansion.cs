@@ -4,6 +4,7 @@ using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
@@ -28,6 +29,8 @@ internal static class BraceExpansion
     }
 
     private readonly record struct FragmentRange(Boundary Start, Boundary End);
+    private readonly record struct DocumentCapture(Position Start, Position End, CommandSubstitutionSyntax.Parsed Syntax);
+    private readonly record struct DocumentRead(FragmentRange Range, bool ScanBraces);
     private enum BraceKind { None, Alternatives, Sequence, LiteralSequence }
     private readonly record struct Sequence(long Start, Int128 Step, int Count, int Width, bool IsCharacter);
 
@@ -316,7 +319,116 @@ internal static class BraceExpansion
         }
     }
 
-    private static List<Brace> Scan(IReadOnlyList<WordPart> parts, MemoryCapacity scratch, CancellationToken cancellationToken)
+    /// <summary>Reports the document reads in the brace reader's prefix, group, alternatives and suffix visits.</summary>
+    internal static async Task EchoDocumentReadsAsync(Word word, ScopedEvaluation scope)
+    {
+        using var scratch = new MemoryCapacity(scope.Effects.Memory.Budget, 0);
+        var cancellation = scope.Effects.CancellationToken;
+        var captures = new List<DocumentCapture>();
+        for (var part = 0; part < word.Parts.Count; part++)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (word.Parts[part] is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed direct })
+                Add(new Position(part, 0), new Position(part + 1, 0), direct);
+            else if (word.Parts[part] is SourceWordPart { SpellingCaptures: { } nested } source)
+                foreach (var span in nested)
+                {
+                    var offset = span.Offset - source.SourceOffset;
+                    if (offset >= 0 && span.Length <= source.Source.Length - offset
+                        && span.Syntax is CommandSubstitutionSyntax.Parsed parsed)
+                        Add(new Position(part, offset), new Position(part, offset + span.Length), parsed);
+                }
+        }
+        if (captures.Count == 0)
+            return;
+
+        var braces = Scan(word.Parts, scratch, cancellation, keepLiteralGroups: true);
+        var pending = new List<DocumentRead>();
+        Push(new FragmentRange(new(new(0, 0), 0), new(new(word.Parts.Count, 0), braces.Count)), scanBraces: true);
+        while (pending.Count != 0)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            var read = pending[^1];
+            pending.RemoveAt(pending.Count - 1);
+            var (start, end) = read.Range;
+            if (!read.ScanBraces || start.BraceIndex >= end.BraceIndex)
+            {
+                for (var index = FirstCaptureAt(start.Position); index < captures.Count; index++)
+                {
+                    var capture = captures[index];
+                    if (Compare(capture.End, end.Position) > 0)
+                        break;
+                    await scope.Effects.EchoCaptureDocumentsAsync(capture.Syntax).ConfigureAwait(false);
+                }
+                continue;
+            }
+
+            var brace = braces[start.BraceIndex];
+            var bodyStart = brace.Opening.AfterDelimiter();
+            if (brace.Kind == BraceKind.None)
+            {
+                // A rejected opening scans for its closer before the reader moves past it.
+                Push(new(bodyStart, end), scanBraces: true);
+                Push(new(bodyStart, end), scanBraces: false);
+            }
+            else
+            {
+                Push(new(brace.Closing.AfterDelimiter(), end), scanBraces: true);
+                if (brace.Kind == BraceKind.Alternatives)
+                    for (var alternative = brace.AlternativeCount - 1; alternative >= 0; alternative--)
+                    {
+                        var arm = brace.Alternative(alternative);
+                        Push(arm, scanBraces: true);
+                        Push(arm, scanBraces: false);
+                    }
+                var body = new FragmentRange(bodyStart, brace.Closing);
+                Push(body, scanBraces: false);
+                Push(body, scanBraces: false);
+            }
+            Push(new(start, brace.Opening), scanBraces: false);
+        }
+
+        void Add(Position start, Position end, CommandSubstitutionSyntax.Parsed syntax)
+        {
+            if (!syntax.Script.HasHereDocuments)
+                return;
+            scratch.PrepareListCapacity(captures, 1);
+            captures.Add(new DocumentCapture(start, end, syntax));
+        }
+
+        void Push(FragmentRange range, bool scanBraces)
+        {
+            var index = FirstCaptureAt(range.Start.Position);
+            if (index == captures.Count || Compare(captures[index].End, range.End.Position) > 0)
+                return;
+            scratch.PrepareListCapacity(pending, 1);
+            pending.Add(new DocumentRead(range, scanBraces));
+        }
+
+        int FirstCaptureAt(Position position)
+        {
+            var low = 0;
+            var high = captures.Count;
+            while (low < high)
+            {
+                var mid = low + (high - low) / 2;
+                if (Compare(captures[mid].Start, position) < 0)
+                    low = mid + 1;
+                else
+                    high = mid;
+            }
+            return low;
+        }
+
+        static int Compare(Position left, Position right) =>
+            left.Part != right.Part ? left.Part.CompareTo(right.Part) : left.Offset.CompareTo(right.Offset);
+    }
+
+    private static List<Brace> Scan(IReadOnlyList<WordPart> parts, MemoryCapacity scratch, CancellationToken cancellationToken) =>
+        Scan(parts, scratch, cancellationToken, keepLiteralGroups: false);
+
+    private static List<Brace> Scan(IReadOnlyList<WordPart> parts, MemoryCapacity scratch, CancellationToken cancellationToken,
+        bool keepLiteralGroups)
     {
         const int BraceBytes = 192;
         const int MaximumScanBytes = 4096;
@@ -441,7 +553,7 @@ internal static class BraceExpansion
                                         brace.Kind = BraceKind.Sequence;
                                     }
                                 }
-                                else if (opening.BraceIndex == braces.Count)
+                                else if (!keepLiteralGroups && opening.BraceIndex == braces.Count)
                                 {
                                     // Earlier boundaries still point to the next reached group at this index.
                                     braces.RemoveAt(braces.Count - 1);

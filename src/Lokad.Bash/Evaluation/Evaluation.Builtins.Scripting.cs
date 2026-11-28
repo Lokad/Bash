@@ -610,6 +610,46 @@ public sealed partial class Evaluation
     private readonly record struct ReaderInput(ShellSource Source, Range Read, ReaderSpelling Spelling);
     private static readonly ReadOnlyMemory<byte> EscapedReaderEof = new byte[] { 0xff, (byte)'\n' };
 
+    internal bool CanEchoCaptureSource => _state.HasOption(ShellOption.Verbose) && !GetStdErrDescriptor().IsClosed;
+
+    private CaptureDocumentReads DocumentReads => Memory.ActiveCommand?.DocumentReads
+        ?? throw new InvalidOperationException("Capture spelling requires an active command owner.");
+
+    internal bool CaptureSpellingHasOpeningBrace(CommandSubstitutionSyntax.Parsed capture) =>
+        DocumentReads.Get(capture, CancellationToken).HasOpeningBrace;
+
+    internal async Task EchoCaptureDocumentsAsync(CommandSubstitutionSyntax syntax)
+    {
+        if (syntax is not CommandSubstitutionSyntax.Parsed { Script.HasHereDocuments: true } capture
+            || !CanEchoCaptureSource)
+            return;
+
+        if (capture.Script.Reader is { DocumentReads: { } ranges } authored)
+        {
+            foreach (var range in ranges)
+                await WriteVerboseSourceAsync(authored.Source, range, authored.Spelling).ConfigureAwait(false);
+            return;
+        }
+
+        var descriptor = GetStdErrDescriptor();
+        foreach (var document in DocumentReads.Get(capture, CancellationToken).Documents)
+        {
+            foreach (var part in document.Target.Parts)
+            {
+                var bytes = part.GetUnexpandedValue().Bytes;
+                if (!bytes.IsEmpty && !(await ExecuteWriteAsync(descriptor, bytes).ConfigureAwait(false)).CanAcceptMore)
+                    return;
+            }
+            var delimiter = document.DelimiterSyntax?.Value ?? HereDocumentReader.GetHereDocumentDelimiter(
+                document.HereDocumentDelimiter ?? throw new InvalidOperationException("A here-document requires a delimiter."),
+                Memory.Workspace, out _);
+            if (!delimiter.IsEmpty && !(await ExecuteWriteAsync(descriptor, delimiter.Bytes).ConfigureAwait(false)).CanAcceptMore)
+                return;
+            if (!(await ExecuteWriteAsync(descriptor, ShellValue.FromByte((byte)'\n').Bytes).ConfigureAwait(false)).CanAcceptMore)
+                return;
+        }
+    }
+
     private Task WriteVerboseSourceAsync(ShellSource source, Range read, ReaderSpelling spelling)
     {
         if (read.Start.Equals(read.End) || !_state.HasOption(ShellOption.Verbose))

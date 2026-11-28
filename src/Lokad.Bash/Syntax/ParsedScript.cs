@@ -33,6 +33,8 @@ public sealed class ParsedScript
     internal sealed record AuthoredReader(ShellSource Source, Range Content, IReadOnlyList<int> UnitEnds,
         int EmptyFirstUnitEnd, ReaderSpelling Spelling)
     {
+        internal IReadOnlyList<Range>? DocumentReads { get; init; }
+
         internal Range Unit(int index) => (index == 0 ? Content.Start.Value : UnitEnds[index - 1])..UnitEnds[index];
 
         internal Range TrailingInput => (UnitEnds.Count == 0 ? Content.Start.Value : UnitEnds[^1])..Content.End.Value;
@@ -42,6 +44,7 @@ public sealed class ParsedScript
     internal char TruncatedAdjacentDelimiter { get; set; }
     internal bool HasDecodedNulWord { get; set; }
     internal bool HasReadAheadHereDocuments { get; set; }
+    internal bool HasHereDocuments { get; set; }
     /// <summary>End of the final command before its delimiter and trailing trivia in a whole-source parse.</summary>
     internal int LastCommandEnd { get; set; }
     /// <summary>The final command unit consumes the input through its own terminator.</summary>

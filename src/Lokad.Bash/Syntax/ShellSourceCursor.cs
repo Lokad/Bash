@@ -820,6 +820,7 @@ internal sealed class ShellScanContext
     private int _nestedExpansionDepth;
     private ScanDepth _lookaheadPeak;
     private Dictionary<ReadOnlyMemory<byte>, CachedParse>? _commandSubstitutions;
+    internal int HereDocumentCount { get; set; }
     private ShellSource _lateSubscriptSource;
     private int _lastClosingBracket = -1;
     private ArraySubscriptScanner.Lookahead? _lateSubscripts;
@@ -934,12 +935,15 @@ internal sealed class ShellScanContext
             _readerEscapedEof = true;
     }
 
-    internal ReaderSpelling TakeReaderSpelling()
+    internal ReaderSpelling TakeReaderSpelling() => TakeReaderSpelling(out _);
+
+    internal ReaderSpelling TakeReaderSpelling(out IReadOnlyList<Range>? documentReads)
     {
         var ranges = _readerSilences;
         var documents = _readerDocuments;
         var splices = _readerSplices;
         var escapedEof = _readerEscapedEof;
+        documentReads = documents;
         ClearReaderSpelling();
         if (ranges != null && documents != null)
             ranges = ExcludeDocuments(ranges, documents);

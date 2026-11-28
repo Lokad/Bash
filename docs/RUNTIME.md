@@ -811,6 +811,10 @@ index when a reached child enables visible echo. The formatter uses retained
 syntax, and the child reads its current stderr mapping before writing each
 unit. Modern captures reached in here-document text retain physical unit
 bounds and borrow the original input through the child reader.
+Expansion echoes use retained document reads in brace and quote order.
+An active command shares its rendered document order across these reads
+and retires it with its workspace. The reads keep the reached stderr
+mapping and share the ordinary descriptor write path.
 At execution the reader consults the current option state at each reached
 boundary, including the final trivia after the last unit. Trees constructed from
 commands alone have no authored input to echo. Runtime readers keep their

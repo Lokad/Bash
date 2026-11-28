@@ -29,6 +29,7 @@ public sealed class Word
             hasHash = hasHash || part.GetUnexpandedValue().Bytes.Span.Contains((byte)'#');
             if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed direct })
             {
+                HasCaptureDocuments |= direct.Script.HasHereDocuments;
                 HasDecodedNulCapture |= direct.HasDecodedNulWord;
                 HasRejectedCaptureSpelling |= direct.HasRejectedDisplaySpelling;
             }
@@ -45,7 +46,8 @@ public sealed class Word
                         continue;
                     HasRejectedCaptureSpelling |= parsed.HasRejectedDisplaySpelling;
                     HasDecodedNulCapture |= parsed.HasDecodedNulWord;
-                    if (HasRejectedCaptureSpelling && HasDecodedNulCapture)
+                    HasCaptureDocuments |= parsed.Script.HasHereDocuments;
+                    if (HasRejectedCaptureSpelling && HasDecodedNulCapture && HasCaptureDocuments)
                         break;
                 }
             }
@@ -117,6 +119,7 @@ public sealed class Word
     internal bool HasRejectedCaptureSpelling { get; }
     internal bool HasBraceDelimiterCandidate { get; }
     internal bool HasDecodedNulCapture { get; }
+    internal bool HasCaptureDocuments { get; }
 
     /// <summary>Removes an assignment prefix while retaining the already tokenized suffix.</summary>
     internal Word AfterSourcePrefix(SourceWordPart leading, int prefixLength, MemoryCapacity? memory)

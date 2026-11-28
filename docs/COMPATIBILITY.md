@@ -966,8 +966,10 @@ body. An unquoted here-document echoes its joined backslash-LF lines,
 including a delimiter formed by a join. It preserves the leading tabs
 that `<<-` strips from delivered input. Quoted delimiters preserve their
 body's physical lines. The echo includes the string reader's synthetic
-byte when it escapes EOF. Lokad.Bash echoes collected lines once. The
-pinned Bash builds can echo them again during capture expansion.
+byte when it escapes EOF. Modern capture expansion can echo a document
+again during brace scanning, quote extraction and reached parameter or
+capture reads. A parameter branch can echo a document while leaving the
+capture unexecuted.
 
 `allexport` is off at startup. `set -a` marks reached scalar assignments
 and function definitions for export. New global scalar declarations can
