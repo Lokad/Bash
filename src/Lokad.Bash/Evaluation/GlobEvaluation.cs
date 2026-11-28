@@ -72,7 +72,9 @@ internal sealed class GlobEvaluation
     }
 
     /// <summary>Returns matching path spellings in order.</summary>
-    public async Task<IReadOnlyList<string>> EvaluateAsync(IFileTester tester)
+    public Task<IReadOnlyList<string>> EvaluateAsync(IFileTester tester) => EvaluateAsync(tester, null);
+
+    internal async Task<IReadOnlyList<string>> EvaluateAsync(IFileTester tester, GlobIgnorePatterns? ignorePatterns)
     {
         var baseline = _memory.Bytes;
         var cursor = 0;
@@ -99,22 +101,35 @@ internal sealed class GlobEvaluation
             _cancellationToken.ThrowIfCancellationRequested();
             var hasNext = _pattern.TryReadPathComponent(ref cursor, out var next);
             var markDirectory = !hasNext && trailingSlash;
+            var finalFilter = hasNext ? null : ignorePatterns;
 
             // Reaching dot components already required directory selection on the previous step.
             var name = text.AsMemory(component);
             if (name.Span is "." or "..")
             {
                 var literal = name.Length == 1 ? "." : "..";
+                var kept = 0;
                 for (var index = 0; index < candidates.Count; index++)
                 {
                     var previous = candidates[index];
+                    candidates[index] = default;
                     var replacement = new Candidate(
                         hasNext ? AppendPath(previous.ListPath, literal, markDirectory: false) : string.Empty,
                         AppendPath(previous.OutputPath, literal, markDirectory));
-                    candidates[index] = replacement;
-                    _memory.Resize(_memory.Bytes - previous.PathBytes);
-                    candidatePathBytes = checked(candidatePathBytes - previous.PathBytes + replacement.PathBytes);
+                    var released = previous.PathBytes;
+                    candidatePathBytes -= released;
+                    if (finalFilter?.Excludes(replacement.OutputPath, _cancellationToken) == true)
+                        released += replacement.PathBytes;
+                    else
+                    {
+                        candidates[kept++] = replacement;
+                        candidatePathBytes = checked(candidatePathBytes + replacement.PathBytes);
+                    }
+                    _memory.Resize(_memory.Bytes - released);
                 }
+                if (kept == 0)
+                    return NoMatches();
+                candidates.RemoveRange(kept, candidates.Count - kept);
                 _memory.TrimExcess();
             }
             else
@@ -142,10 +157,12 @@ internal sealed class GlobEvaluation
                         // A successful listing establishes the directory even when the host omits dot entries.
                         if (matchCurrent)
                             matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, ".",
-                                hasNext ? AppendPath(parent.ListPath, ".", markDirectory: false) : string.Empty, markDirectory));
+                                hasNext ? AppendPath(parent.ListPath, ".", markDirectory: false) : string.Empty,
+                                markDirectory, finalFilter));
                         if (matchParent)
                             matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, "..",
-                                hasNext ? AppendPath(parent.ListPath, "..", markDirectory: false) : string.Empty, markDirectory));
+                                hasNext ? AppendPath(parent.ListPath, "..", markDirectory: false) : string.Empty,
+                                markDirectory, finalFilter));
                         foreach (var entry in listing.Entries)
                         {
                             _cancellationToken.ThrowIfCancellationRequested();
@@ -173,18 +190,13 @@ internal sealed class GlobEvaluation
                                     continue;
                             }
                             matchPathBytes = checked(matchPathBytes
-                                + AddMatch(matches, parent.OutputPath, entry.Name, lookupPath, markDirectory));
+                                + AddMatch(matches, parent.OutputPath, entry.Name, lookupPath, markDirectory, finalFilter));
                         }
                     }
                 }
 
                 if (matches.Count == 0)
-                {
-                    ReleaseCandidateLists();
-                    _memory.Resize(baseline);
-                    _memory.ReleaseUnusedCapacity();
-                    return [];
-                }
+                    return NoMatches();
                 (candidates, matches) = (matches, candidates);
                 matches.Clear();
                 _memory.Resize(_memory.Bytes - candidatePathBytes);
@@ -222,11 +234,25 @@ internal sealed class GlobEvaluation
             candidates.Capacity = 0;
             matches.Capacity = 0;
         }
+
+        IReadOnlyList<string> NoMatches()
+        {
+            ReleaseCandidateLists();
+            _memory.Resize(baseline);
+            _memory.ReleaseUnusedCapacity();
+            return [];
+        }
     }
 
-    private long AddMatch(List<Candidate> matches, string outputPrefix, string name, string lookupPath, bool markDirectory)
+    private long AddMatch(List<Candidate> matches, string outputPrefix, string name, string lookupPath, bool markDirectory,
+        GlobIgnorePatterns? filter)
     {
         var match = new Candidate(lookupPath, AppendPath(outputPrefix, name, markDirectory));
+        if (filter?.Excludes(match.OutputPath, _cancellationToken) == true)
+        {
+            _memory.Resize(_memory.Bytes - match.PathBytes);
+            return 0;
+        }
         _memory.PrepareListCapacity(matches, 1);
         matches.Add(match);
         return match.PathBytes;

@@ -5736,8 +5736,8 @@ public sealed partial class Evaluation : IFileTester
         var skipUnmatched = _state.HasOption(ShellOption.Nullglob);
         var rejectUnmatched = _state.HasOption(ShellOption.Failglob);
         var ignored = _state.GlobIgnore;
-        using var ignoreMemory = ignored.IsEmpty ? null : new MemoryCapacity(Memory.Budget, 0);
-        GlobIgnorePatterns? ignorePatterns = null;
+        using var ignorePatterns = ignored.IsEmpty ? null : new GlobIgnorePatterns(ignored,
+            _state.HasOption(ShellOption.NoCaseGlob), Memory);
         var count = expanded.Count;
         if (count > 1 && !skipUnmatched && !rejectUnmatched)
             Memory.PrepareListCapacity(backingOwner, results, count);
@@ -5762,40 +5762,19 @@ public sealed partial class Evaluation : IFileTester
             using var globMemory = new MemoryCapacity(Memory.Budget, 0);
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
                 globMemory, _cancellationToken, _state.EnabledOptions);
-            var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
-            var previousCount = results.Count;
+            var matches = await glob.EvaluateAsync(this, ignorePatterns).ConfigureAwait(false);
             if (matches.Count != 0)
             {
-                if (ignoreMemory == null)
-                    Memory.PrepareListCapacity(backingOwner, results, matches.Count);
-                else
-                    ignorePatterns ??= new GlobIgnorePatterns(ignored, _state.HasOption(ShellOption.NoCaseGlob),
-                        Memory, ignoreMemory, _cancellationToken);
-            }
-
-            foreach (var match in matches)
-            {
-                _cancellationToken.ThrowIfCancellationRequested();
-                if (ignorePatterns != null && GlobIgnorePatterns.IsDotEntry(match))
-                    continue;
-                // Glob paths are UTF-16; reserve their UTF-8 copies before building argument values.
-                var valueStart = Memory.Workspace.Bytes;
-                Memory.Charge(checked(256L + 4L * Encoding.UTF8.GetByteCount(match)));
-                var value = ShellValue.FromText(match);
-                if (ignorePatterns != null)
+                Memory.PrepareListCapacity(backingOwner, results, matches.Count);
+                foreach (var match in matches)
                 {
-                    if (ignorePatterns.Matches(value, _cancellationToken))
-                    {
-                        Memory.Workspace.Resize(valueStart);
-                        Memory.Workspace.TrimExcess();
-                        continue;
-                    }
-                    Memory.PrepareListCapacity(backingOwner, results, 1);
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    // Glob paths are UTF-16; reserve their UTF-8 copies before building argument values.
+                    Memory.Charge(checked(256L + 4L * Encoding.UTF8.GetByteCount(match)));
+                    results.Add(createItem(ShellValue.FromText(match)));
                 }
-                results.Add(createItem(value));
-            }
-            if (results.Count != previousCount)
                 continue;
+            }
             if (rejectUnmatched)
             {
                 await ReportUnitExpansionFailureAsync([ShellValue.FromText("no match")], [pattern.Original], scope,

@@ -30,6 +30,27 @@ public sealed class EvaluationGlobTestsEndToEnd
     }
 
     [Fact]
+    public async Task GlobIgnoreFiltersCompletedDotPathsAndKeepsTheirSpelling()
+    {
+        var host = EndToEndHarness.BuildTree(["/dir/z", "/dir/a", "/dir/m"],
+            [("/dir/a/leaf", ""), ("/dir/m/leaf", ""), ("/dir/z/leaf", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            GLOBIGNORE='dir/a:dir/a/./:dir/m/../:dir//m/leaf'
+            shopt -s nullglob
+            printf 'dot:<%s>\n' dir/*/./
+            set -- dir/*/.
+            printf 'dot-count:%s\n' "$#"
+            printf 'parent:<%s>\n' dir/*/../
+            printf 'leaf:<%s>\n' dir//*/leaf
+            """, tree: host);
+
+        Assert.Equal("dot:<dir/m/./>\ndot:<dir/z/./>\ndot-count:0\n"
+            + "parent:<dir/a/../>\nparent:<dir/z/../>\nleaf:<dir//a/leaf>\nleaf:<dir//z/leaf>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task GlobIgnoreFollowsFunctionPrefixesAndEmptyLocalAssignments()
     {
         var host = EndToEndHarness.BuildTree([("/.hidden", ""), ("/skip", ""), ("/visible", "")]);

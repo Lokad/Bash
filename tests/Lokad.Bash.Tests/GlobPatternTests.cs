@@ -338,6 +338,38 @@ public sealed class GlobPatternTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task GlobIgnoreAdmitsOnlySurvivingTerminalPaths(bool keepMatches)
+    {
+        var governor = new MemoryGovernor(32 * 1024);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        var prefix = new string('p', 256) + "//";
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(prefix + "*"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        var entries = Enumerable.Range(0, 4096)
+            .Select(index => new DirectoryEntry($"discard_{index:D4}", FilePathKind.File)).ToList();
+        string[] survivors = ["z.keep", "a.keep"];
+        if (keepMatches)
+            entries.AddRange(survivors.Select(name => new DirectoryEntry(name, FilePathKind.File)));
+
+        var listing = new GlobListing(_ => entries);
+        using (var resultMemory = new MemoryCapacity(scope, 0))
+        using (var ignore = new GlobIgnorePatterns(ShellValue.FromText(prefix + "discard_*"), false, memory))
+        {
+            var glob = new GlobEvaluation(pattern, ShellPath.Root, resultMemory, CancellationToken.None);
+            var result = await glob.EvaluateAsync(listing, ignore);
+            if (keepMatches)
+                Assert.Equal(survivors.Reverse().Select(name => prefix + name), result);
+            else
+                Assert.Empty(result);
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task GlobSortAdmitsItsResultArrayAfterAllCandidates(bool canAdmitResult)
     {
         var governor = new MemoryGovernor(4 * 1024 * 1024);
