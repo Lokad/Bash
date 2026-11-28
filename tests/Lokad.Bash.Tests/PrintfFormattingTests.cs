@@ -11,6 +11,46 @@ public sealed class PrintfFormattingTests : IDisposable
     public void Dispose() => _resultMemory.Dispose();
 
     [Fact]
+    public async Task FormatReadsResumeAfterCountCallbacks()
+    {
+        using var format = new ObservedByteMemory("left\\n%%[%n]right\\n%n"u8.ToArray());
+        var value = ShellValue.FromBytes(format.Memory);
+        var before = format.Reads;
+        var observations = new List<(PrintfVariableAssignment Assignment, int Reads)>();
+        var result = await PrintfFormatting.EvaluateAsync(value, [ShellValue.FromText("first"), ShellValue.FromText("second")],
+            DateTimeOffset.UnixEpoch, assignOutput: false, _resultMemory, async assignment =>
+            {
+                var reads = format.Reads;
+                await Task.Yield();
+                Assert.Equal(reads, format.Reads);
+                observations.Add((assignment, reads - before));
+                return true;
+            }, null, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("left\n%[]right\n", Text(result.Output));
+        Assert.Equal(new[]
+        {
+            (new PrintfVariableAssignment("first", 7), 1),
+            (new PrintfVariableAssignment("second", 14), 2)
+        }, observations);
+    }
+
+    [Fact]
+    public void EscapedStringConversionReadsOneOperandSpan()
+    {
+        using var operand = new ObservedByteMemory("before\\n\\tend\\cignored"u8.ToArray());
+        var value = ShellValue.FromBytes(operand.Memory);
+        var before = operand.Reads;
+        var result = PrintfFormatting.EvaluateCommand(ShellValue.FromText("<%b>"), [value], _resultMemory);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<before\n\tend", Text(result.Output));
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(before + 1, operand.Reads);
+    }
+
+    [Fact]
     public void OutputOnlyResultCanReuseSharedAllowanceAfterScopeDisposal()
     {
         var memory = new MemoryGovernor(32);

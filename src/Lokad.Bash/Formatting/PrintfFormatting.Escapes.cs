@@ -28,17 +28,17 @@ public static partial class PrintfFormatting
 
         private int AppendEscape(
             OutputBuffer output,
-            ReadOnlyMemory<byte> source,
+            ReadOnlySpan<byte> source,
             int index,
             bool percentB,
             out bool stop)
         {
             Span<byte> encoded = stackalloc byte[ShellEscapeDecoder.MaximumEscapeBytes];
             var mode = percentB ? ShellEscapeMode.PrintfArgument : ShellEscapeMode.PrintfFormat;
-            var result = ShellEscapeDecoder.Decode(source.Span[index..], mode, encoded);
+            var result = ShellEscapeDecoder.Decode(source[index..], mode, encoded);
             stop = result.Status == ShellEscapeStatus.StopOutput;
             if (result.Status == ShellEscapeStatus.MissingDigits)
-                AddWarning((char)source.Span[index] switch
+                AddWarning((char)source[index] switch
                 {
                     'x' => "missing hex digit for \\x",
                     'u' => "missing unicode digit for \\u",

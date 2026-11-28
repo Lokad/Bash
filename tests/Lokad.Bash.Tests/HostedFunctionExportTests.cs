@@ -1,6 +1,5 @@
 using Lokad.Bash.Files;
 using Lokad.Bash.Tree;
-using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Commands;
@@ -75,8 +74,8 @@ public sealed class HostedFunctionExportTests
     [InlineData(64)]
     public async Task WarmHostedExportOrdersEachFunctionWithOneNameRead(int padding)
     {
-        using var first = new ObservedName("probe0"u8.ToArray());
-        using var second = new ObservedName("probe145"u8.ToArray());
+        using var first = new ObservedByteMemory("probe0"u8.ToArray());
+        using var second = new ObservedByteMemory("probe145"u8.ToArray());
         var body = Assert.Single(Parser.Parse(":").Commands);
         var commands = Parser.Parse("export -f probe0 probe145\ninspect\ninspect").Commands;
         var unexported = Enumerable.Range(0, padding).Select(index =>
@@ -112,21 +111,6 @@ public sealed class HostedFunctionExportTests
             Assert.Equal(0, state.LastExitCode);
         }
         finally { state.ReleaseFunctions(); }
-    }
-
-    private sealed class ObservedName(byte[] bytes) : MemoryManager<byte>
-    {
-        internal int Reads { get; private set; }
-
-        public override Span<byte> GetSpan()
-        {
-            Reads++;
-            return bytes;
-        }
-
-        public override MemoryHandle Pin(int elementIndex) => throw new NotSupportedException();
-        public override void Unpin() => throw new NotSupportedException();
-        protected override void Dispose(bool disposing) { }
     }
 
     [Theory]

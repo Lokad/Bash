@@ -76,21 +76,34 @@ public static partial class PrintfFormatting
 
             async ValueTask FormatCycleAsync()
             {
+                var index = 0;
                 var nextLiteralScan = 0;
-                for (var index = 0; index < format.Length && !_stop && !_failed;)
+                while (index < format.Length && !_stop && !_failed
+                    && TryReadNextSpecification(ref index, ref nextLiteralScan, out var specification))
+                {
+                    await ApplySpecificationAsync(specification, index - 1).ConfigureAwait(false);
+                    await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
+                }
+            }
+
+            bool TryReadNextSpecification(ref int index, ref int nextLiteralScan, out FormatSpecification specification)
+            {
+                // Borrow the bytes only until the next conversion can suspend.
+                var source = format.Span;
+                while (index < source.Length && !_stop && !_failed)
                 {
                     if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                    var current = (char)format.Span[index];
+                    var current = (char)source[index];
                     if (current == '\\')
                     {
                         index++;
-                        if (index >= format.Length)
+                        if (index >= source.Length)
                         {
                             AppendByte((byte)'\\');
                             break;
                         }
 
-                        var consumed = AppendEscape(_output, format, index, percentB: false, out _);
+                        var consumed = AppendEscape(_output, source, index, percentB: false, out _);
                         if (consumed == 0)
                         {
                             AppendByte((byte)'\\');
@@ -112,41 +125,40 @@ public static partial class PrintfFormatting
                         }
                         else
                         {
-                            var length = AppendLiteralRun(_output, format.Span[index..], formatText: true);
+                            var length = AppendLiteralRun(_output, source[index..], formatText: true);
                             index += length;
                             // Keep the byte path for a short window after a syntax-dense run.
                             if (length < 4)
-                                nextLiteralScan = index + Math.Min(32, format.Length - index);
+                                nextLiteralScan = index + Math.Min(32, source.Length - index);
                         }
                         continue;
                     }
 
                     var specificationStart = index;
                     index++;
-                    if (index < format.Length && (char)format.Span[index] == '%')
+                    if (index < source.Length && source[index] == (byte)'%')
                     {
                         AppendByte((byte)'%');
                         index++;
                         continue;
                     }
 
-                    if (!TryParseSpecification(specificationStart, ref index, out var specification))
-                        return;
-
-                    await ApplySpecificationAsync(specification, index - 1).ConfigureAwait(false);
-                    await ReportPendingDiagnosticsAsync().ConfigureAwait(false);
+                    return TryParseSpecification(source, specificationStart, ref index, out specification);
                 }
+                specification = default;
+                return false;
             }
 
             bool TryParseSpecification(
+                ReadOnlySpan<byte> source,
                 int specificationStart,
                 ref int index,
                 out FormatSpecification specification)
             {
                 var flags = FormatFlags.None;
-                while (index < format.Length)
+                while (index < source.Length)
                 {
-                    var flag = (char)format.Span[index] switch
+                    var flag = (char)source[index] switch
                     {
                         '#' => FormatFlags.Alternate,
                         '0' => FormatFlags.ZeroPad,
@@ -169,7 +181,7 @@ public static partial class PrintfFormatting
                 var width = 0;
                 var literalWidthOverflow = false;
                 long literalWidth = 0;
-                if (index < format.Length && (char)format.Span[index] == '*')
+                if (index < source.Length && source[index] == (byte)'*')
                 {
                     index++;
                     width = ReadDynamicField();
@@ -180,7 +192,7 @@ public static partial class PrintfFormatting
                             width = -width;
                     }
                 }
-                else if (TryReadDecimal(format, ref index, out literalWidth))
+                else if (TryReadDecimal(source, ref index, out literalWidth))
                     width = (int)literalWidth;
                 else
                     literalWidthOverflow = true;
@@ -190,10 +202,10 @@ public static partial class PrintfFormatting
                 long literalPrecision = 0;
                 var literalPrecisionOverflow = false;
                 ReadOnlyMemory<byte> signedLiteralPrecision = default;
-                if (index < format.Length && (char)format.Span[index] == '.')
+                if (index < source.Length && source[index] == (byte)'.')
                 {
                     index++;
-                    if (index < format.Length && (char)format.Span[index] == '*')
+                    if (index < source.Length && source[index] == (byte)'*')
                     {
                         index++;
                         dynamicPrecision = ReadDynamicField();
@@ -201,11 +213,11 @@ public static partial class PrintfFormatting
                     else
                     {
                         var precisionStart = index;
-                        var signed = index < format.Length && format.Span[index] == (byte)'-';
+                        var signed = index < source.Length && source[index] == (byte)'-';
                         if (signed)
                             index++;
 
-                        var fits = TryReadDecimal(format, ref index, out literalPrecision);
+                        var fits = TryReadDecimal(source, ref index, out literalPrecision);
                         if (signed)
                         {
                             signedLiteralPrecision = format[precisionStart..index];
@@ -218,10 +230,10 @@ public static partial class PrintfFormatting
                     }
                 }
 
-                while (index < format.Length && (char)format.Span[index] is 'h' or 'j' or 'l' or 'L' or 't' or 'z')
+                while (index < source.Length && (char)source[index] is 'h' or 'j' or 'l' or 'L' or 't' or 'z')
                     index++;
 
-                if (index >= format.Length)
+                if (index >= source.Length)
                 {
                     var incomplete = ShellValue.FromBytes(format[specificationStart..]);
                     AddFatalDiagnostic(new Diagnostic("`", incomplete, "': missing format character"));
@@ -229,24 +241,25 @@ public static partial class PrintfFormatting
                     return false;
                 }
 
-                var conversion = (char)format.Span[index++];
+                var conversion = (char)source[index++];
                 ShellValue? timeFormat = null;
                 if (conversion == '(')
                 {
                     var timeStart = index;
                     var depth = 1;
-                    while (index < format.Length && depth > 0)
+                    while (index < source.Length && depth > 0)
                     {
-                        if ((char)format.Span[index] == '(')
+                        var current = (char)source[index];
+                        if (current == '(')
                             depth++;
-                        else if ((char)format.Span[index] == ')')
+                        else if (current == ')')
                             depth--;
 
                         if (depth > 0)
                             index++;
                     }
 
-                    if (depth != 0 || index + 1 >= format.Length || (char)format.Span[index + 1] != 'T')
+                    if (depth != 0 || index + 1 >= source.Length || source[index + 1] != (byte)'T')
                     {
                         AddFatalDiagnostic("invalid time format specification");
                         specification = default;
@@ -300,14 +313,16 @@ public static partial class PrintfFormatting
 
                 static int ClampWrappedField(long field) => field is >= 0 and <= int.MaxValue ? (int)field : int.MaxValue;
 
-                bool TryReadDecimal(ReadOnlyMemory<byte> source, ref int cursor, out long value)
+                bool TryReadDecimal(ReadOnlySpan<byte> digits, ref int cursor, out long value)
                 {
                     value = 0;
                     var overflow = false;
-                    while (cursor < source.Length && (char)source.Span[cursor] is >= '0' and <= '9')
+                    while (cursor < digits.Length)
                     {
+                        var digit = digits[cursor] - (byte)'0';
+                        if (digit is < 0 or > 9)
+                            break;
                         if ((cursor & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                        var digit = (char)source.Span[cursor] - '0';
                         overflow |= value > (int.MaxValue - digit) / 10;
                         value = unchecked(value * 10 + digit);
                         cursor++;
@@ -442,7 +457,7 @@ public static partial class PrintfFormatting
 
                 void AppendEscapedString(FormatSpecification escapedSpecification)
                 {
-                    var argument = GetValueArgument().Bytes;
+                    var argument = GetValueArgument().Bytes.Span;
                     var remaining = _output.RemainingLength;
                     // A literal prefix that exceeds the conversion limit cannot be shortened by a later escape.
                     var scanEnd = Math.Min(argument.Length, remaining + 1);
@@ -450,7 +465,7 @@ public static partial class PrintfFormatting
                     while (literalEnd < scanEnd)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        var chunk = argument.Span.Slice(literalEnd, Math.Min(scanEnd - literalEnd, MaximumLiteralChunkLength));
+                        var chunk = argument.Slice(literalEnd, Math.Min(scanEnd - literalEnd, MaximumLiteralChunkLength));
                         var escape = chunk.IndexOf((byte)'\\');
                         if (escape >= 0)
                         {
@@ -466,21 +481,21 @@ public static partial class PrintfFormatting
                     }
                     if (literalEnd == argument.Length)
                     {
-                        ApplyText(escapedSpecification, argument.Span, ignorePrecision: false);
+                        ApplyText(escapedSpecification, argument, ignorePrecision: false);
                         return;
                     }
 
                     var bytes = GetTemporaryOutput(argument.Length, remaining, escapedSpecification.Precision);
-                    if (literalEnd != 0 && !TryAppendBytes(bytes, argument.Span[..literalEnd]))
+                    if (literalEnd != 0 && !TryAppendBytes(bytes, argument[..literalEnd]))
                         return;
                     for (var index = literalEnd; index < argument.Length;)
                     {
-                        if (argument.Span[index] != (byte)'\\')
+                        if (argument[index] != (byte)'\\')
                         {
-                            if (index + 1 == argument.Length || argument.Span[index + 1] == (byte)'\\')
-                                TryAppendByte(bytes, argument.Span[index++]);
+                            if (index + 1 == argument.Length || argument[index + 1] == (byte)'\\')
+                                TryAppendByte(bytes, argument[index++]);
                             else
-                                index += AppendLiteralRun(bytes, argument.Span[index..], formatText: false);
+                                index += AppendLiteralRun(bytes, argument[index..], formatText: false);
                             if (_failed)
                                 return;
                             continue;
