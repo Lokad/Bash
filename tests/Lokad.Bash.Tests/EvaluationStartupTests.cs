@@ -39,6 +39,88 @@ public sealed class EvaluationStartupTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CommandStringBindingUsesOriginalBytesAndInheritedExport(bool prepared, bool exported)
+    {
+        byte[] source = [.. """inspect "$BASH_EXECUTION_STRING" # """u8, 0xff, (byte)'\r', (byte)'\n', (byte)'\n'];
+        var commandString = ShellValue.FromBytes(source);
+        IReadOnlyList<EnvironmentVariable> environment = exported
+            ? [new("BASH_EXECUTION_STRING", ShellValue.FromText("inherited"))] : [];
+        var argumentZero = ShellValue.FromText("fixture");
+        var invocation = new CommandInvocation("bash", [ShellValue.FromText("-c"), commandString, argumentZero],
+            ShellPath.Root, environment, null, null, null);
+        var script = prepared ? Parser.Parse(source) : new ParsedScript([new ScriptCommand(ShellSource.FromBytes(source))]);
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, script, argumentZero, []);
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        await using var host = new MockFileSystem { MemoryBudget = owner };
+
+        try
+        {
+            var result = await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None);
+            Assert.Equal(0, result.ExitCode);
+            var command = Assert.Single(host.CommandInvocations);
+            Assert.Equal(commandString, Assert.Single(command.Arguments));
+            var forwarded = command.Environment.Where(entry => entry.Name == "BASH_EXECUTION_STRING");
+            if (exported)
+                Assert.Equal(commandString, Assert.Single(forwarded).Value);
+            else
+                Assert.Empty(forwarded);
+            Assert.Empty(host.GetOutputBytes(FileDescriptor.StdErr));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+        finally { evaluation.ReleaseFunctions(); }
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task CommandStringBindingUsesOrdinaryAssignmentAndScope()
+    {
+        const string script = """
+            bash -c '
+            initial=$BASH_EXECUTION_STRING
+            test -n "$initial" && printf "initial\n"
+            f() { local BASH_EXECUTION_STRING; BASH_EXECUTION_STRING=local; printf "%s\n" "$BASH_EXECUTION_STRING"; }
+            f
+            test "$BASH_EXECUTION_STRING" = "$initial" && printf "restored\n"
+            ( BASH_EXECUTION_STRING=child; printf "%s\n" "$BASH_EXECUTION_STRING" )
+            BASH_EXECUTION_STRING=changed
+            BASH_EXECUTION_STRING+=-value
+            printf "%s\n" "$BASH_EXECUTION_STRING"
+            unset BASH_EXECUTION_STRING
+            printf "%s\n" "${BASH_EXECUTION_STRING-unset}"
+            ' fixture
+            """;
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(script, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("initial\nlocal\nrestored\nchild\nchanged-value\nunset\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("bash ./input", "unset")]
+    [InlineData("BASH_EXECUTION_STRING=inherited bash ./input", "inherited")]
+    public async Task FileReaderKeepsTheEnvironmentCommandString(string launch, string expected)
+    {
+        await using var host = EndToEndHarness.BuildTree([("/input", "printf '%s\\n' \"${BASH_EXECUTION_STRING-unset}\"\n")]);
+
+        var result = await host.RunAsync(launch, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected + "\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task NamedChildRetainsItsDefinitionPathThroughASourcedCaller()
     {

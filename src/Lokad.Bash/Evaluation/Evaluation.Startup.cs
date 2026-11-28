@@ -11,6 +11,8 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
+    private static readonly BindingName ExecutionStringName = "BASH_EXECUTION_STRING";
+
     /// <summary>Initializes evaluation from captured interpreter values, independently of command hosting.</summary>
     /// <remarks>
     /// Captured descriptor bindings are forked and their handles remain borrowed. Environment and positional
@@ -41,6 +43,12 @@ public sealed partial class Evaluation
     {
         _inheritedReader = (name, kind);
         _state.UsesCommandStringExpansionExit = kind == SourceMemory.ReaderKind.CommandString;
+    }
+
+    internal void SetInheritedCommandString(ShellValue name, ShellValue commandString)
+    {
+        SetInheritedReader(name, SourceMemory.ReaderKind.CommandString);
+        _vars.SetScalarIgnoringReadonly(ExecutionStringName, commandString);
     }
 
     internal void SetInheritedFunctions(string commandName, IReadOnlyList<ExportedFunction> functions) =>

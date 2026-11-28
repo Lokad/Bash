@@ -1724,6 +1724,11 @@ stage expands redirections at the parent level. The dynamic scalar
 accepts decimal assignments. Local shadowing, unset and array conversion
 leave the ordinary binding independent of the shell's current level.
 
+The supported inherited `bash -c` launch initializes `BASH_EXECUTION_STRING`
+from the original command argument bytes. It is an ordinary writable scalar.
+An inherited export attribute survives the initialization. File and stream
+readers keep any value supplied by the environment.
+
 Invalid loop variable and function definition names use the reader's completed
 unit line through the active stderr descriptor. A retained function uses its
 body opening line for an invalid loop name and the definition header for an

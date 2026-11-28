@@ -15,6 +15,7 @@ public static class ShellEvaluationStartup
     /// <remarks>
     /// Function sources are borrowed until startup prepares them under the engine's runtime budget.
     /// The supported <c>-c</c> form uses <paramref name="argumentZero"/> as the command reader's name.
+    /// It initializes <c>BASH_EXECUTION_STRING</c> from the command argument.
     /// A script operand used as <paramref name="argumentZero"/> supplies the file reader's name.
     /// </remarks>
     public static ShellEvaluation CreateInherited(
@@ -34,7 +35,7 @@ public static class ShellEvaluationStartup
         {
             var first = command.Arguments[0];
             if (command.Arguments.Count >= 2 && first.Bytes.Span.SequenceEqual("-c"u8))
-                evaluation.SetInheritedReader(argumentZero, SourceMemory.ReaderKind.CommandString);
+                evaluation.SetInheritedCommandString(argumentZero, command.Arguments[1]);
             else if (!first.IsEmpty && first.Bytes.Span[0] != (byte)'-' && first.Equals(argumentZero))
                 evaluation.SetInheritedReader(first, SourceMemory.ReaderKind.Script);
         }
