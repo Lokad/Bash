@@ -1001,8 +1001,12 @@ hosted launch can enable it with `-O globstar` or an exported `BASHOPTS`.
 the no-match policy runs. Its shell patterns use Bash's pathname separator
 rules on the published spelling and honor `nocaseglob`. Colons inside
 brackets, quotes, or substitution spelling stay in the pattern. The
-grouping characters remain part of the pattern text. For example, `dir/*/leaf` filters
-`dir/sub/leaf`, and a terminal `dir/*` can also filter deeper paths.
+grouping characters remain part of the pattern text. For example,
+`dir/*/leaf` filters `dir/sub/leaf`, and a terminal `dir/*` can also
+filter deeper paths.
+Changing the selected value reports malformed commands in double-quoted
+patterns at assignment time. With errexit enabled, this terminates the
+active shell with status 2. An identical value reuses its parsed ranges.
 A nonempty assignment enables `dotglob` and excludes path spellings ending
 in `.` or `..` as a complete component. A trailing slash leaves those
 spellings eligible for pattern matching. Assigning an empty value clears

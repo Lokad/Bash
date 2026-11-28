@@ -24,6 +24,7 @@ internal sealed class EvaluationMemory
     internal bool HasCommand => _command != null;
     internal MemoryCapacity Workspace => _memory;
     internal CancellationToken CancellationToken => _command?.CancellationToken ?? CancellationToken.None;
+    internal Command? ActiveCommand => _command;
 
     public EvaluationMemory(IMemoryBudget budget)
     {
@@ -144,6 +145,8 @@ internal sealed class EvaluationMemory
     internal sealed class Command(EvaluationMemory owner, ScopedEvaluation scope, Command? parent, long baseline) : IDisposable
     {
         internal CancellationToken CancellationToken => scope.Effects.CancellationToken;
+        internal ScopedEvaluation Scope => scope;
+        internal EvaluationState.GlobIgnorePrefix? PreparedGlobIgnorePrefix { get; set; }
 
         internal void PrepareRetainedStorage(long bytes)
         {

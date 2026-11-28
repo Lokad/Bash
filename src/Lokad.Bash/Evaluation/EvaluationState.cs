@@ -53,7 +53,9 @@ internal enum ExpansionFailureKind
     /// <summary>A parameter-default assignment rejected an unset nameref target (status 2).</summary>
     NamerefDefault,
     /// <summary>A direct write failed; eval/source can return control to their caller.</summary>
-    AssignmentTarget
+    AssignmentTarget,
+    /// <summary>An invalid command in a GLOBIGNORE pattern terminates an errexit-enabled shell.</summary>
+    GlobIgnoreSyntax
 }
 
 internal readonly record struct ExpansionFailure(ExpansionFailureKind Kind, int ExitCode)
@@ -435,10 +437,29 @@ internal sealed class EvaluationState
     private long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore)
         + (_globIgnoreRanges == null ? 0 : 32 + MemoryCapacity.ArrayBackingBytes<Range>(_globIgnoreRanges.Capacity));
 
-    internal void RefreshGlobIgnore(ShellValue? selected)
+    internal readonly record struct GlobIgnorePrefix(ShellValue Value, List<Range>? Ranges);
+
+    internal void PrepareGlobIgnorePrefix(ShellValue value, EvaluationMemory memory)
+    {
+        if (memory.ActiveCommand is not { } command)
+            return;
+        if (command.PreparedGlobIgnorePrefix is { } previous && SameGlobIgnoreValue(previous.Value, value))
+            return;
+        var ranges = command.PreparedGlobIgnorePrefix == null && SameGlobIgnoreValue(GlobIgnore, value) && _globIgnoreRanges != null
+            ? _globIgnoreRanges : GlobIgnorePatterns.PrepareQuotedCommandRanges(value, memory);
+        command.PreparedGlobIgnorePrefix = new(value, ranges);
+    }
+
+    internal void RefreshGlobIgnore(ShellValue? selected, bool activatePrefix = false)
     {
         var value = selected.GetValueOrDefault();
-        if (!GlobIgnore.Bytes.Equals(value.Bytes) && !GlobIgnore.Bytes.Span.SequenceEqual(value.Bytes.Span))
+        GlobIgnorePrefix? prefix = null;
+        if (activatePrefix && _shellMemory?.ActiveCommand is { } command)
+        {
+            prefix = command.PreparedGlobIgnorePrefix;
+            command.PreparedGlobIgnorePrefix = null;
+        }
+        if (!SameGlobIgnoreValue(GlobIgnore, value))
         {
             if (!value.IsEmpty)
             {
@@ -457,9 +478,14 @@ internal sealed class EvaluationState
         }
         if (!selected.HasValue || !value.IsEmpty)
             SetOption(ShellOption.Dotglob, !value.IsEmpty);
-        if (_globIgnoreRanges == null && _shellMemory is { } memory)
+        if (prefix is { } prepared && SameGlobIgnoreValue(prepared.Value, value))
+            _globIgnoreRanges = prepared.Ranges;
+        else if (_globIgnoreRanges == null && _shellMemory is { } memory)
             _globIgnoreRanges = GlobIgnorePatterns.PrepareQuotedCommandRanges(GlobIgnore, memory);
     }
+
+    private static bool SameGlobIgnoreValue(ShellValue left, ShellValue right) =>
+        left.Bytes.Equals(right.Bytes) || left.Bytes.Span.SequenceEqual(right.Bytes.Span);
 
     internal bool UsesCommandStringExpansionExit { get; set; }
     internal LaunchEnvironment CommandLaunchEnvironment { get; private set; }

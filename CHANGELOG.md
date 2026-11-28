@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report assignment-time command syntax diagnostics from `GLOBIGNORE` and
+  match Bash's terminating status with errexit enabled.
 - Use the command reader to find nested command delimiters in double-quoted
   `GLOBIGNORE` patterns.
 - Keep grouped colons and their original spelling in `GLOBIGNORE` patterns.

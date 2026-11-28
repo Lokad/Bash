@@ -39,6 +39,9 @@ public sealed partial class Evaluation
             : new Variables.CommandBindings(scope.Variables, commandVars, prefixNames,
                 _state.SuppressTemporaryLookup, Memory, _cancellationToken);
         bindings?.ActivateGlobIgnorePrefix();
+        await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
+        if (HasFatalGlobIgnoreSyntax)
+            return EvaluationResult.Exit(2);
         using var functionContext = new FunctionContext(
             functionDefinition.Name.Value, new Variables.LocalBindings(scope.Variables, parent: null, bindings), scope.Context.FunctionContext)
         {

@@ -541,6 +541,7 @@ public sealed partial class Evaluation : IFileTester
                 finally
                 {
                     _state.PreparationDiagnosticName = default;
+                    ReleaseGlobIgnoreDiagnostics();
                     ReleaseReadWorkspace();
                     startupSource?.Release();
                     Interlocked.Exchange(ref _preparedSubstitutionMemory, null)?.Release();
@@ -1288,6 +1289,7 @@ public sealed partial class Evaluation : IFileTester
             foreach (var assignment in simpleCommand.Assignments)
             {
                 var applied = await AwaitWordExpansionAsync(ApplyAssignmentAsync(assignment)).ConfigureAwait(false);
+                await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
                 if (_state.HasPendingExpansionError)
                 {
                     PublishAssignmentTargetFailure(scope);
@@ -1451,7 +1453,11 @@ public sealed partial class Evaluation : IFileTester
             prefixCollections.ReleaseUnusedCapacityOnPublication();
         }
         if (assignmentError.HasValue)
+        {
+            if (HasFatalGlobIgnoreSyntax)
+                return EvaluationResult.Exit(2);
             return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
+        }
 
         if (directPipelineStage)
         {
@@ -1526,6 +1532,9 @@ public sealed partial class Evaluation : IFileTester
         try
         {
             preparedResult = await ExecuteWithRedirectionsAsync().ConfigureAwait(false);
+            await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
+            if (HasFatalGlobIgnoreSyntax)
+                preparedResult = EvaluationResult.Exit(2);
         }
         catch (MemoryBudgetExceededException ex)
         {
@@ -1788,6 +1797,9 @@ public sealed partial class Evaluation : IFileTester
                 if (bindings != null)
                 {
                     bindings.ActivateGlobIgnorePrefix();
+                    await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
+                    if (HasFatalGlobIgnoreSyntax)
+                        return EvaluationResult.Exit(2);
                     commandVars = builtinScope.Variables;
                 }
 
@@ -2176,6 +2188,17 @@ public sealed partial class Evaluation : IFileTester
                 // Append preparation can use the previous binding's attributes. The temporary value drops them.
                 commandVars.UpdateBindingAttributes(name, BindingAttributes.None, BindingAttributes.Integer | BindingAttributes.Case);
                 commandVars.SetExported(name, true);
+                if (name == global::Lokad.Bash.Evaluation.Variables.GlobIgnoreName
+                    && preparation is PreparedCommand.Executable
+                        { Resolution: CommandResolution.Function or CommandResolution.EvaluatorBuiltin }
+                    && commandVars.TryGetExpansionValue(name, out var selected))
+                {
+                    // In-process prefixes select pattern syntax before the command opens its redirections.
+                    _state.PrepareGlobIgnorePrefix(selected, Memory);
+                    await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
+                    if (HasFatalGlobIgnoreSyntax)
+                        return 2;
+                }
             }
             return null;
 
@@ -6521,10 +6544,13 @@ public sealed partial class Evaluation : IFileTester
         int line, SyntaxDiagnosticDetail detail) =>
         ReportUnexpectedSyntaxAsync(syntax, readerName, ShellValue.Empty, origin, line, detail);
 
-    private async Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, ShellValue? readerName, ShellValue subject,
-        SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail)
+    private Task ReportUnexpectedSyntaxAsync(UnexpectedSyntax syntax, ShellValue? readerName, ShellValue subject,
+        SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail) =>
+        ReportUnexpectedSyntaxAsync(GetStdErrDescriptor(), syntax, readerName, subject, origin, line, detail);
+
+    private async Task ReportUnexpectedSyntaxAsync(FileDescriptor descriptor, UnexpectedSyntax syntax,
+        ShellValue? readerName, ShellValue subject, SyntaxDiagnosticOrigin origin, int line, SyntaxDiagnosticDetail detail)
     {
-        var descriptor = GetStdErrDescriptor();
         CheckCancellation();
         if (descriptor.IsClosed)
             return;
@@ -6810,10 +6836,14 @@ public sealed partial class Evaluation : IFileTester
         UnclosedDelimiter endOfInput, int line, ShellValue? readerName, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail) =>
         ReportUnclosedDelimiterAsync(endOfInput, line, readerName, ShellValue.Empty, origin, detail);
 
-    private async Task ReportUnclosedDelimiterAsync(
-        UnclosedDelimiter endOfInput, int line, ShellValue? readerName, ShellValue subject, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
+    private Task ReportUnclosedDelimiterAsync(
+        UnclosedDelimiter endOfInput, int line, ShellValue? readerName, ShellValue subject, SyntaxDiagnosticOrigin origin,
+        SyntaxDiagnosticDetail detail) =>
+        ReportUnclosedDelimiterAsync(GetStdErrDescriptor(), endOfInput, line, readerName, subject, origin, detail);
+
+    private async Task ReportUnclosedDelimiterAsync(FileDescriptor descriptor, UnclosedDelimiter endOfInput, int line,
+        ShellValue? readerName, ShellValue subject, SyntaxDiagnosticOrigin origin, SyntaxDiagnosticDetail detail)
     {
-        var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
         if (origin == SyntaxDiagnosticOrigin.Script && (endOfInput.AtOpeningDelimiter || endOfInput.IncludeScriptLine))
@@ -6905,6 +6935,7 @@ public sealed partial class Evaluation : IFileTester
     internal async Task<DescriptorWriteResult> ExecuteWriteAsync(FileDescriptor fileDescriptor, ReadOnlyMemory<byte> content)
     {
         CheckCancellation();
+        await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
         // Keep the buffer and descriptor borrowed until the host finishes the write.
         var result = await WriteOperation.AsTask(PublishOperation, fileDescriptor, content).ConfigureAwait(false);
         CheckCancellation();

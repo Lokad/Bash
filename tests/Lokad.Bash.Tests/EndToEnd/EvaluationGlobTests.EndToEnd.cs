@@ -246,6 +246,107 @@ public sealed class EvaluationGlobTestsEndToEnd
     }
 
     [Fact]
+    public async Task GlobIgnoreReportsOnlyReachedChangesBeforeTheNextCommand()
+    {
+        var value = ShellArgumentEscaping.EscapeArgument("\"left:$(case a in a) printf \"left:middle:right\":drop");
+        var result = await EvaluationTestHelper.RunAsync($"""
+            bad={value}
+            exec 2>&1
+            GLOBIGNORE=$bad
+            printf 'first:%s\n' "$?"
+            GLOBIGNORE=$bad
+            printf 'same:%s\n' "$?"
+            GLOBIGNORE=ordinary
+            GLOBIGNORE=$bad
+            printf 'restored:%s\n' "$?"
+            """);
+
+        Assert.Equal("command substitution: line 5: unexpected EOF while looking for matching `)'\nfirst:0\nsame:0\n"
+            + "command substitution: line 10: unexpected EOF while looking for matching `)'\nrestored:0\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("GLOBIGNORE=$bad", false)]
+    [InlineData("GLOBIGNORE=$bad printf ''", false)]
+    [InlineData("declare GLOBIGNORE=$bad", true)]
+    [InlineData("read -r GLOBIGNORE", true)]
+    public async Task GlobIgnoreDiagnosticUsesTheAssignmentPhaseDescriptor(string assignment, bool redirected)
+    {
+        const string Pattern = "\"left:$(case a in a) printf \"left:middle:right\":drop";
+        var value = ShellArgumentEscaping.EscapeArgument(Pattern);
+        var input = assignment.StartsWith("read", StringComparison.Ordinal) ? " <<'VALUE'\n" + Pattern + "\nVALUE" : "";
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"bad={value}\n{assignment} 2>diagnostic{input}\nprintf 'status:%s' \"$?\"\n",
+            CancellationToken.None);
+
+        const string Message = "command substitution: line 4: unexpected EOF while looking for matching `)'\n";
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("status:0", host.StandardOutput.TextContent);
+        Assert.Equal(redirected ? "" : Message, host.StandardError.TextContent);
+        Assert.Equal(redirected ? Message : "", host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("GLOBIGNORE=$bad || printf fallback")]
+    [InlineData("GLOBIGNORE=$bad printf builtin")]
+    public async Task GlobIgnoreSyntaxFailureExitsTheErrexitShellBeforeTheCommandContinues(string command)
+    {
+        var value = ShellArgumentEscaping.EscapeArgument("\"left:$(case a in a) printf \"left:middle:right\":drop");
+        var result = await EvaluationTestHelper.RunAsync($"set -e\nbad={value}\n{command}\nprintf tail\n");
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(result.StdOut);
+        Assert.Equal("command substitution: line 5: unexpected EOF while looking for matching `)'\n", result.StdErr);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreFatalPrefixLeavesTheRedirectionUnopened()
+    {
+        var value = ShellArgumentEscaping.EscapeArgument("\"left:$(case a in a) printf \"left:middle:right\":drop");
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"bad={value}\nset -e\nGLOBIGNORE=$bad printf side 2>diagnostic\nprintf tail\n",
+            CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.TextContent);
+        Assert.Equal("command substitution: line 5: unexpected EOF while looking for matching `)'\n", host.StandardError.TextContent);
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task GlobIgnorePrefixReportsARestoredValueBeforeTheNextPrefixExpands()
+    {
+        var value = ShellArgumentEscaping.EscapeArgument("\"left:$(case a in a) printf \"left:middle:right\":drop");
+        var result = await EvaluationTestHelper.RunAsync($"""
+            bad={value}
+            exec 2>&1
+            GLOBIGNORE=$bad
+            GLOBIGNORE=ordinary GLOBIGNORE=$bad later=$(printf 'next\n' >&2) printf 'body\n'
+            """);
+
+        Assert.Equal("command substitution: line 5: unexpected EOF while looking for matching `)'\n"
+            + "command substitution: line 6: unexpected EOF while looking for matching `)'\nnext\nbody\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreUnexpectedTokenDiagnosticKeepsTheCommandBodySpelling()
+    {
+        var value = ShellArgumentEscaping.EscapeArgument("\"prefix:$(printf left &&):right\":drop");
+        var result = await EvaluationTestHelper.RunAsync($"GLOBIGNORE={value}\nprintf 'status:%s' \"$?\"\n");
+
+        Assert.Equal("status:0", result.StdOut);
+        Assert.Equal("command substitution: line 2: syntax error near unexpected token `)'\n"
+            + "command substitution: line 2: `printf left &&):right\":drop'\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task ShellWordPatternsCanMatchSlashWithGlobIgnoreSet()
     {
         var result = await EvaluationTestHelper.RunAsync("""

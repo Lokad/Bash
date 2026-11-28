@@ -50,7 +50,11 @@ public sealed partial class Evaluation
         try
         {
             using var memory = Memory.BeginCommand(scope);
+            await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
             result = await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false);
+            await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
+            if (HasFatalGlobIgnoreSyntax)
+                result = EvaluationResult.Exit(2);
             // These compound forms publish the final (possibly negated) status only
             // if command execution returns normally to the caller.
             if (command is ArithmeticCommand or ConditionalCommand && result.Flow == FlowControlKind.None

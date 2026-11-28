@@ -156,11 +156,11 @@ public sealed partial class Variables
         StoreBinding(GlobIgnoreName, new ScalarSlot(value), attributes);
     }
 
-    private void RefreshGlobIgnore(BindingName name)
+    private void RefreshGlobIgnore(BindingName name, bool activatePrefix = false)
     {
         // Prepared prefixes and saved slots are detached from the shell's effective filter.
         if (name == GlobIgnoreName && !_suppressGlobIgnoreRefresh && _shellState is { } state)
-            state.RefreshGlobIgnore(TryGetExpansionValue(name, out var value) ? value : null);
+            state.RefreshGlobIgnore(TryGetExpansionValue(name, out var value) ? value : null, activatePrefix);
     }
 
     /// <summary>Allows a storage-only update without publishing a special-variable assignment.</summary>
@@ -509,7 +509,7 @@ public sealed partial class Variables
         internal void ActivateGlobIgnorePrefix()
         {
             if (Contains(GlobIgnoreName))
-                _owner.RefreshGlobIgnore(GlobIgnoreName);
+                _owner.RefreshGlobIgnore(GlobIgnoreName, activatePrefix: true);
         }
         internal bool RetainsBinding(BindingName name) => _retainedNames.Contains(name);
         internal Variables SavedVariables => _saved;

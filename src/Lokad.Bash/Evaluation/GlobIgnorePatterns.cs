@@ -26,7 +26,7 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
         // Retain only the pattern boundaries. The command reader's scratch ends at each delimiter.
         memory.Charge(32);
         List<Range> ranges = [];
-        using var groups = new PatternListGroups(stackalloc byte[32], value.Bytes, memory.Budget);
+        using var groups = new PatternListGroups(stackalloc byte[32], value.Bytes, memory.Budget, memory.ActiveCommand?.Scope);
         var cursor = 0;
         while (groups.TryReadPattern(ref cursor, memory.CancellationToken, out var range))
         {
@@ -74,7 +74,7 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
         }
         else
         {
-            using var groups = new PatternListGroups(stackalloc byte[32], value.Bytes, memory.Budget);
+            using var groups = new PatternListGroups(stackalloc byte[32], value.Bytes, memory.Budget, diagnosticScope: null);
             var cursor = 0;
             while (groups.TryReadPattern(ref cursor, cancellationToken, out var range))
                 AddPattern(range);
@@ -94,7 +94,8 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
     }
 
     /// <summary>Locates list separators in the stored pattern spelling without interpreting the groups.</summary>
-    private ref struct PatternListGroups(Span<byte> inline, ReadOnlyMemory<byte> spelling, IMemoryBudget budget)
+    private ref struct PatternListGroups(Span<byte> inline, ReadOnlyMemory<byte> spelling, IMemoryBudget budget,
+        ScopedEvaluation? diagnosticScope)
     {
         private readonly Span<byte> _inline = inline;
         private ByteMemoryBuilder? _overflow;
@@ -217,9 +218,25 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
         {
             using var scratch = new MemoryCapacity(budget, 0);
             var source = ShellSource.FromBytes(spelling);
-            var cursor = new ShellSourceCursor(source, start, new ShellScanContext { ScriptInput = source, SyntaxMemory = scratch });
+            var cursor = new ShellSourceCursor(source, start, new ShellScanContext
+            {
+                ScriptInput = source,
+                SyntaxMemory = scratch,
+                LegacyOrigin = LegacySubstitutionOrigin.Script
+            });
             var scan = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
             cancellationToken.ThrowIfCancellationRequested();
+            if (diagnosticScope is { } scope)
+            {
+                var failure = scan switch
+                {
+                    ShellNestedExpansionScan.Invalid invalid => invalid.Failure,
+                    ShellNestedExpansionScan.Incomplete incomplete => incomplete.Failure,
+                    _ => null
+                };
+                if (failure != null)
+                    scope.Effects.RecordGlobIgnoreDiagnostic(source, failure, scope);
+            }
             return scan is ShellNestedExpansionScan.Complete ? cursor.Position : source.Length;
         }
 
