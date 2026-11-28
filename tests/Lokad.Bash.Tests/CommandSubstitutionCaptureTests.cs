@@ -324,6 +324,109 @@ public sealed class CommandSubstitutionCaptureTests
     }
 
     [Theory]
+    [InlineData(1, 0)]
+    [InlineData(2, 1)]
+    [InlineData(null, 1)]
+    public async Task FileCopyCancellationPreservesAcceptedWindows(int? lateRead, int acceptedWindows)
+    {
+        const int windowLength = 3;
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var cancellation = new CancellationTokenSource();
+        await using var host = new PendingFileCopyHost(lateRead) { MemoryBudget = governor, MaximumReadWindowBytes = windowLength };
+        byte[] payload = [0xff, 13, 0, (byte)'a', (byte)'b', (byte)'c'];
+        host.AddFile("/input", payload);
+        var execution = host.RunAsync("value=$(exec >selected\n<input)", cancellation.Token);
+        int releasesWhilePending;
+        int openFilesWhilePending;
+        bool finishedWhilePending;
+        try
+        {
+            await host.Pending.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            cancellation.Cancel();
+            releasesWhilePending = host.Releases;
+            openFilesWhilePending = host.OpenFileCount;
+            finishedWhilePending = execution.IsCompleted;
+        }
+        finally
+        {
+            host.Settle.SetResult();
+        }
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.False(finishedWhilePending);
+        Assert.Equal(2, openFilesWhilePending);
+        Assert.Equal((lateRead ?? 1) - 1, releasesWhilePending);
+        Assert.Equal(lateRead ?? 1, host.Reads);
+        Assert.Equal(acceptedWindows, host.Writes);
+        Assert.Equal(lateRead ?? 1, host.Releases);
+        var acceptedBytes = acceptedWindows * windowLength;
+        Assert.Equal(acceptedBytes, host.ReadBytesConsumed);
+        Assert.Equal(payload[..acceptedBytes], host.ReadFileBytes("/selected"));
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(2, host.PipeCloses);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    private sealed class PendingFileCopyHost(int? lateRead) : TestHost
+    {
+        private PipeDescriptors _capture;
+        private int _pipeCloses;
+
+        public TaskCompletionSource Pending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Settle { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Reads { get; private set; }
+        public int Writes { get; private set; }
+        public int Releases { get; private set; }
+        public int PipeCloses => Volatile.Read(ref _pipeCloses);
+
+        public override async Task<PipeCreationResult> CreatePipeAsync(CancellationToken lifetimeToken, CancellationToken cancellationToken)
+        {
+            var result = await base.CreatePipeAsync(lifetimeToken, cancellationToken);
+            _capture = Assert.IsType<PipeDescriptors>(result.Descriptors);
+            return result;
+        }
+
+        public override async ValueTask<DescriptorReadBuffer> ReadAsync(FileDescriptor descriptor, DescriptorReadRequest request,
+            CancellationToken cancellationToken)
+        {
+            var window = await base.ReadAsync(descriptor, request, cancellationToken);
+            if (descriptor == _capture.Read)
+                return window;
+
+            window.ReleaseWith(() => Releases++);
+            if (++Reads == lateRead)
+            {
+                Pending.SetResult();
+                await Settle.Task;
+            }
+            return window;
+        }
+
+        public override async ValueTask<DescriptorWriteResult> WriteAsync(FileDescriptor descriptor, ReadOnlyMemory<byte> content,
+            CancellationToken cancellationToken)
+        {
+            Writes++;
+            if (lateRead is null)
+            {
+                Pending.SetResult();
+                await Settle.Task;
+            }
+            // Model a provider that finishes a write after cancellation.
+            return await base.WriteAsync(descriptor, content, CancellationToken.None);
+        }
+
+        public override async Task<OperationError?> CloseDescriptorAsync(FileDescriptor descriptor)
+        {
+            var result = await base.CloseDescriptorAsync(descriptor);
+            if (descriptor == _capture.Read || descriptor == _capture.Write)
+                Interlocked.Increment(ref _pipeCloses);
+            return result;
+        }
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task FileTargetExpansionRunsOnceInItsCallerAndPreservesBorrowedInput(bool prepared)

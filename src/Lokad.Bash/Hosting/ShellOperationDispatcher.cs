@@ -88,6 +88,7 @@ internal static class ShellOperationDispatcher
                 cancellationToken.ThrowIfCancellationRequested();
                 using var buffer = await host.ReadAsync(request.Input, DescriptorReadRequest.UpTo(8192), cancellationToken)
                     .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 var content = buffer.Content;
                 if (!content.IsEmpty)
                 {
