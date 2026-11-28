@@ -758,6 +758,152 @@ public sealed class BoundedReadTests
     }
 
     [Fact]
+    public async Task AlreadyCanceledRawCopySkipsTheHostRequest()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        byte[] destination = [0x55];
+        var reads = 0;
+
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await DescriptorReader.CopyAsync(0, Read, destination, cancellation.Token));
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(0, reads);
+        Assert.Equal(new byte[] { 0x55 }, destination);
+
+        ValueTask<DescriptorReadBuffer> Read(int _, DescriptorReadRequest __, CancellationToken ___)
+        {
+            reads++;
+            return ValueTask.FromResult(DescriptorReadBuffer.EndOfFile);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanceledRawCopyReleasesTheReturnedBorrowWithoutWriting(bool suspended)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var governor = new MemoryGovernor(0);
+        var consumed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(consumed.Add, governor);
+        var reply = new TaskCompletionSource<DescriptorReadBuffer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        byte[] input = [0xff, 13, 0, 10];
+        byte[] destination = [0x55, 0x55, 0x55, 0x55, 0x55];
+        var releases = 0;
+        var reads = 0;
+
+        var read = CopyAsync(cancellation.Token);
+        var waitedForBorrow = true;
+        if (suspended)
+        {
+            cancellation.Cancel();
+            waitedForBorrow = !read.IsCompleted;
+            reply.SetResult(Borrow());
+        }
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.True(waitedForBorrow);
+        Assert.Equal(1, reads);
+        Assert.Equal(1, releases);
+        Assert.Equal([0], consumed);
+        Assert.Equal(0, owner.Position);
+        Assert.Equal(Enumerable.Repeat((byte)0x55, 5), destination);
+
+        Assert.Equal(ByteReadResult.Success(4, reachedEoF: true), await CopyAsync(CancellationToken.None));
+        Assert.Equal([0, 4], consumed);
+        Assert.Equal(2, releases);
+        Assert.Equal(4, owner.Position);
+        Assert.Equal(new byte[] { 0xff, 13, 0, 10, 0x55 }, destination);
+        Assert.Equal(0, governor.PeakBytes);
+
+        async Task<ByteReadResult> CopyAsync(CancellationToken token) =>
+            await DescriptorReader.CopyAsync(owner, Read, destination, token);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner _, DescriptorReadRequest request, CancellationToken token)
+        {
+            reads++;
+            Assert.Equal(destination.Length, request.MaximumBytes);
+            if (token == CancellationToken.None)
+                return ValueTask.FromResult(Borrow());
+
+            Assert.Equal(cancellation.Token, token);
+            if (suspended)
+                return new ValueTask<DescriptorReadBuffer>(reply.Task);
+            var borrow = Borrow();
+            cancellation.Cancel();
+            return ValueTask.FromResult(borrow);
+        }
+
+        DescriptorReadBuffer Borrow()
+        {
+            var remaining = input.AsMemory((int)owner.Position);
+            var buffer = owner.Borrow(remaining, ByteReadResult.Success(remaining.Length, reachedEoF: true), canRetain: false);
+            buffer.ReleaseWith(() => releases++);
+            return buffer;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UncanceledRawCopyPreservesEofAndFailureWithBytes(bool hasFailure)
+    {
+        var governor = new MemoryGovernor(0);
+        var consumed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(consumed.Add, governor);
+        byte[] destination = [0x55, 0x55, 0x55];
+        var outcome = hasFailure
+            ? ByteReadResult.Failure(2, new OperationError("read error\n"), reachedEoF: true)
+            : ByteReadResult.EndOfFile;
+
+        var result = await DescriptorReader.CopyAsync(owner, Read, destination, CancellationToken.None);
+
+        Assert.Equal(outcome, result);
+        Assert.Equal(hasFailure ? new byte[] { 0xff, 13, 0x55 } : [0x55, 0x55, 0x55], destination);
+        Assert.Equal(hasFailure ? new[] { 2 } : Array.Empty<int>(), consumed);
+        Assert.Equal(outcome.BytesRead, owner.Position);
+        Assert.Equal(0, governor.PeakBytes);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadBufferOwner source, DescriptorReadRequest _, CancellationToken __) =>
+            ValueTask.FromResult(hasFailure
+                ? source.Borrow(new byte[] { 0xff, 13 }, outcome, canRetain: false)
+                : DescriptorReadBuffer.EndOfFile);
+    }
+
+    [Fact]
+    public async Task WholeInputCancellationPreservesThePreviouslyCommittedPrefix()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var governor = new MemoryGovernor(1024);
+        await using var host = new MockFileSystem { MaximumReadWindowBytes = 3, MemoryBudget = governor };
+        host.SetStandardInput("abcdef");
+        host.BeforeReadBuffer = _ =>
+        {
+            if (host.ReadCallCount == 2)
+                cancellation.Cancel();
+        };
+        using var budget = governor.CreateScope();
+        var charges = new List<int>();
+
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => host.TryReadAllBytesAsync(
+            FileDescriptor.StdIn, 6, charges.Add, budget, cancellation.Token).AsTask());
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal([3], charges);
+        Assert.Equal(2, host.ReadCallCount);
+        Assert.Equal(0, governor.ReservedBytes);
+
+        var remaining = new byte[3];
+        Assert.Equal(ByteReadResult.Success(3, reachedEoF: true),
+            await host.ReadBytesAsync(FileDescriptor.StdIn, remaining, CancellationToken.None));
+        Assert.Equal("def"u8.ToArray(), remaining);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task ExcessInputUsesBoundedRequestsAndOneExcessByte()
     {
         var host = new MockFileSystem();

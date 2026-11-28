@@ -14,29 +14,35 @@ public static class DescriptorReader
     // A retained line batch may use a whole existing contiguous source. Streaming providers
     // choose bounded windows and reserve lookahead growth against the shared allowance.
 
+    /// <summary>Copies a bounded byte window into the caller's destination and commits its length.</summary>
+    /// <remarks>Cancellation is checked before requesting a window and before copying the returned bytes.</remarks>
     public static ValueTask<ByteReadResult> CopyAsync<T>(T source,
         Func<T, DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read,
         Memory<byte> destination, CancellationToken cancellationToken)
     {
         if (destination.IsEmpty)
             throw new ArgumentException("The read buffer must not be empty.", nameof(destination));
+        cancellationToken.ThrowIfCancellationRequested();
         var pending = read(source, DescriptorReadRequest.UpTo(destination.Length), cancellationToken);
         return pending.IsCompletedSuccessfully
-            ? ValueTask.FromResult(Copy(pending.Result, destination))
-            : Await(pending, destination);
+            ? ValueTask.FromResult(Copy(pending.Result, destination, cancellationToken))
+            : Await(pending, destination, cancellationToken);
 
-        static ByteReadResult Copy(DescriptorReadBuffer buffer, Memory<byte> destination)
+        static ByteReadResult Copy(DescriptorReadBuffer buffer, Memory<byte> destination, CancellationToken cancellationToken)
         {
             using (buffer)
             {
-                buffer.Content.CopyTo(destination);
-                buffer.Consume(buffer.Content.Length);
+                cancellationToken.ThrowIfCancellationRequested();
+                var content = buffer.Content;
+                content.CopyTo(destination);
+                buffer.Consume(content.Length);
                 return buffer.Result;
             }
         }
 
-        static async ValueTask<ByteReadResult> Await(ValueTask<DescriptorReadBuffer> pending, Memory<byte> destination) =>
-            Copy(await pending.ConfigureAwait(false), destination);
+        static async ValueTask<ByteReadResult> Await(
+            ValueTask<DescriptorReadBuffer> pending, Memory<byte> destination, CancellationToken cancellationToken) =>
+            Copy(await pending.ConfigureAwait(false), destination, cancellationToken);
     }
 
     /// <summary>Retains up to the line limit and consumes nothing until the batch is ready.
