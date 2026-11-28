@@ -2460,8 +2460,10 @@ public sealed partial class Evaluation : IFileTester
             var setsNamedAttribute = options.Builtin is BuiltinKind.Export or BuiltinKind.Readonly;
             var conflictingArrayKinds = options.IndexedChange == DeclarationAttributeChange.Set
                 && options.AssociativeChange == DeclarationAttributeChange.Set;
+            var mixedArrayKind = options.MixedArrayKind;
             var globalBindings = options.Global ? bindings : null;
             const string NamerefArrayError = "reference variable cannot be an array";
+            const string ArrayRemovalError = "cannot destroy array variables in this way";
             const int PipelineAssignmentFailure = 4;
             var exitCode = 0;
             var operandFailureStatus = 1;
@@ -2699,7 +2701,7 @@ public sealed partial class Evaluation : IFileTester
                     && targetVars.IsUnsetNameref(name))
                     continue; // +n cannot detach an indirectly reached unset reference or apply attributes to it.
                 if (!assignsGlobalElement && !operand.CompoundApplied && !local && options.NamerefChange != DeclarationAttributeChange.Set
-                    && arrayKind != ArrayAssignmentKind.Auto
+                    && arrayKind != ArrayAssignmentKind.Auto && mixedArrayKind == ArrayAssignmentKind.Auto
                     && (recreateArrayReference || targetVars.TryResolveBinding(name, selectOwner: null, out var arrayBinding)
                         && arrayBinding.Owner.IsUnsetNameref(arrayBinding.Name)))
                 {
@@ -2956,7 +2958,7 @@ public sealed partial class Evaluation : IFileTester
                     && options.NamerefChange == DeclarationAttributeChange.Unchanged;
                 var ordinaryAssignment = ordinaryDeclaration && operand.Value.HasValue;
                 var selectedUnsetNameref = selectedWholeBinding is { IsUnsetNameref: true } ? selectedWholeBinding : null;
-                if (ordinaryAssignment && selectedUnsetNameref is { } unsetBinding
+                if (ordinaryAssignment && mixedArrayKind == ArrayAssignmentKind.Auto && selectedUnsetNameref is { } unsetBinding
                     && unsetBinding.Name != sourceName)
                     continue; // Only the declaration of the unset reference itself can give it a target.
                 var ordinaryAssignmentBinding = ordinaryAssignment && !global ? selectedWholeBinding : null;
@@ -3049,11 +3051,13 @@ public sealed partial class Evaluation : IFileTester
                     }
                     else
                     {
-                        if (local && existingTargetLocal && (element || arrayKind != ArrayAssignmentKind.Auto)
+                        if (local && existingTargetLocal && (element || arrayKind != ArrayAssignmentKind.Auto
+                                || mixedArrayKind != ArrayAssignmentKind.Auto)
                             && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear)
                             && functionContext is { } function)
                             function.Locals.PrepareReadonlyArrayDeclaration(targetVars, localDeclarationTarget,
-                                arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
+                                arrayKind == ArrayAssignmentKind.Associative || mixedArrayKind == ArrayAssignmentKind.Associative
+                                    ? ArrayKind.Associative : ArrayKind.Indexed);
                         if (ordinaryAssignment && directPipelineStage)
                             operandFailureStatus = PipelineAssignmentFailure;
                         var readonlyName = ordinaryAssignmentBinding is { Reference.Kind: VariableReferenceKind.Element } readonlyElement
@@ -3235,15 +3239,19 @@ public sealed partial class Evaluation : IFileTester
                         ? default : options.CaseChange;
                     var elementAttributes = element && operand.Value != null && !options.Readonly && !inheritedReadonly
                         ? GetAttributeChanges(assignmentExport) : default;
+                    var localArrayKind = mixedArrayKind == ArrayAssignmentKind.Auto ? arrayKind : mixedArrayKind;
                     var declarationResult = localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
-                            localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, localCaseChange,
+                            localOperand, prefixNames, localArrayKind, options.Nameref, options.Inherit, localCaseChange,
                             elementAttributes, Memory, localFunction.Enclosing);
                     if (declarationResult != LocalDeclarationResult.Declared)
                     {
                         var rejectsArrayNamerefKind = operand.Value == null && arrayKind != ArrayAssignmentKind.Auto
                             && targetVars.IsArrayNameref(name);
                         var kindConflict = declarationResult == LocalDeclarationResult.IncompatibleArrayKind;
-                        if (kindConflict && inheritedReadonly && followsLocalNameref)
+                        if (kindConflict && mixedArrayKind != ArrayAssignmentKind.Auto
+                            && RejectsArrayAttributeRemoval(targetVars, localDeclarationTarget))
+                            await DiagnoseAsync(sourceName, ArrayRemovalError).ConfigureAwait(false);
+                        else if (kindConflict && inheritedReadonly && followsLocalNameref)
                             await DiagnoseReadonlyAsync(options.ReadonlyChange == DeclarationAttributeChange.Clear
                                 ? localDeclarationTarget : sourceName).ConfigureAwait(false);
                         else if (!redeclaresLocalArray && !rejectsArrayNamerefKind
@@ -3252,8 +3260,8 @@ public sealed partial class Evaluation : IFileTester
                             await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                         else
                         {
-                            var message = arrayKind == ArrayAssignmentKind.Auto ? "invalid local declaration"
-                                : ArrayConversionMessage(arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
+                            var message = localArrayKind == ArrayAssignmentKind.Auto ? "invalid local declaration"
+                                : ArrayConversionMessage(localArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
                             await DiagnoseAsync(kindConflict && options.Inherit ? sourceName : declarationName, message)
                                 .ConfigureAwait(false);
                         }
@@ -3275,6 +3283,71 @@ public sealed partial class Evaluation : IFileTester
                     continue;
                 }
                 var resolvedName = targetVars.ResolveNamerefName(name);
+                VariableBinding? mixedIndexedInitializer = null;
+                if (mixedArrayKind != ArrayAssignmentKind.Auto)
+                {
+                    // Preparation uses the set flags. The reached array rejects removal before an initializer can write.
+                    var binding = local
+                        ? new VariableBinding(VariableReference.ForName(localDeclarationTarget), targetVars)
+                        : selectedWholeBinding ?? (element && !global
+                            && targetVars.TryResolveBinding(name, null, out var selected)
+                            ? selected : new VariableBinding(reference, targetVars));
+                    var owner = binding.Owner;
+                    var arrayName = binding.Name;
+                    var requestedKind = mixedArrayKind == ArrayAssignmentKind.Associative
+                        ? ArrayKind.Associative : ArrayKind.Indexed;
+                    var created = false;
+                    if (!setsNameref && owner.IsUnsetNameref(arrayName))
+                    {
+                        owner.RecreateDeclarationArray(arrayName, requestedKind, operand.Value.HasValue);
+                        created = true;
+                    }
+                    else if (!owner.HasBindingOrAttributes(arrayName))
+                    {
+                        created = operand.Value.HasValue
+                            ? owner.TryAssignResolvedArray(arrayName, [], requestedKind, initializeReadonly: false)
+                            : owner.TryDeclareResolvedArray(arrayName, requestedKind, ScalarArrayPromotion.DiscardValue);
+                    }
+                    if (RejectsArrayAttributeRemoval(owner, arrayName))
+                    {
+                        await DiagnoseAsync(created || binding.Reference.Kind == VariableReferenceKind.Element ? arrayName : sourceName,
+                                ArrayRemovalError)
+                            .ConfigureAwait(false);
+                        continue;
+                    }
+                    if ((options.RequestsIndexedKind && owner.AssociativeArrays.ContainsKey(arrayName))
+                        || (options.RequestsAssociativeKind && owner.IndexedArrays.ContainsKey(arrayName)))
+                    {
+                        var incompatible = owner.AssociativeArrays.ContainsKey(arrayName) ? ArrayKind.Indexed : ArrayKind.Associative;
+                        await DiagnoseAsync(sourceName, ArrayConversionMessage(incompatible)).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (options.Nameref && operand.Value == null)
+                    {
+                        if (owner.TryGetNameref(arrayName, out var previous))
+                            owner.DetachNamerefToUnassigned(arrayName);
+                        if (mixedArrayKind == ArrayAssignmentKind.Indexed)
+                            owner.ClearScalarForArrayAttributeRemoval(arrayName, !previous.IsEmpty);
+                        await ApplyAttributesAsync(arrayName, owner, global, local, assignmentExport).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (!local && !setsNameref && !element && binding.Reference.Kind == VariableReferenceKind.Name
+                        && arrayKind == ArrayAssignmentKind.Auto)
+                    {
+                        if (operand.Value is { } initializer && initializer.Bytes.Span is not [(byte)'(', .., (byte)')'])
+                        {
+                            // Clearing the kind leaves a simple array assignment targeting the active indexed binding.
+                            mixedIndexedInitializer = binding;
+                            if (global && mixedArrayKind == ArrayAssignmentKind.Indexed)
+                                owner.ClearScalarForArrayAttributeRemoval(arrayName, assignsEmptyValue: false);
+                        }
+                        else if (mixedArrayKind == ArrayAssignmentKind.Indexed)
+                        {
+                            owner.ClearScalarForArrayAttributeRemoval(arrayName, operand.Value.HasValue);
+                            operand = operand with { Value = null };
+                        }
+                    }
+                }
                 var arrayRemovalName = name;
                 VariableBinding? arrayRemovalElement = null;
                 // Prepare the declared owner before a global write or a name-only declaration.
@@ -3307,7 +3380,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (ordinaryElement == null && arrayRemovalElement == null && RejectsArrayAttributeRemoval(targetVars, resolvedName))
                 {
-                    await DiagnoseAsync(arrayRemovalName, "cannot destroy array variables in this way").ConfigureAwait(false);
+                    await DiagnoseAsync(arrayRemovalName, ArrayRemovalError).ConfigureAwait(false);
                     continue;
                 }
                 // Global element references and +n keep attribute ownership separate from the active write owner.
@@ -3344,15 +3417,18 @@ public sealed partial class Evaluation : IFileTester
                         await DiagnoseReadonlyAsync(sourceName).ConfigureAwait(false);
                         continue;
                     }
-                    var initialize = initializeGlobalArray || options.NamerefChange == DeclarationAttributeChange.Clear
-                        && (!owner.HasBinding(globalName) || globalAttributes.IsUnsetNameref);
-                    var declared = initialize
-                        ? owner.TryAssignResolvedArray(globalName, [], kind, initializeReadonly: false)
-                        : owner.TryDeclareResolvedArray(globalName, kind, ScalarArrayPromotion.RetainValue);
-                    if (!declared)
+                    if (mixedArrayKind == ArrayAssignmentKind.Auto || arrayKind != ArrayAssignmentKind.Auto)
                     {
-                        await DiagnoseAsync(sourceName, ArrayConversionMessage(kind)).ConfigureAwait(false);
-                        continue;
+                        var initialize = initializeGlobalArray || options.NamerefChange == DeclarationAttributeChange.Clear
+                            && (!owner.HasBinding(globalName) || globalAttributes.IsUnsetNameref);
+                        var declared = initialize
+                            ? owner.TryAssignResolvedArray(globalName, [], kind, initializeReadonly: false)
+                            : owner.TryDeclareResolvedArray(globalName, kind, ScalarArrayPromotion.RetainValue);
+                        if (!declared)
+                        {
+                            await DiagnoseAsync(sourceName, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                            continue;
+                        }
                     }
                 }
                 else if (ordinaryElement == null && (!operand.CompoundApplied || convertedReference) && !local && arrayKind != ArrayAssignmentKind.Auto)
@@ -3464,7 +3540,7 @@ public sealed partial class Evaluation : IFileTester
                         var writeVariables = targetVars;
                         var declarationWrite = WordExpansion.DeclarationWrite.Ordinary;
                         WordExpansion.ResolvedVariableReference? activeIndex = null;
-                        if (global && (arrayKind == ArrayAssignmentKind.Indexed
+                        if (global && (arrayKind == ArrayAssignmentKind.Indexed || mixedIndexedInitializer != null
                             || options.Global && arrayKind == ArrayAssignmentKind.Auto
                                 && options.NamerefChange == DeclarationAttributeChange.Unchanged
                                 && reference.Kind == VariableReferenceKind.Name
@@ -3517,6 +3593,18 @@ public sealed partial class Evaluation : IFileTester
                             }
                             activeIndex = new WordExpansion.ResolvedVariableReference.Indexed(activeName, default);
                             declarationWrite = WordExpansion.DeclarationWrite.ActiveGlobalIndexed;
+                        }
+                        else if (mixedIndexedInitializer is { } mixed)
+                        {
+                            // A direct write with a prefix sees the pre-command value for append.
+                            var owner = sourceName == mixed.Name && bindings is { } prefixes
+                                ? prefixes.SelectCallerOwner(sourceName) : mixed.Owner;
+                            var promotion = bindings == null ? ScalarArrayPromotion.DiscardValue : ScalarArrayPromotion.RetainValue;
+                            if (owner.TryDeclareResolvedArray(mixed.Name, ArrayKind.Indexed, promotion))
+                            {
+                                writeVariables = owner;
+                                writeReference = mixed.Reference;
+                            }
                         }
                         else if (!local && reference.Kind == VariableReferenceKind.Name
                             && options.NamerefChange == DeclarationAttributeChange.Clear
@@ -3930,7 +4018,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (RejectsArrayAttributeRemoval(commandVars, source))
                     {
-                        await DiagnoseAsync(source, "cannot destroy array variables in this way").ConfigureAwait(false);
+                        await DiagnoseAsync(source, ArrayRemovalError).ConfigureAwait(false);
                         return null;
                     }
                     if (subscripted && reference.Subscript.IsEmpty)
@@ -3986,7 +4074,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 if (RejectsArrayAttributeRemoval(commandVars, source))
                 {
-                    await DiagnoseAsync(source, "cannot destroy array variables in this way").ConfigureAwait(false);
+                    await DiagnoseAsync(source, ArrayRemovalError).ConfigureAwait(false);
                     return null;
                 }
                 if (subscripted && reference.Subscript.IsEmpty)
@@ -4133,7 +4221,7 @@ public sealed partial class Evaluation : IFileTester
                     if (operand.Value == null)
                     {
                         if (declaresKindOnly && destroysArray)
-                            await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
+                            await DiagnoseAsync(name, ArrayRemovalError).ConfigureAwait(false);
                         else if (declaresKindOnly && conflictingArrayKinds)
                             await DiagnoseAsync(name, ArrayConversionMessage(kind)).ConfigureAwait(false);
                         else if (rejectsAttributeRemoval)
@@ -4147,7 +4235,7 @@ public sealed partial class Evaluation : IFileTester
                     else if (readonlyBinding)
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                     else if (destroysArray)
-                        await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
+                        await DiagnoseAsync(name, ArrayRemovalError).ConfigureAwait(false);
                     else if (conflictingArrayKinds)
                         await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
                     else if (emptySelector)
@@ -4257,7 +4345,7 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (options.AssociativeChange == DeclarationAttributeChange.Clear && target.Owner.AssociativeArrays.ContainsKey(target.Name))
                     {
-                        await DiagnoseAsync(source, "cannot destroy array variables in this way").ConfigureAwait(false);
+                        await DiagnoseAsync(source, ArrayRemovalError).ConfigureAwait(false);
                         return true;
                     }
                     if (!target.Owner.HasBinding(target.Name))
@@ -4374,7 +4462,7 @@ public sealed partial class Evaluation : IFileTester
                     owner.PrepareIndexedAttributeRemoval(name, hasInitializer);
                 if (RejectsArrayAttributeRemoval(owner, name))
                 {
-                    await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
+                    await DiagnoseAsync(name, ArrayRemovalError).ConfigureAwait(false);
                     return false;
                 }
                 if (!clearsIndexed)

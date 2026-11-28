@@ -2267,6 +2267,13 @@ public sealed partial class Variables
         return false;
     }
 
+    /// <summary>Clears a selected scalar's value and optionally assigns an empty value to an unassigned scalar.</summary>
+    internal void ClearScalarForArrayAttributeRemoval(BindingName name, bool assignsEmptyValue)
+    {
+        if (assignsEmptyValue || TryGetBinding(name, detachBorrowed: false, out var slot) && slot is ScalarSlot)
+            SetResolvedScalar(name, ShellValue.Empty);
+    }
+
     /// <summary>
     /// Attempts to get a nameref mapping.
     /// </summary>

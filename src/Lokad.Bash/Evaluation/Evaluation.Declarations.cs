@@ -636,6 +636,14 @@ public sealed partial class Evaluation
         public BuiltinKind Builtin { get; } = builtin;
         public DeclarationAttributeChange IndexedChange { get; private set; }
         public DeclarationAttributeChange AssociativeChange { get; private set; }
+        // A kind can take part in preparation even when removal wins during attribute publication.
+        public bool RequestsIndexedKind => (ListingAttributes & DeclarationListingAttributes.Indexed) != 0;
+        public bool RequestsAssociativeKind => (ListingAttributes & DeclarationListingAttributes.Associative) != 0;
+        public ArrayAssignmentKind MixedArrayKind =>
+            (RequestsIndexedKind && IndexedChange == DeclarationAttributeChange.Clear
+                || RequestsAssociativeKind && AssociativeChange == DeclarationAttributeChange.Clear)
+            ? RequestsAssociativeKind ? ArrayAssignmentKind.Associative : ArrayAssignmentKind.Indexed
+            : ArrayAssignmentKind.Auto;
         public ArrayAssignmentKind ArrayKind => AssociativeChange == DeclarationAttributeChange.Set
             ? ArrayAssignmentKind.Associative : IndexedChange == DeclarationAttributeChange.Set
                 ? ArrayAssignmentKind.Indexed : ArrayAssignmentKind.Auto;

@@ -35,6 +35,7 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
     [Theory]
     [InlineData("a[\\\n-3\n]=no", "<after:1>", "line 3: a[-3\n]: bad array subscript\n", null)]
     [InlineData("2>log declare 'a[-3]=first\nlast'", "<after:1>", "", "line 1: a[-3]: bad array subscript\n")]
+    [InlineData("2>log declare +a -a arr", "<after:1>", "", "line 1: declare: arr: cannot destroy array variables in this way\n")]
     [InlineData("a[$(printf forbidden >&2)]='value' true", "<after:0>",
         "line 1: `a[$(printf forbidden 1>&2)]': not a valid identifier\n", null)]
     public async Task RejectedArrayTargetsRetainTheirSourceLineAndSpelling(
@@ -197,6 +198,59 @@ public sealed class ArrayAssignmentTargetTestsEndToEnd
             declare {flag} link
             printf '<%s:%s>\n' "$?" "$i"; declare -p item
             """ + "\n", $"<{status}:0>\ndeclare -a item\n", error);
+
+    [Theory]
+    [InlineData(":", "declare -a +a item", "<1:0>\ndeclare -a item\n",
+        "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData(":", "declare +A -A item", "<1:0>\ndeclare -A item\n",
+        "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData(":", "declare +a -a item=new", "<1:0>\ndeclare -a item=()\n",
+        "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData("readonly item=old", "declare +a -a item", "<0:0>\ndeclare -r item=\"\"\n", "")]
+    [InlineData("item=old", "declare -a +a item+=new", "<0:0>\ndeclare -a item=([0]=\"new\")\n", "")]
+    [InlineData("item=old", "declare -a +a item='(new)'", "<0:0>\ndeclare -- item=\"\"\n", "")]
+    [InlineData("item=old", "declare -a +a item=(new)", "<1:0>\ndeclare -a item=([0]=\"new\")\n",
+        "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData("declare -A item=([fixed]=old)", "declare -a +a 'item[i++]=new'",
+        "<1:0>\ndeclare -A item=([fixed]=\"old\" )\n", "line 2: declare: item: cannot convert associative to indexed array\n")]
+    [InlineData("declare -A item=([fixed]=old); declare -n link=item", "declare +a -a link",
+        "<1:0>\ndeclare -A item=([fixed]=\"old\" )\n", "line 2: declare: link: cannot convert associative to indexed array\n")]
+    [InlineData("declare -n link='item[i++]'", "declare -a +a link=new", "<1:0>\ndeclare -a item=()\n",
+        "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData("declare -n item", "declare +A -A item=next", "<1:0>\ndeclare -A item=()\n",
+        "line 2: declare: item: cannot destroy array variables in this way\n")]
+    [InlineData("item=(old)", "item=temporary command declare -a +a item+=new",
+        "<0:0>\ndeclare -a item=([0]=\"oldnew\")\n", "")]
+    public Task MixedArrayAttributesPrepareTheBindingBeforeRemovingTheRequestedKind(
+        string setup, string command, string output, string error) =>
+        AssertDeclarationAsync("i=0; " + setup + "\n" + command
+            + "\nprintf '<%s:%s>\\n' \"$?\" \"$i\"; declare -p item; :\n", output, error);
+
+    [Fact]
+    public Task MixedArrayAttributesValidateNamerefsAndContinueAcrossOperands() =>
+        AssertDeclarationAsync("""
+            item=(old)
+            declare -a +a -n item next
+            printf '<%s>\n' "$?"
+            declare -p item next
+            """ + "\n", "<1>\ndeclare -a item=([0]=\"old\")\ndeclare -a next\n",
+            "line 2: declare: item: reference variable cannot be an array\n"
+            + "line 2: declare: next: cannot destroy array variables in this way\n");
+
+    [Fact]
+    public Task MixedArrayAttributesKeepLocalAndGlobalDeclarationOwners() =>
+        AssertDeclarationAsync("""
+            declare item
+            probe() {
+                local item=inner
+                declare -g -A +A item=new
+                printf '<%s>\n' "$?"; declare -p item
+                local +a -a item
+                printf '<%s>\n' "$?"; declare -p item
+            }
+            probe; declare -p item
+            """ + "\n", "<0>\ndeclare -a item=([0]=\"new\")\n<1>\ndeclare -a item=([0]=\"new\")\ndeclare -- item\n",
+            "line 6: local: item: cannot destroy array variables in this way\n");
 
     [Fact]
     public Task GlobalAttributeRemovalPreparesItsOwnerBeforeAnActiveElementWrite() =>

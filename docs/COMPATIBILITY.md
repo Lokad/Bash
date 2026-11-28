@@ -978,6 +978,14 @@ rejecting removal. `+A` allows a scalar to become indexed and preserves
 its value at index zero. An explicit array kind or attribute declaration
 prepares the selected binding without evaluating the selector.
 
+When one declaration supplies both signs of an array kind, the set flag
+participates in declaration preparation in either order. A matching array
+rejects removal. An existing array of the other kind rejects conversion.
+With both indexed signs, a nonlocal name-only declaration clears the value
+of an existing assigned scalar and retains its attributes. A local declaration
+can prepare an empty local array before reporting the removal error. A
+rejected write leaves the prepared binding in its selected scope.
+
 A bare nonlocal `declare` or `typeset` through an element nameref
 evaluates the stored selector and declares that cell without a value.
 The array remains hidden until a later assignment makes its retained
