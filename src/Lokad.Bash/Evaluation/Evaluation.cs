@@ -173,6 +173,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.InitializeArgumentZero();
         _vars.InitializeSubshellLevel();
         _vars.InitializeDirectoryStack(_state);
+        _vars.InitializeCallerArrays();
     }
 
     /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>
@@ -490,6 +491,8 @@ public sealed partial class Evaluation : IFileTester
                     PipelineExitReader = _state.ForkKind == ShellForkKind.PipelineSimpleCommand ? default : _pipelineExitBoundary
                 };
                 var reader = _inheritedReader;
+                var callerSource = reader is { Kind: SourceMemory.ReaderKind.Script } fileReader
+                    ? fileReader.Name : (ShellValue?)null;
                 _inheritedReader = null;
                 var startup = await TryImportInheritedFunctionsAsync(scope).ConfigureAwait(false);
                 if (!startup.Ready)
@@ -506,6 +509,8 @@ public sealed partial class Evaluation : IFileTester
                         startupSource.OwnDiagnosticName(origin.Name);
                         scope = scope with { Context = scope.Context.WithSourceMemory(startupSource) };
                     }
+                    using var caller = callerSource is { } sourceName
+                        ? _vars.EnterCaller(sourceName, 0, Memory) : default;
                     result = await EvaluateScriptAsync(scope, _rootFlowHandling).ConfigureAwait(false);
                     if (_state.ForkKind == ShellForkKind.Subshell)
                         result = CompleteDiscardInChild(result);
@@ -2590,6 +2595,11 @@ public sealed partial class Evaluation : IFileTester
             {
                 var operand = operands[index];
                 operandFailureStatus = 1;
+                if (operand.RejectedInitializer)
+                {
+                    RecordOperandFailure();
+                    continue;
+                }
                 if (operand.Value == null && TrySaveLocalOptions(operand.Name))
                     continue;
                 if (!TryParseDeclarationReference(ShellSource.FromBytes(operand.Name.Bytes), out var reference)
@@ -2694,6 +2704,19 @@ public sealed partial class Evaluation : IFileTester
                     ? DeclarationAttributeChange.Set : options.ExportChange;
                 // Global declarations can write indexed elements through the active scope.
                 var sourceName = reference.Name;
+                if (commandVars.IsCallerArray(sourceName))
+                {
+                    if (local)
+                    {
+                        await DiagnoseAsync(sourceName, "variable may not be assigned value").ConfigureAwait(false);
+                        continue;
+                    }
+                    if (!setsNamedAttribute && operand.Value.HasValue)
+                    {
+                        RecordOperandFailure();
+                        continue;
+                    }
+                }
                 ShellValue? assignmentPrefix = arrayAttributeAssignment
                     && (options.ExportChange == DeclarationAttributeChange.Set || options.Readonly)
                     && bindings?.Contains(sourceName) == true && commandVars.Scalars.TryGetValue(sourceName, out var prefixValue)
@@ -5014,6 +5037,8 @@ public sealed partial class Evaluation : IFileTester
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope).ConfigureAwait(false);
                 return false;
             }
+            if (destination.Owner.IsCallerArray(destination.Name))
+                return false;
             if (!await ValidateCompoundInitializerCapturesAsync(items, scope).ConfigureAwait(false))
                 return false;
 
@@ -7078,6 +7103,8 @@ public sealed partial class Evaluation : IFileTester
             // The source can outlive this invocation through its function definitions.
             sourceMemory.OwnDiagnosticName(openedPath, currentSearchEntry);
             lookupMemory?.Dispose();
+            using var caller = scope.Variables.EnterCaller(sourceMemory.GetDiagnosticName(inFunction: false) ?? ShellValue.Empty,
+                scope.Context.Coordinates.Line, Memory);
             // The active command owns the frame until the sourced invocation and its children settle.
             Memory.Charge(48);
             var sourceScope = scope with

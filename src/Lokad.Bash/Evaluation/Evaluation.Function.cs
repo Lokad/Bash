@@ -46,6 +46,9 @@ public sealed partial class Evaluation
         };
         using var positionalParametersScope = scope.Variables.EnterFunctionPositionals(arguments);
         functionContext.CallerPositionals = positionalParametersScope;
+        using var caller = scope.Variables.EnterCaller(
+            function.SourceMemory?.GetDiagnosticName(inFunction: true) ?? SourceMemory.EnvironmentDiagnosticName,
+            scope.Context.Coordinates.Line, Memory);
         var functionScope = scope with
         {
             TerminalLaunch = terminalCapture

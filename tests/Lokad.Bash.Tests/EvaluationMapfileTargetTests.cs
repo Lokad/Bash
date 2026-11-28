@@ -86,7 +86,8 @@ public sealed class EvaluationMapfileTargetTests
 
         Assert.Equal(ShellValue.FromText(circular ? "second" : string.Empty), state.Namerefs["ref"]);
         if (circular) Assert.Equal(ShellValue.FromText("ref"), state.Namerefs["second"]);
-        Assert.Equal(new BindingName[] { "DIRSTACK", "PIPESTATUS" }, state.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
+        Assert.Equal(new BindingName[] { "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "PIPESTATUS" },
+            state.IndexedArrays.Keys.OrderBy(name => name.CachedText, StringComparer.Ordinal));
         Assert.Empty(host.ClosedDescriptors);
     }
 

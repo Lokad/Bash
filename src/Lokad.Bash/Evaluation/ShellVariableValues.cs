@@ -89,6 +89,10 @@ internal sealed class IndexedArray
     private readonly SortedSet<long> _positions;
     // A live directory view uses the stack's dense positions and retained value bytes.
     internal EvaluationState? DirectoryStack { get; private set; }
+    private readonly Variables? _callerOwner;
+    private readonly bool _callerLines;
+    internal bool IsCallerArray => _callerOwner != null;
+    private int? DenseCount => DirectoryStack?.DirectoryStackCount ?? _callerOwner?.CallerCount;
     private long? _maximumIndex;
     private long _valueBytes;
     private int _entryCapacity;
@@ -114,6 +118,17 @@ internal sealed class IndexedArray
         _positions = EmptyRecoveryPipelineStatus._positions;
         IsInitialized = true;
     }
+
+    internal IndexedArray(Variables callerOwner, bool lines)
+    {
+        _callerOwner = callerOwner;
+        _callerLines = lines;
+        _elements = EmptyRecoveryPipelineStatus._elements;
+        _positions = EmptyRecoveryPipelineStatus._positions;
+        IsInitialized = true;
+    }
+
+    internal IndexedArray ForCallerOwner(Variables owner) => new(owner, _callerLines);
 
     internal void RebindDirectoryStack(EvaluationState directoryStack) => DirectoryStack = directoryStack;
 
@@ -143,44 +158,47 @@ internal sealed class IndexedArray
     /// <summary>Hides retained entries until the next assignment.</summary>
     public void HideEntries()
     {
-        if (DirectoryStack == null)
+        if (!DenseCount.HasValue)
             IsInitialized = false;
     }
 
     /// <summary>Gets the greatest stored position for arithmetic indexing, including hidden metadata.</summary>
-    public long? MaxIndex => DirectoryStack is { } stack ? stack.DirectoryStackCount - 1L : _maximumIndex;
+    public long? MaxIndex => DenseCount is > 0 and { } count ? count - 1L : _maximumIndex;
 
     /// <summary>Enumerates present values by index without copying; consume before mutating.</summary>
     public IEnumerable<ShellValue> PresentValues =>
-        DirectoryStack != null ? ValuesFrom(default, int.MaxValue)
+        DenseCount.HasValue ? ValuesFrom(default, int.MaxValue)
             : IsInitialized ? _positions.Select(position => _elements[position].GetValueOrDefault()) : [];
 
     /// <summary>Enumerates sparse positions and values together, including unassigned positions.</summary>
-    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => DirectoryStack != null
-        ? EntriesByPosition.Select(entry => KeyValuePair.Create(ShellValue.FromInteger(entry.Key), entry.Value))
+    internal IEnumerable<KeyValuePair<ShellValue, ShellValue?>> Entries => DenseCount.HasValue
+        ? EntriesByPosition.Select(static entry => KeyValuePair.Create(ShellValue.FromInteger(entry.Key), entry.Value))
         : IsInitialized ? _positions.Select(position => KeyValuePair.Create(ShellValue.FromInteger(position), _elements[position])) : [];
 
     /// <summary>Enumerates stored entries by numeric position, including unassigned entries.</summary>
-    internal IEnumerable<KeyValuePair<long, ShellValue?>> EntriesByPosition => DirectoryStack is { } stack
-        ? Enumerable.Range(0, stack.DirectoryStackCount).Select(
-            position => KeyValuePair.Create((long)position, (ShellValue?)stack.GetDirectoryStackEntry(position).Value))
+    internal IEnumerable<KeyValuePair<long, ShellValue?>> EntriesByPosition => DenseCount is { } count
+        ? Enumerable.Range(0, count).Select(
+            position => KeyValuePair.Create((long)position, (ShellValue?)ReadDense(position)))
         : IsInitialized ? _positions.Select(position => KeyValuePair.Create(position, _elements[position])) : [];
 
     /// <summary>Gets the number of visible entries, excluding holes.</summary>
-    public int Count => DirectoryStack?.DirectoryStackCount ?? (IsInitialized ? _elements.Count : 0);
+    public int Count => DenseCount ?? (IsInitialized ? _elements.Count : 0);
+
+    private ShellValue ReadDense(int position) => DirectoryStack is { } stack
+        ? stack.GetDirectoryStackEntry(position).Value
+        : (_callerOwner ?? throw new InvalidOperationException("Expected a dense array owner.")).GetCallerEntry(position, _callerLines);
 
     /// <summary>Enumerates at most count present entries starting at an index, without materializing holes.</summary>
     public IEnumerable<ShellValue> ValuesFrom(IndexedArrayIndex first, int count)
     {
-        if (DirectoryStack is { } stack)
+        if (DenseCount is { } total)
         {
-            var total = stack.DirectoryStackCount;
             if (first.Value < total)
             {
                 var start = (int)first.Value;
                 var end = start + Math.Min(count, total - start);
                 for (var position = start; position < end; position++)
-                    yield return stack.GetDirectoryStackEntry(position).Value;
+                    yield return ReadDense(position);
             }
             yield break;
         }
@@ -202,8 +220,8 @@ internal sealed class IndexedArray
         }
     }
     /// <summary>Enumerates index bytes in numeric order without a dense view.</summary>
-    public IEnumerable<ShellValue> PresentKeys => DirectoryStack is { } stack
-        ? Enumerable.Range(0, stack.DirectoryStackCount).Select(position => ShellValue.FromInteger(position))
+    public IEnumerable<ShellValue> PresentKeys => DenseCount is { } count
+        ? Enumerable.Range(0, count).Select(position => ShellValue.FromInteger(position))
         : IsInitialized ? _positions.Select(ShellValue.FromInteger) : [];
 
     /// <summary>Gets one present position without allocating.</summary>
@@ -211,10 +229,10 @@ internal sealed class IndexedArray
         IndexedArrayIndex index,
         out ShellValue value)
     {
-        if (DirectoryStack is { } stack)
+        if (DenseCount is { } count)
         {
-            var exists = index.Value < stack.DirectoryStackCount;
-            value = exists ? stack.GetDirectoryStackEntry((int)index.Value).Value : ShellValue.Empty;
+            var exists = index.Value < count;
+            value = exists ? ReadDense((int)index.Value) : ShellValue.Empty;
             return exists;
         }
         if (IsInitialized && _elements.TryGetValue(index.Value, out var assigned) && assigned is { } stored)
@@ -245,7 +263,7 @@ internal sealed class IndexedArray
 
     private void Set(long position, ShellValue? value, EvaluationMemory? memory, long prepaidBytes)
     {
-        if (IsRecoveryPipelineStatus || DirectoryStack != null)
+        if (IsRecoveryPipelineStatus || DirectoryStack != null || IsCallerArray)
             return;
         var present = _elements.TryGetValue(position, out var previous);
         var valueDelta = Variables.EstimateValueBytes(value.GetValueOrDefault())
@@ -279,7 +297,7 @@ internal sealed class IndexedArray
     /// <summary>Removes one position, updating the maximum only when its entry was removed.</summary>
     public void Remove(IndexedArrayIndex index)
     {
-        if (IsRecoveryPipelineStatus || DirectoryStack != null)
+        if (IsRecoveryPipelineStatus || DirectoryStack != null || IsCallerArray)
             return;
         if (!_elements.Remove(index.Value, out var previous))
             return;
@@ -341,7 +359,7 @@ internal sealed class IndexedArray
             stack.SetSavedDirectories(origin, values, memory, cancellationToken);
             return;
         }
-        if (IsRecoveryPipelineStatus)
+        if (IsRecoveryPipelineStatus || IsCallerArray)
             return;
         var count = values.Count;
         var capacity = _elements.EnsureCapacity(0);
@@ -435,7 +453,7 @@ internal sealed class IndexedArray
     /// </remarks>
     public List<ShellValue> CaptureDenseValues()
     {
-        if (DirectoryStack != null)
+        if (DenseCount.HasValue)
             return new List<ShellValue>(PresentValues);
         if (!IsInitialized || MaxIndex is not { } maximum)
             return [];
@@ -459,7 +477,7 @@ internal sealed class IndexedArray
     /// <summary>Copies sparse storage. A directory view keeps its shell owner until rebind at a fork.</summary>
     public IndexedArray Clone()
     {
-        if (IsRecoveryPipelineStatus || DirectoryStack != null)
+        if (IsRecoveryPipelineStatus || DirectoryStack != null || IsCallerArray)
             return this;
         return new IndexedArray(new Dictionary<long, ShellValue?>(_elements),
             new SortedSet<long>(_positions), _maximumIndex, IsInitialized)

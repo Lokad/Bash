@@ -66,6 +66,8 @@ public sealed partial class Variables
                 ShellStateSlot dynamic when shellOwner != null => dynamic.CloneForShell(shellOwner),
                 IndexedSlot { Value.DirectoryStack: not null } when shellOwner?._directoryStack is { } stack =>
                     new IndexedSlot(stack),
+                IndexedSlot { Value.IsCallerArray: true } caller when shellOwner != null =>
+                    new IndexedSlot(caller.Value.ForCallerOwner(shellOwner)),
                 _ => CloneValue()
             };
             if (this is IndexedSlot previous && copy is IndexedSlot indexed)
@@ -193,7 +195,7 @@ public sealed partial class Variables
     {
         if (TryGetBinding(name, detachBorrowed: false, out var previous))
         {
-            if (previous is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
+            if (previous is IndexedSlot indexed && (indexed.Value.IsRecoveryPipelineStatus || indexed.Value.IsCallerArray))
                 return;
             replacement.Attributes |= retainArrayNameref
                 ? previous.Attributes : previous.Attributes & ~BindingAttributes.ArrayNameref;

@@ -146,6 +146,15 @@ public sealed partial class Evaluation
                             GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }
+                    if (targetVariables.IsCallerArray(name))
+                    {
+                        var operand = new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false);
+                        if (local && scope.Context.FunctionContext is { } active)
+                            await ReportCommandDiagnosticAsync([active.FunctionName, ShellValue.FromText(": "), declaredValue],
+                                [ShellValue.FromText("variable may not be assigned value")], scope).ConfigureAwait(false);
+                        AddAssignment(operand with { RejectedInitializer = !local });
+                        continue;
+                    }
                     var rejectsElementReference = !local && referencedElement && !globalInFunction;
                     var initializesReadonlyNameref = (initializesLocalNameref || retainsArrayNameref) && rejectsTarget;
                     var checksLocalArrayKind = local && targetLocal && !memberAssignment
@@ -599,6 +608,7 @@ public sealed partial class Evaluation
     /// <summary>Null Value means a name without an explicit value, not an assigned empty value.</summary>
     private readonly record struct PreparedDeclarationOperand(ShellValue Name, ShellValue? Value, AssignmentOperator Operator, bool CompoundApplied)
     {
+        internal bool RejectedInitializer { get; init; }
         private static readonly ShellValue Replacement = ShellValue.FromText("=");
         private static readonly ShellValue Append = ShellValue.FromText("+=");
 

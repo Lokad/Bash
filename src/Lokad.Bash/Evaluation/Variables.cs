@@ -88,7 +88,7 @@ public sealed partial class Variables
             var separators = _commandSource is { } source
                 && ReferenceEquals(CachedFieldSeparators, source.Variables.CachedFieldSeparators)
                     ? 0 : CachedFieldSeparators.EstimatedMemoryBytes;
-            return checked(_bindingBytes + inherited + separators
+            return checked(_bindingBytes + inherited + separators + OwnedCallerMemoryBytes
                 + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count));
         }
     }
@@ -350,7 +350,12 @@ public sealed partial class Variables
 
     private Variables Clone(Variables? shellOwner, EvaluationState? directoryStack)
     {
-        var clone = new Variables { _directoryStack = directoryStack == null ? null : new IndexedArray(directoryStack) };
+        var clone = new Variables
+        {
+            _directoryStack = directoryStack == null ? null : new IndexedArray(directoryStack),
+            _callerFrames = VisibleCallers is { Count: > 0 } frames ? new List<CallerEntry>(frames) : null,
+            _callerLineBytes = VisibleCallerLineBytes
+        };
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
             clone.StoreBinding(entry.Key, entry.Value.Clone(shellOwner ?? clone));
@@ -1404,6 +1409,8 @@ public sealed partial class Variables
             return true;
 
         var name = target.Name;
+        if (IsCallerArray(name))
+            return false;
         if (!removeArrayNameref && IsArrayNameref(name))
         {
             if (flags == UnsetFlags.NamerefOnly)

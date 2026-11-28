@@ -1758,6 +1758,16 @@ from the original command argument bytes. It is an ordinary writable scalar.
 An inherited export attribute survives the initialization. File and stream
 readers keep any value supplied by the environment.
 
+`BASH_SOURCE` and `BASH_LINENO` are indexed views of the active call stack.
+Each pair gives the function's definition source or the sourced reader's
+path, and the line at which it was entered. The innermost frame has
+index zero. A named file reader contributes its path and line zero.
+Functions defined by a command string or imported through the environment
+use `environment`. A command string begins with an empty stack, and
+eval, captures and shell forks preserve the enclosing frames. Scalar
+and element assignments leave the projected entries intact. Compound
+assignments, local declarations and unsets fail.
+
 Invalid loop variable and function definition names use the reader's completed
 unit line through the active stderr descriptor. A retained function uses its
 body opening line for an invalid loop name and the definition header for an

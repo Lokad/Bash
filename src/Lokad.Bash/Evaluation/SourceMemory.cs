@@ -14,7 +14,7 @@ internal sealed class SourceMemory
 {
     internal enum ReaderKind { Script, CommandString, ImportedFunction }
 
-    private static readonly ShellValue EnvironmentDiagnosticName = ShellValue.FromText("environment");
+    internal static readonly ShellValue EnvironmentDiagnosticName = ShellValue.FromText("environment");
     private const long LegacyCacheEntryBytes = 256;
     // The source reader/executor starts with one reference. Namespace copies and active
     // invocations retain this coarse owner, not individual syntax nodes or value objects.

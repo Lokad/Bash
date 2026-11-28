@@ -104,6 +104,14 @@ public sealed partial class Evaluation
                 commandVars.ReselectGetoptsIndex(name);
                 continue;
             }
+            var selectedName = resolvedBinding ? binding.Name : unsetName;
+            if (!namerefs && commandVars.IsCallerArray(selectedName) && !commandVars.IsReadonlyBinding(selectedName))
+            {
+                exitCode = 1;
+                await ReportBuiltinDiagnosticAsync([command], [selectedName.ToValue(), ShellValue.FromText(": cannot unset")],
+                    context).ConfigureAwait(false);
+                continue;
+            }
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;
             var authoredScalar = directSelector && sameNameFunction;
             var removesProjectedReference = authoredScalar || projected && resolvedBinding
@@ -692,6 +700,8 @@ public sealed partial class Evaluation
             return kind is BuiltinAssignmentKind.Directory or BuiltinAssignmentKind.Getopts
                 ? BuiltinAssignmentResult.Readonly : BuiltinAssignmentResult.Failed;
         }
+        if ((target.ReadOwner ?? destination).IsCallerArray(target.Name))
+            return BuiltinAssignmentResult.Failed;
         var failure = !recreatesBinding && value is { } assignedValue
             ? destination.GetNamerefAssignmentFailure(reference.Name, target.Name, assignedValue, Memory)
             : NamerefAssignmentFailure.None;

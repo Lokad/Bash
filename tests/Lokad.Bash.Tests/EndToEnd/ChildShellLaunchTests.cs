@@ -30,6 +30,48 @@ public sealed class ChildShellLaunchTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Fact]
+    public async Task SourceCallsProjectTheDefinitionPathAndCallLineThroughAFork()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            outer() {
+                source ./defs
+                printf '%s:%s\n' "${BASH_SOURCE[*]}" "${BASH_LINENO[*]}"
+            }
+            outer
+            printf '%s:%s\n' "${BASH_SOURCE[*]}" "${BASH_LINENO[*]}"
+            """);
+        host.AddFile("/defs", """
+            inner() { (printf '%s:%s\n' "${BASH_SOURCE[*]}" "${BASH_LINENO[*]}"); }
+            inner
+            """);
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("./defs ./defs ./unit ./unit:2 2 5 0\n./unit ./unit:5 0\n./unit:0\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("BASH_SOURCE", "./fixture")]
+    [InlineData("BASH_LINENO", "0")]
+    public async Task CallArraysKeepTheirCellsAcrossAssignmentAndUnset(string name, string first)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/fixture", name + "[0]=value; printf '%s\\n' \"$?\"\n"
+            + name + "=(value); printf '%s\\n' \"$?\"\n"
+            + "unset '" + name + "[0]'; printf '%s\\n' \"$?\" \"$" + name + "\"");
+
+        var result = await host.RunAsync("bash ./fixture", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"0\n1\n1\n{first}\n", host.StandardOutput.TextContent);
+        Assert.Equal($"./fixture: line 3: unset: {name}: cannot unset\n", host.StandardError.TextContent);
+    }
+
     [Theory]
     [InlineData("SHLVL=7 exec bash -c 'printf \"%s\\n\" \"$SHLVL\"'", "7\n")]
     [InlineData("(SHLVL=7 exec bash -c 'printf \"%s\\n\" \"$SHLVL\"')", "8\n")]
