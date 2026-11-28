@@ -167,6 +167,17 @@ public sealed partial class Variables
         public override ShellStateSlot CloneForShell(Variables owner) => new SubshellLevelSlot(owner);
     }
 
+    private sealed class ShellOptionsSlot(Variables shell, bool setOptions) : ShellStateSlot(shell)
+    {
+        public override ShellValue Value
+        {
+            get => ShellOptions.FormatBinding(Shell.VisibleShellState?.EnabledOptions ?? ShellOptions.Fixed, setOptions);
+            set { } // Startup interprets imported option lists separately from scalar assignment.
+        }
+
+        public override ShellStateSlot CloneForShell(Variables owner) => new ShellOptionsSlot(owner, setOptions);
+    }
+
     private sealed class IndexedSlot(IndexedArray value) : VariableSlot
     {
         public IndexedArray Value { get; } = value;

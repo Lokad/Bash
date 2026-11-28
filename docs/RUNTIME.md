@@ -389,6 +389,10 @@ snapshots alongside the ordinary shell state.
 `localvar_inherit` selects the existing inherited-declaration path during
 operand preparation and dispatch. It belongs to the shell state and persists
 on ordinary function return.
+The two readonly option bindings project immutable renderings of the
+same enabled-option flags. Forks bind them to the child shell state.
+An exported list is captured with the other command environment values
+and applies recognized flags when the host constructs an inherited shell.
 
 Loop flow is settled at the loop that owns its remaining level. In while/until
 conditions, the condition gate precedes body suppression: a closed gate retains

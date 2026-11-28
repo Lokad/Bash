@@ -7,12 +7,6 @@ namespace Lokad.Bash.Evaluation;
 
 public sealed partial class Evaluation
 {
-    private static readonly ShellValue[] SupportedShoptOptions =
-        [ShellValue.FromText("inherit_errexit"), ShellValue.FromText("localvar_inherit")];
-
-    private static readonly ShellValue[] SupportedSetOptions =
-        [ShellValue.FromText("braceexpand"), ShellValue.FromText("errexit"), ShellValue.FromText("pipefail")];
-
     [Flags]
     private enum ShoptFlags { None = 0, Print = 1, Quiet = 2, SetOptions = 4, Enable = 8, Disable = 16 }
 
@@ -62,21 +56,23 @@ public sealed partial class Evaluation
         using var output = new ByteMemoryBuilder(0, Memory.Budget);
         if (listing && !outputClosed)
         {
-            foreach (var name in setOptions ? SupportedSetOptions : SupportedShoptOptions)
+            foreach (var entry in ShellOptions.Names(setOptions))
             {
-                var state = ReadState(name).GetValueOrDefault();
+                var state = _state.HasOption(entry.Option);
                 if (mode == ShoptFlags.None || state == (mode == ShoptFlags.Enable))
-                    await WriteRowAsync(name, state).ConfigureAwait(false);
+                    await WriteRowAsync(entry.Name, state).ConfigureAwait(false);
             }
         }
         for (var index = first; index < words.Count; index++)
         {
             CheckCancellation();
             var name = words[index];
-            var state = ReadState(name);
-            var rejectsChange = state is { } current && mode != ShoptFlags.None
-                && !TrySetState(name, current, enabled: mode == ShoptFlags.Enable);
-            if (state == null || rejectsChange)
+            var option = ShellOptions.Find(name.Bytes.Span, setOptions);
+            var state = _state.HasOption(option);
+            var enabled = mode == ShoptFlags.Enable;
+            var fixedOption = (option & ShellOptions.Fixed) != 0;
+            var rejectsChange = fixedOption && mode != ShoptFlags.None && state != enabled;
+            if (option == ShellOption.None || rejectsChange)
             {
                 await ReportBuiltinDiagnosticAsync([command], [name, ShellValue.FromText(setOptions
                     ? ": invalid option name" : ": invalid shell option name")], context).ConfigureAwait(false);
@@ -87,38 +83,14 @@ public sealed partial class Evaluation
             }
             if (mode == ShoptFlags.None)
             {
-                if (!state.Value)
+                if (!state)
                     status = 1;
-                await WriteRowAsync(name, state.Value).ConfigureAwait(false);
+                await WriteRowAsync(name, state).ConfigureAwait(false);
             }
+            else if (!fixedOption)
+                _state.SetOption(option, enabled);
         }
         return await FinishAsync(status).ConfigureAwait(false);
-
-        bool? ReadState(ShellValue name)
-        {
-            var spelling = name.Bytes.Span;
-            if (setOptions)
-                return ShellPredicates.GetOptionState(spelling, _state.ErrexitEnabled);
-            if (spelling.SequenceEqual("inherit_errexit"u8))
-                return _state.InheritErrexit;
-            return spelling.SequenceEqual("localvar_inherit"u8) ? _state.LocalVariableInheritance : null;
-        }
-
-        bool TrySetState(ShellValue name, bool current, bool enabled)
-        {
-            var spelling = name.Bytes.Span;
-            if (setOptions)
-            {
-                if (!spelling.SequenceEqual("errexit"u8))
-                    return current == enabled;
-                _state.ErrexitEnabled = enabled;
-            }
-            else if (spelling.SequenceEqual("inherit_errexit"u8))
-                _state.InheritErrexit = enabled;
-            else
-                _state.LocalVariableInheritance = enabled;
-            return true;
-        }
 
         async Task WriteRowAsync(ShellValue name, bool enabled)
         {

@@ -103,6 +103,42 @@ public sealed class ErrexitTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Fact]
+    public async Task OptionBindingsFollowTheReachedCaptureAndParentState()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            set -e
+            shopt -s localvar_inherit
+            printf 'capture:%s\n' "$(printf '%s/%s' "$BASHOPTS" "$SHELLOPTS")"
+            shopt -s inherit_errexit
+            printf 'capture:%s\n' "$(shopt -u localvar_inherit; printf '%s/%s' "$BASHOPTS" "$SHELLOPTS")"
+            printf 'parent:%s/%s\n' "$BASHOPTS" "$SHELLOPTS"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("capture:localvar_inherit/braceexpand:pipefail\n"
+            + "capture:inherit_errexit/braceexpand:errexit:pipefail\n"
+            + "parent:inherit_errexit:localvar_inherit/braceexpand:errexit:pipefail\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("BASHOPTS")]
+    [InlineData("SHELLOPTS")]
+    public async Task OptionBindingsRetainReadonlyProtectionAcrossAssignmentAndUnsetModes(string name)
+    {
+        var result = await EvaluationTestHelper.RunAsync(name + "=ignored\n"
+            + "printf 'assignment:%s\\n' \"$?\"\n"
+            + "unset -n " + name + "\n"
+            + "printf 'unset:%s:%s\\n' \"$?\" \"${" + name + "@a}\"");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("assignment:1\nunset:1:r\n", result.StdOut);
+        Assert.Equal($"line 1: {name}: readonly variable\nline 3: unset: {name}: cannot unset: readonly variable\n", result.StdErr);
+    }
+
     [Theory]
     [InlineData('-', "+e", "errexit\toff\n", "errexit\ton\n", "e")]
     [InlineData('+', "-e", "set -o errexit\n", "set +o errexit\n", "")]

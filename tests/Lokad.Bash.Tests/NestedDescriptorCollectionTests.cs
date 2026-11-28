@@ -57,7 +57,8 @@ public sealed class NestedDescriptorCollectionTests
             "external" => "cat; printf child",
             _ => throw new ArgumentOutOfRangeException(nameof(route))
         };
-        var governor = new MemoryGovernor(24 * 1024);
+        // Keep room for both new option bindings in the parent and its child copy.
+        var governor = new MemoryGovernor(24 * 1024 + 2 * 290);
         using var owner = governor.CreateScope();
         var evaluation = new Eval(Parser.Parse("set -e; " + body + "; printf tail"),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.Standard, borrowed), null, null,

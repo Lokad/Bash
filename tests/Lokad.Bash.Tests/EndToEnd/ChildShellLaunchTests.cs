@@ -31,6 +31,58 @@ public sealed class ChildShellLaunchTests
     }
 
     [Fact]
+    public async Task GroupedLaunchOptionsApplyBeforeTheFileReaderAndItsPositionals()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            x=outer
+            f() { local x; printf '%s:%s:%s:%s\n' "$0" "$x" "$-" "${BASH_SOURCE[0]}"; }
+            f
+            printf 'arg:%s\n' "$1"
+            """);
+
+        var result = await host.RunAsync("bash -eO localvar_inherit -- ./unit first", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("./unit:outer:e:./unit\narg:first\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task ExportedOptionStateIsReadAfterLeadingLaunchOptions()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            shopt -s localvar_inherit
+            set -e
+            export BASHOPTS SHELLOPTS
+            bash +e +O localvar_inherit -c 'printf "child:%s/%s\n" "$BASHOPTS" "$SHELLOPTS"'
+            exec -c bash -c 'printf "cleared:%s/%s\n" "$BASHOPTS" "$SHELLOPTS"'
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("child:localvar_inherit/braceexpand:errexit:pipefail\ncleared:/braceexpand:pipefail\n",
+            host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("unsupported_test_option")]
+    [InlineData("-c")]
+    public async Task LaunchOptionNameIsValidatedBeforeTheSelectedReaderRuns(string name)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("bash -O " + name + " -c 'printf wrong'", CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Empty(host.StandardOutput.Content.ToArray());
+        Assert.Equal($"bash: line 0: {name}: invalid shell option name\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task SourceCallsProjectTheDefinitionPathAndCallLineThroughAFork()
     {
         await using var host = new TestHost();

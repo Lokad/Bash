@@ -10,6 +10,31 @@ namespace Lokad.Bash.Tests;
 public sealed class EvaluationStartupTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublicInheritedStartupSelectsTheCommandAfterLeadingOptions(bool prepared)
+    {
+        const string source = """printf '%s:%s:%s:%s\n' "${BASH_EXECUTION_STRING+set}" "$0" "$1" "$BASHOPTS" """;
+        var label = ShellValue.FromText("chosen");
+        var first = ShellValue.FromText("first");
+        var invocation = new CommandInvocation("bash",
+            [ShellValue.FromText("+O"), ShellValue.FromText("localvar_inherit"), ShellValue.FromText("-c"),
+                ShellValue.FromText(source), label, first],
+            ShellPath.Root, [new("BASHOPTS", ShellValue.FromText("unknown_option:localvar_inherit"))], null, null, null);
+        var script = prepared ? Parser.Parse(source) : new ParsedScript([new ScriptCommand(ShellSource.FromText(source))]);
+        var evaluation = ShellEvaluationStartup.CreateInherited(invocation, script, label, [first]);
+        await using var host = new TestHost();
+
+        var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("set:chosen:first:localvar_inherit\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Contains("BASHOPTS", evaluation.ExportedVariables);
+        Assert.Contains("BASHOPTS", evaluation.ReadonlyVariables);
+    }
+
+    [Theory]
     [InlineData(false, null, "1", "")]
     [InlineData(true, null, "1", "")]
     [InlineData(false, " \t+007 \t", "8", "")]
@@ -471,7 +496,7 @@ public sealed class EvaluationStartupTests
             DescriptorTable.Snapshot.Standard.WithStandardStreams(FileDescriptor.StdIn, output, FileDescriptor.StdErr),
             [output]);
         var evaluation = new ShellEvaluation(Parser.Parse("inspect \"$0\" \"$1\" \"$#\" \"$PWD\" \"$VALUE\""),
-            new EvaluationOptions(0, directory), descriptors, "bash", environment, argumentZero, arguments);
+            new EvaluationOptions(0, directory), descriptors, "bash", environment, argumentZero, arguments, ShellOption.None);
 
         arguments.Clear();
         environment.Clear();

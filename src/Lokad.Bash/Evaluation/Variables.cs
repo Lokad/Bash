@@ -67,6 +67,8 @@ public sealed partial class Variables
     private int _bindingCapacity;
     private long _bindingBytes;
     private LocalBindings? _savedLocalBindings;
+    private EvaluationState? _shellState;
+    private EvaluationState? VisibleShellState => _shellState ?? _commandSource?.Variables.VisibleShellState;
 
     // Account bindings as a coarse owner. Shared values can be counted twice; no object identities
     // are registered. Callers keep saved bindings charged through restoration.
@@ -111,7 +113,7 @@ public sealed partial class Variables
         return overhead + (slot switch
         {
             LineNumberSlot or SubshellLevelSlot => EstimateValueBytes(11),
-            ArgumentZeroSlot => 0, // The shell retains the name independently of its binding.
+            ArgumentZeroSlot or ShellOptionsSlot => 0, // Both borrow immutable bytes outside the binding.
             ScalarSlot scalar => EstimateValueBytes(scalar.Value),
             IndexedSlot indexed => indexed.Value.EstimatedMemoryBytes + (indexed.DirectoryListing?.EstimatedMemoryBytes ?? 0),
             AssociativeSlot associative => associative.Value.EstimatedMemoryBytes,
@@ -126,13 +128,27 @@ public sealed partial class Variables
 
     internal void InitializeSubshellLevel() => StoreBinding(SubshellLevelName, new SubshellLevelSlot(this));
 
+    internal void InitializeShellOptions()
+    {
+        StoreBinding(ShellOptions.BashOptionsName, new ShellOptionsSlot(this, setOptions: false), BindingAttributes.Readonly);
+        StoreBinding(ShellOptions.SetOptionsName, new ShellOptionsSlot(this, setOptions: true), BindingAttributes.Readonly);
+    }
+
     internal void InitializeDirectoryStack(EvaluationState stack)
     {
         _directoryStack = new IndexedArray(stack);
         StoreBinding(DirectoryStackName, new IndexedSlot(_directoryStack));
     }
 
-    internal void RebindDirectoryStack(EvaluationState stack) => _directoryStack?.RebindDirectoryStack(stack);
+    internal void RebindShellState(EvaluationState state)
+    {
+        _shellState = state;
+        _directoryStack?.RebindDirectoryStack(state);
+    }
+
+    internal bool IsShellOptionBinding(BindingName name) =>
+        (name == ShellOptions.BashOptionsName || name == ShellOptions.SetOptionsName)
+        && TryGetBinding(name, detachBorrowed: false, out var slot) && slot is ShellOptionsSlot;
 
     internal bool IsDirectoryStackBinding(BindingName name) =>
         TryGetBinding(name, detachBorrowed: false, out var slot) && slot is IndexedSlot { Value.DirectoryStack: not null };
@@ -352,6 +368,7 @@ public sealed partial class Variables
     {
         var clone = new Variables
         {
+            _shellState = VisibleShellState,
             _directoryStack = directoryStack == null ? null : new IndexedArray(directoryStack),
             _callerFrames = VisibleCallers is { Count: > 0 } frames ? new List<CallerEntry>(frames) : null,
             _callerLineBytes = VisibleCallerLineBytes,

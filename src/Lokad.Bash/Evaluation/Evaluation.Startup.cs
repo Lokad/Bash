@@ -31,18 +31,31 @@ public sealed partial class Evaluation
         string invocationName,
         IReadOnlyList<EnvironmentVariable> environment,
         ShellValue argumentZero,
-        IReadOnlyList<ShellValue> positionalParameters)
+        IReadOnlyList<ShellValue> positionalParameters,
+        ShellOption launchOptions)
         : this(script, descriptors, publishNextStep: null, onComplete: null,
             options, new MemoryGovernor(long.MaxValue), sourceMemory: null)
     {
+        _state.EnabledOptions |= launchOptions;
         var inheritedLevel = ShellValue.Empty;
+        ShellValue? bashOptions = null;
+        ShellValue? setOptions = null;
         foreach (var variable in environment)
         {
             if (variable.Name == ShellLevelName)
                 inheritedLevel = variable.Value;
+            else if (variable.Name == ShellOptions.BashOptionsName)
+                bashOptions = variable.Value;
+            else if (variable.Name == ShellOptions.SetOptionsName)
+                setOptions = variable.Value;
             else
                 SetExportedVariable(variable.Name, variable.Value);
         }
+        // Startup flags run first. Each inherited list then enables its recognized options.
+        if (bashOptions is { } bash)
+            SetExportedVariable(ShellOptions.BashOptionsName, bash);
+        if (setOptions is { } flags)
+            SetExportedVariable(ShellOptions.SetOptionsName, flags);
         var level = AdjustShellLevel(inheritedLevel, 1, CancellationToken.None, out var excessiveLevel);
         if (excessiveLevel != 0)
             _startupShellLevelWarning = (invocationName, excessiveLevel);

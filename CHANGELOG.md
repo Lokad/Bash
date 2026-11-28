@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Expose readonly `BASHOPTS` and `SHELLOPTS` for the supported options
+  and carry explicitly exported settings into fresh hosted launches.
+  Support leading `-e`, `+e`, `-O name` and `+O name` at startup.
+
 - Support `shopt` inspection and changes for `inherit_errexit` and
   `localvar_inherit`. Command substitutions and local declarations use
   the reached option state.

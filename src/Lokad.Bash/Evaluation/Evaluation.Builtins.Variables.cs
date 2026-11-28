@@ -108,7 +108,7 @@ public sealed partial class Evaluation
                     context).ConfigureAwait(false);
                 continue;
             }
-            if (namerefs && !commandVars.HasNamerefAttribute(name))
+            if (namerefs && !commandVars.HasNamerefAttribute(name) && !commandVars.IsShellOptionBinding(name))
             {
                 commandVars.ReselectGetoptsIndex(name);
                 continue;
@@ -383,7 +383,7 @@ public sealed partial class Evaluation
                 if (index + 1 < words.Count && words[index + 1].Bytes.Span is [not ((byte)'-' or (byte)'+'), ..])
                 {
                     var name = words[++index];
-                    if (!name.Bytes.Span.SequenceEqual("errexit"u8))
+                    if (ShellOptions.Find(name.Bytes.Span, setOptions: true) != ShellOption.Errexit)
                         return await InvalidOptionAsync(name, ": invalid option name", 2).ConfigureAwait(false);
                     _state.ErrexitEnabled = enabled;
                     continue;

@@ -921,6 +921,15 @@ Named queries return status 1 if a selected option is off or unrecognized.
 they list enabled and disabled options respectively. `-o` selects the
 `set` option namespace. That namespace exposes the mutable `errexit`
 setting and the fixed `braceexpand` and `pipefail` settings.
+
+`BASHOPTS` and `SHELLOPTS` are readonly, colon-separated lists of the
+enabled options in these two supported namespaces. They follow the
+reached shell state, including a capture's errexit setting. They can
+be explicitly exported. An inherited list enables its recognized
+options in a fresh hosted launch after the leading launch options are
+applied. The supported `-e` and `+e` flags and the `-O name` and
+`+O name` pairs precede `-c` or a script operand. The application
+host supplies the selected source and positional parameters.
 `$_` holds the last expanded argument of a completed simple command. A command
 without arguments records its name, and a command with only assignments or
 redirections records an empty value. Word and redirection expansion can read the

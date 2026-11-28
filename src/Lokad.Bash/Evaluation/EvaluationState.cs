@@ -387,9 +387,23 @@ internal sealed class EvaluationState
     internal int FunctionBraceLine { get; set; }
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
-    public bool ErrexitEnabled { get; set; }
-    internal bool InheritErrexit { get; set; }
-    internal bool LocalVariableInheritance { get; set; }
+    internal ShellOption EnabledOptions { get; set; } = ShellOptions.Fixed;
+    public bool ErrexitEnabled
+    {
+        get => HasOption(ShellOption.Errexit);
+        set => SetOption(ShellOption.Errexit, value);
+    }
+    internal bool InheritErrexit
+    {
+        get => HasOption(ShellOption.InheritErrexit);
+        set => SetOption(ShellOption.InheritErrexit, value);
+    }
+    internal bool LocalVariableInheritance => HasOption(ShellOption.LocalVariableInheritance);
+
+    internal bool HasOption(ShellOption option) => (EnabledOptions & option) != 0;
+
+    internal void SetOption(ShellOption option, bool enabled) =>
+        EnabledOptions = enabled ? EnabledOptions | option : EnabledOptions & ~option;
     internal bool UsesCommandStringExpansionExit { get; set; }
     internal LaunchEnvironment CommandLaunchEnvironment { get; private set; }
     internal enum LaunchEnvironment { Ordinary, Pipeline, Parenthesized }
@@ -800,9 +814,8 @@ internal sealed class EvaluationState
             // The parent command remains alive through the child's execution and cleanup.
             PreparationDiagnosticName = PreparationDiagnosticName,
             FunctionBraceLine = FunctionBraceLine,
-            ErrexitEnabled = ErrexitEnabled && (kind != ShellForkKind.CommandSubstitution || InheritErrexit),
-            InheritErrexit = InheritErrexit,
-            LocalVariableInheritance = LocalVariableInheritance,
+            EnabledOptions = kind == ShellForkKind.CommandSubstitution && !InheritErrexit
+                ? EnabledOptions & ~ShellOption.Errexit : EnabledOptions,
             UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,

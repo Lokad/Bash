@@ -5,6 +5,7 @@ using System.Text;
 using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 using Lokad.Bash.Formatting;
+using Lokad.Bash.Helpers;
 using Lokad.Bash.Syntax;
 using Lokad.Bash.Files;
 
@@ -240,26 +241,40 @@ public class TestHost : MockFileSystem
     private protected async Task<CommandExecutionResult> RunFixtureShellAsync(CommandInvocation command, CancellationToken cancel)
     {
         var arguments = command.Arguments;
-        if (arguments.Count == 0)
-            return await ReportFailureAsync("expected -c or a script file", 2).ConfigureAwait(false);
-
+        var launch = ShellLaunchArguments.Parse(arguments);
         using var childMemory = MemoryBudget.CreateScope();
+        if (launch.Error != ShellLaunchError.None)
+        {
+            using var diagnostic = new ByteMemoryBuilder(0, childMemory);
+            diagnostic.Append(ShellValue.FromText(command.CommandName).Bytes).Append(": line 0: "u8)
+                .Append(launch.ErrorOperand.Bytes);
+            diagnostic.Append(launch.Error switch
+            {
+                ShellLaunchError.InvalidOptionName => ": invalid shell option name\n"u8,
+                ShellLaunchError.InvalidFlag => ": invalid option\n"u8,
+                _ => ": option requires a name\n"u8
+            });
+            await WriteAsync(command.StdErr, diagnostic.ToMemory(), cancel).ConfigureAwait(false);
+            return new CommandExecutionResult.Completed(2);
+        }
+        var reader = launch.ReaderIndex;
+        if (reader >= arguments.Count)
+            return await ReportFailureAsync(launch.CommandString ? "-c: option requires an argument" : "expected -c or a script file", 2)
+                .ConfigureAwait(false);
+
         ReadOnlyMemory<byte> source;
         ShellValue argumentZero;
-        int firstArgument;
-        if (arguments[0].Bytes.Span.SequenceEqual("-c"u8))
+        var firstArgument = reader + 1;
+        if (launch.CommandString)
         {
-            if (arguments.Count < 2)
-                return await ReportFailureAsync("-c: option requires an argument", 2).ConfigureAwait(false);
-            source = arguments[1].Bytes;
-            argumentZero = arguments.Count > 2 ? arguments[2]
+            source = arguments[reader].Bytes;
+            argumentZero = arguments.Count > firstArgument ? arguments[firstArgument]
                 : command.ArgumentZeroOverride ?? ShellValue.FromText(command.CommandName);
-            firstArgument = 3;
+            firstArgument++;
         }
         else
         {
-            argumentZero = arguments[0];
-            firstArgument = 1;
+            argumentZero = arguments[reader];
             if (!argumentZero.TryGetUtf8Text(out var text) || !RawShellPath.TryParse(text, out var path))
                 return await ReportFailureAsync("invalid script path", 127).ConfigureAwait(false);
 
@@ -292,7 +307,7 @@ public class TestHost : MockFileSystem
         }
 
         var script = new ParsedScript([new ScriptCommand(ShellSource.FromBytes(source))]);
-        var child = ShellEvaluationStartup.CreateInherited(command, script, argumentZero, arguments.Skip(firstArgument).ToArray());
+        var child = ShellEvaluationStartup.CreateInherited(command, script, argumentZero, arguments.Skip(firstArgument).ToArray(), launch);
         try
         {
             var result = await new Engine().RunAsync(child, this, childMemory, cancel).ConfigureAwait(false);

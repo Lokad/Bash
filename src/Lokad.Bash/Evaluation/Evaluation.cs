@@ -172,6 +172,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.InitializeLineNumber();
         _vars.InitializeArgumentZero();
         _vars.InitializeSubshellLevel();
+        _vars.InitializeShellOptions();
         _vars.InitializeDirectoryStack(_state);
         _vars.InitializeCallerArrays();
     }
@@ -230,7 +231,7 @@ public sealed partial class Evaluation : IFileTester
         Options = options;
         _state = state;
         _vars = variables;
-        _vars.RebindDirectoryStack(state);
+        _vars.RebindShellState(state);
         _stdIn = descriptorSetup.Bindings.StdIn;
         _stdOut = descriptorSetup.Bindings.StdOut;
         _stdErr = descriptorSetup.Bindings.StdErr;
@@ -896,7 +897,7 @@ public sealed partial class Evaluation : IFileTester
             : parentState.CaptureInheritedExitBindings(scope.PipelineExitReader.RedirectionDepth, Memory);
         var childState = parentState.CloneForSubshell(Memory, inheritedExitBindings);
         childState.SetDirectoryListingMemory(Memory);
-        childVars.RebindDirectoryStack(childState);
+        childVars.RebindShellState(childState);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
 
@@ -5763,8 +5764,13 @@ public sealed partial class Evaluation : IFileTester
     /// <summary>Sets an exported variable, bypassing readonly checks for host-provided environment.</summary>
     internal void SetExportedVariable(BindingName name, ShellValue value)
     {
-        _vars.KeepImportedFunctionName(name);
-        _vars.SetScalarIgnoringReadonly(name, value);
+        if (name == ShellOptions.BashOptionsName || name == ShellOptions.SetOptionsName)
+            _state.EnabledOptions |= ShellOptions.ParseImported(value.Bytes.Span, setOptions: name == ShellOptions.SetOptionsName);
+        else
+        {
+            _vars.KeepImportedFunctionName(name);
+            _vars.SetScalarIgnoringReadonly(name, value);
+        }
         _vars.SetExported(name, true);
     }
 

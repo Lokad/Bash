@@ -17,27 +17,35 @@ public static class ShellEvaluationStartup
     /// The supported <c>-c</c> form uses <paramref name="argumentZero"/> as the command reader's name.
     /// It initializes <c>BASH_EXECUTION_STRING</c> from the command argument.
     /// A script operand used as <paramref name="argumentZero"/> supplies the file reader's name.
+    /// Recognized leading <c>-e</c>, <c>+e</c>, <c>-O</c> and <c>+O</c> options initialize the reader.
+    /// The host supplies the parsed source and handles launch argument diagnostics.
     /// </remarks>
     public static ShellEvaluation CreateInherited(
         CommandInvocation command,
         ParsedScript script,
         ShellValue argumentZero,
-        IReadOnlyList<ShellValue> positionalParameters)
+        IReadOnlyList<ShellValue> positionalParameters) =>
+        CreateInherited(command, script, argumentZero, positionalParameters, ShellLaunchArguments.Parse(command.Arguments));
+
+    internal static ShellEvaluation CreateInherited(
+        CommandInvocation command, ParsedScript script, ShellValue argumentZero,
+        IReadOnlyList<ShellValue> positionalParameters, ShellLaunchArguments launch)
     {
         var bindings = (command.TryGetInheritance<BashCommandInheritance>(out var inherited)
                 ? inherited.Bindings : DescriptorBindings.Snapshot.Standard)
             .WithStandardStreams(command.StdIn, command.StdOut, command.StdErr);
         var evaluation = new ShellEvaluation(script, new EvaluationOptions(0, command.CurrentDirectory),
             new EvaluationDescriptorSetup(DescriptorTable.Snapshot.FromInheritedBindings(bindings), command.BorrowedDescriptors),
-            command.CommandName, command.Environment, argumentZero, positionalParameters);
+            command.CommandName, command.Environment, argumentZero, positionalParameters, launch.EnabledOptions);
         evaluation.SetInheritedFunctions(command.CommandName, command.Functions, inherited.Imports);
-        if (command.Arguments.Count != 0)
+        if (launch.Error == ShellLaunchError.None && launch.ReaderIndex < command.Arguments.Count)
         {
-            var first = command.Arguments[0];
-            if (command.Arguments.Count >= 2 && first.Bytes.Span.SequenceEqual("-c"u8))
-                evaluation.SetInheritedCommandString(argumentZero, command.Arguments[1]);
-            else if (!first.IsEmpty && first.Bytes.Span[0] != (byte)'-' && first.Equals(argumentZero))
-                evaluation.SetInheritedReader(first, SourceMemory.ReaderKind.Script);
+            var reader = command.Arguments[launch.ReaderIndex];
+            if (launch.CommandString)
+                evaluation.SetInheritedCommandString(argumentZero, reader);
+            else if (!reader.IsEmpty && reader.Equals(argumentZero)
+                && (reader.Bytes.Span[0] != (byte)'-' || launch.ReaderIndex != 0))
+                evaluation.SetInheritedReader(reader, SourceMemory.ReaderKind.Script);
         }
         return evaluation;
     }
