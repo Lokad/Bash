@@ -6686,7 +6686,7 @@ public sealed partial class Evaluation : IFileTester
         PathLookupBatch<FilePathLookup>? kindPaths = null;
         PathLookupBatch<FilePathLookup>? metadataPaths = null;
         PathLookupBatch<FilePathLookup>? sizePaths = null;
-        var unaryPathIndices = hasUnaryPathTest ? new int[tests.Count] : null;
+        var unaryPathIndices = hasUnaryPathTest ? new int[tests.Count] : Array.Empty<int>();
         List<(int TestIndex, FileTimeComparison Comparison, int Left, int Right)>? comparisons = null;
         List<(int TestIndex, int Left, int Right)>? identityTests = null;
         var results = new bool[tests.Count];
@@ -6734,7 +6734,7 @@ public sealed partial class Evaluation : IFileTester
                 var batch = test.Kind.MetadataPredicate is not null ? (metadataPaths ??= new())
                     : test.Kind.IsNonEmpty ? (sizePaths ??= new()) : (kindPaths ??= new());
                 // Zero denotes a predicate without a unary path response.
-                unaryPathIndices![index] = AddPath(batch, path, following) + 1;
+                unaryPathIndices[index] = AddPath(batch, path, following) + 1;
             }
         }
 
@@ -6750,7 +6750,7 @@ public sealed partial class Evaluation : IFileTester
         var kinds = await ReadPathsAsync(kindPaths, FilePathInfoRequest.KindOnly).ConfigureAwait(false);
         var infos = await ReadPathsAsync(metadataPaths, FilePathInfoRequest.Metadata).ConfigureAwait(false);
         var sizes = await ReadPathsAsync(sizePaths, FilePathInfoRequest.MetadataWithExactSize).ConfigureAwait(false);
-        for (var index = 0; unaryPathIndices != null && index < unaryPathIndices.Length; index++)
+        for (var index = 0; index < unaryPathIndices.Length; index++)
         {
             CheckCancellation();
             var pathIndex = unaryPathIndices[index] - 1;
