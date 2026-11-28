@@ -106,11 +106,13 @@ internal static partial class WordExpansion
     }
 
     internal static IReadOnlyList<Word>? ExpandBraceAlternatives(Word word, ScopedEvaluation scope) =>
-        word.LiteralFields == null ? BraceExpansion.ExpandAlternatives(
+        word.LiteralFields == null && scope.Effects.BraceExpansionEnabled ? BraceExpansion.ExpandAlternatives(
             word, scope.Effects.Memory, scope.Effects.CancellationToken) : null;
 
     internal static async Task<bool> CheckWordSyntaxAsync(IReadOnlyList<Word> words, ScopedEvaluation scope)
     {
+        if (!scope.Effects.BraceExpansionEnabled)
+            return true;
         for (var index = 0; index < words.Count; index++)
         {
             var word = words[index];
@@ -126,6 +128,8 @@ internal static partial class WordExpansion
 
     internal static async Task<bool> CheckWordSyntaxAsync(Word word, ScopedEvaluation scope, bool protectSubscript)
     {
+        if (!scope.Effects.BraceExpansionEnabled)
+            return true;
         if (word.HasDecodedNulCapture
             && await RejectDecodedNulCaptureAsync(word, scope, 0, word.Parts.Count).ConfigureAwait(false))
             return false;
@@ -277,7 +281,7 @@ internal static partial class WordExpansion
     /// Expands brace expressions into a set of words before other expansions.
     /// </summary>
     internal static IReadOnlyList<Word> ExpandBraceWords(Word word, ScopedEvaluation scope) =>
-        BraceExpansion.Expand(word, scope.Effects.Memory, scope.Effects.CancellationToken);
+        ExpandBraceAlternatives(word, scope) ?? [word];
 
     /// <summary>Expands a source word without brace expansion or pathname lookup.</summary>
     public static Task<IReadOnlyList<ExpandedWord>> ExpandWithoutBraceAsync(
@@ -349,7 +353,8 @@ internal static partial class WordExpansion
             return;
         if (scope.ExpansionWord == null && word.Parts is not [{ Kind: WordPartKind.HereDocument }])
             scope = scope with { ExpansionWord = word };
-        if (word.HasDecodedNulCapture
+        var checkReachedCaptures = word.HasDecodedNulCapture && !scope.Effects.BraceExpansionEnabled;
+        if (word.HasDecodedNulCapture && !checkReachedCaptures
             && await RejectDecodedNulCaptureAsync(word, scope, firstPart, endPart).ConfigureAwait(false))
             return;
         if (endPart > firstPart && word.Parts[endPart - 1] is SourceWordPart { EndsAtDecodedNul: true } truncated
@@ -398,6 +403,16 @@ internal static partial class WordExpansion
         while (position.Part < endPart && scope.CanExpand)
         {
             var part = word.Parts[position.Part];
+            if (checkReachedCaptures)
+            {
+                var checkEnd = position.Part + 1;
+                // A double-quoted segment is read before its first expansion.
+                if (part.IsDoubleQuoted)
+                    while (checkEnd < endPart && word.Parts[checkEnd].DoubleQuote == DoubleQuoteBoundary.Continuation)
+                        checkEnd++;
+                if (await RejectDecodedNulCaptureAsync(word, scope, position.Part, checkEnd).ConfigureAwait(false))
+                    return;
+            }
             if (part is SourceWordPart { Kind: WordPartKind.Unquoted } source)
             {
                 var next = await ExpandSegmentAsync(source.Source, source, scope, builder, allowWordSplitting, globQuoted: false,

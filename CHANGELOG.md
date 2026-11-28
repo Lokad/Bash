@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `-B`, `+B` and named `braceexpand` options for brace expansion
+  and its argument syntax pass.
+
 - Support `noglob` through `set -f`, `set -o noglob`, `shopt -o`,
   and hosted shell launch options.
 

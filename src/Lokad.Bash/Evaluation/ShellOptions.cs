@@ -25,12 +25,13 @@ internal enum ShellOption
 
 internal static class ShellOptions
 {
-    internal const ShellOption Fixed = ShellOption.BraceExpand | ShellOption.Pipefail;
-    internal const ShellOption Default = Fixed | ShellOption.GlobSkipDots;
-    internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob;
+    internal const ShellOption Fixed = ShellOption.Pipefail;
+    internal const ShellOption Default = Fixed | ShellOption.BraceExpand | ShellOption.GlobSkipDots;
+    internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.BraceExpand;
     internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit;
     internal const byte ErrexitFlag = (byte)'e';
     internal const byte NoglobFlag = (byte)'f';
+    internal const byte BraceExpandFlag = (byte)'B';
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
@@ -58,12 +59,11 @@ internal static class ShellOptions
 
     private static readonly ShellOption BashMask = CollectBashFlags();
     private static readonly ShellOption[] SetStates =
-        [ShellOption.None, ShellOption.Errexit, ShellOption.Noglob, MutableSet];
-    private static readonly ShellValue[] SetValues = Array.ConvertAll(SetStates,
-        static enabled => Format(SetOptions, Fixed | enabled, memory: null, out _));
-    // Keep the fixed spellings here so the general byte cache starts on its first ordinary use.
-    private static readonly ShellValue[] SetFlags =
-        [ShellValue.Empty, ShellValue.FromText("e"), ShellValue.FromText("f"), ShellValue.FromText("ef")];
+    [
+        ShellOption.None, ShellOption.Errexit, ShellOption.Noglob, ShellOption.Errexit | ShellOption.Noglob,
+        ShellOption.BraceExpand, ShellOption.BraceExpand | ShellOption.Errexit,
+        ShellOption.BraceExpand | ShellOption.Noglob, MutableSet
+    ];
 
     internal static ShellValue DefaultBashBinding { get; } = FormatBashBinding(SelectBashFlags(Default), memory: null, out _);
 
@@ -81,15 +81,17 @@ internal static class ShellOptions
     {
         ErrexitFlag => ShellOption.Errexit,
         NoglobFlag => ShellOption.Noglob,
+        BraceExpandFlag => ShellOption.BraceExpand,
         _ => ShellOption.None
     };
 
     private static int MutableSetIndex(ShellOption enabled) =>
-        ((enabled & ShellOption.Errexit) != 0 ? 1 : 0) + ((enabled & ShellOption.Noglob) != 0 ? 2 : 0);
+        ((enabled & ShellOption.Errexit) != 0 ? 1 : 0) | ((enabled & ShellOption.Noglob) != 0 ? 2 : 0)
+        | ((enabled & ShellOption.BraceExpand) != 0 ? 4 : 0);
 
-    internal static ShellValue SetBinding(ShellOption enabled) => SetValues[MutableSetIndex(enabled)];
+    internal static ShellValue SetBinding(ShellOption enabled) => SetProjections.Bindings[MutableSetIndex(enabled)];
 
-    internal static ShellValue Flags(ShellOption enabled) => SetFlags[MutableSetIndex(enabled)];
+    internal static ShellValue Flags(ShellOption enabled) => SetProjections.Flags[MutableSetIndex(enabled)];
 
     internal static ShellValue InspectSetOptions(ShellOption enabled, bool listing)
     {
@@ -108,6 +110,19 @@ internal static class ShellOptions
         foreach (var component in value.Split((byte)':'))
             enabled |= Find(value[component], setOptions);
         return enabled;
+    }
+
+    private static class SetProjections
+    {
+        internal static readonly ShellValue[] Bindings = Array.ConvertAll(SetStates,
+            static enabled => Format(SetOptions, Fixed | enabled, memory: null, out _));
+
+        // Keep the fixed spellings here so the general byte cache starts on its first ordinary use.
+        internal static readonly ShellValue[] Flags =
+        [
+            ShellValue.Empty, ShellValue.FromText("e"), ShellValue.FromText("f"), ShellValue.FromText("ef"),
+            ShellValue.FromText("B"), ShellValue.FromText("eB"), ShellValue.FromText("fB"), ShellValue.FromText("efB")
+        ];
     }
 
     private static class SetInspections

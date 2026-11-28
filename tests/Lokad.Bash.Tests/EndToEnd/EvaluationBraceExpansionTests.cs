@@ -10,6 +10,51 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationBraceExpansionTests
 {
+    [Fact]
+    public async Task BraceOptionSelectsLiteralOrGeneratedFieldsAndRedirections()
+    {
+        await using var host = EndToEndHarness.BuildTree([]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            set +B
+            printf 'literal:<%s>\n' p{a,b}
+            declare -a saved=( p{a,b} )
+            printf 'literal\n' >output{3..3}
+            set -B
+            printf 'expanded:<%s>\n' p{a,b}
+            printf 'array:<%s>\n' "${saved[@]}"
+            printf 'expanded\n' >output{3..3}
+            """, tree: host);
+
+        Assert.Equal("literal:<p{a,b}>\nexpanded:<pa>\nexpanded:<pb>\narray:<p{a,b}>\n", result.StdOut);
+        Assert.Equal("literal\n", host.ReadFile("/output{3..3}"));
+        Assert.Equal("expanded\n", host.ReadFile("/output3"));
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task BraceOptionFollowsTheFunctionScopeAndCapture()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            f() {
+                local -
+                shopt -ou braceexpand
+                printf 'local:<%s>\n' "$-" "$SHELLOPTS"
+                [[ -o braceexpand ]] || printf 'off\n'
+                printf 'capture:<%s>\n' "$(printf '<%s>' p{a,b})"
+            }
+            f
+            test -o braceexpand && printf 'on\n'
+            printf 'parent:<%s>\n' "$-" p{a,b}
+            """);
+
+        Assert.Equal("local:<>\nlocal:<pipefail>\noff\ncapture:<<p{a,b}>>\non\nparent:<B>\nparent:<pa>\nparent:<pb>\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Theory]
     [InlineData("{a,{b,c}}{1..2}", "a1 a2 b1 b2 c1 c2")]
     [InlineData("{a,b}\"x\"{1..2}", "ax1 ax2 bx1 bx2")]

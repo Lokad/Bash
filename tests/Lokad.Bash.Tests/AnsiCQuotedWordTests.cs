@@ -117,6 +117,16 @@ public sealed class AnsiCQuotedWordTests
     public Task DecodedNulCaptureFailsBeforeItsBodyRuns(string script, int status, string stdout, string stderr) =>
         AssertDecodedNulExecutionAsync(script, status, stdout, stderr);
 
+    [Theory]
+    [InlineData("$((++n))$(printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")",
+        "[next:1 n:1]", "command substitution: line 4: unexpected EOF while looking for matching `}'\n")]
+    [InlineData("\"$((++n))$(printf inner >&2; printf %s \"${v:-$'a\\0hidden'}\")\"",
+        "[next:1 n:0]", "command substitution: line 4: unexpected EOF while looking for matching `\"'\n")]
+    public Task DisabledBraceExpansionChecksDamagedCapturesAtTheReachedQuoteBoundary(
+        string word, string stdout, string stderr) =>
+        AssertDecodedNulExecutionAsync("set +B\nn=0; unset v\nprintf '[%s]' " + word
+            + "\nprintf '[next:%s n:%s]' \"$?\" \"$n\"\n", 0, stdout, stderr);
+
     private static async Task AssertDecodedNulExecutionAsync(string script, int status, string stdout, string stderr)
     {
         foreach (var prepared in new[] { false, true })

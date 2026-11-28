@@ -73,8 +73,8 @@ public sealed class EvaluationGlobTestsEndToEnd
             [[ -o noglob ]] || printf 'restored\n'
             """);
 
-        Assert.Equal("local:f:f:braceexpand:noglob:pipefail\nactive\ncapture:f\n"
-            + "outer::braceexpand:pipefail\nrestored\n", result.StdOut);
+        Assert.Equal("local:fB:fB:braceexpand:noglob:pipefail\nactive\ncapture:fB\n"
+            + "outer:B:braceexpand:pipefail\nrestored\n", result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }

@@ -3,6 +3,27 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task BraceStartupSelectsTheFlagThenImportsAnEnabledOption()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            bash +Bc 'printf "short:<%s>\n" p{a,b}'
+            bash +o braceexpand -c 'printf "named:<%s>\n" p{a,b}'
+            export SHELLOPTS
+            bash +B -c 'printf "imported:<%s>\n" p{a,b}'
+            set +B
+            bash -c 'printf "default:<%s>\n" p{a,b}'
+            exec -c bash +B -c 'printf "empty:<%s>\n" p{a,b}'
+            """, CancellationToken.None);
+
+        Assert.Equal("short:<p{a,b}>\nnamed:<p{a,b}>\nimported:<pa>\nimported:<pb>\n"
+            + "default:<pa>\ndefault:<pb>\nempty:<p{a,b}>\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task NoglobStartupReadsShortNamedAndInheritedOptionState()
     {
         await using var host = EndToEndHarness.BuildTree([("/itemA.txt", "")]);
@@ -66,7 +87,7 @@ public sealed class ChildShellLaunchTests
         var result = await host.RunAsync("bash -eO localvar_inherit -- ./unit first", CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("./unit:outer:e:./unit\narg:first\n", host.StandardOutput.TextContent);
+        Assert.Equal("./unit:outer:eB:./unit\narg:first\n", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
     }

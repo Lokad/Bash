@@ -322,7 +322,8 @@ public sealed partial class Evaluation
                 return await WriteBuiltinHelpUnlessStdoutClosedAsync(words[0], BuiltinKind.Set, "set", negated)
                     .ConfigureAwait(false);
 
-            var firstOtherFlag = bytes[1..].IndexOfAnyExcept(ShellOptions.ErrexitFlag, ShellOptions.NoglobFlag) + 1;
+            var firstOtherFlag = bytes[1..].IndexOfAnyExcept(ShellOptions.ErrexitFlag, ShellOptions.NoglobFlag,
+                ShellOptions.BraceExpandFlag) + 1;
             if (firstOtherFlag == 0)
                 continue;
             if (bytes[firstOtherFlag] != (byte)'o')
@@ -414,7 +415,7 @@ public sealed partial class Evaluation
         {
             var flag = group.Bytes.Slice(flagIndex, 1);
             // Recognized Bash flags outside the mutable option profile keep the unsupported-option diagnostic.
-            if ("abhkmnprtuvxBCEHPT"u8.Contains(flag.Span[0]))
+            if ("abhkmnprtuvxCEHPT"u8.Contains(flag.Span[0]))
                 return await InvalidOptionAsync(group, ": unsupported option", exitCode).ConfigureAwait(false);
 
             if (CanWriteOptionDiagnostic())

@@ -887,11 +887,11 @@ cancellation and a live-memory allowance. Here-document bodies are collected in
 physical source order across pipeline/list headers and completed through timing,
 negation and compound-command wrappers. An incomplete body is rejected rather
 than accepted with GNU's end-of-input warning. Builtins implement their documented option subsets;
-`set` sets positional parameters and supports `-e`/`+e` and `-f`/`+f`,
-with named `-o`/`+o` forms for `errexit` and `noglob`. With no expanded
-operands, it lists visible variable assignments followed by function
-definitions. Each group uses byte-name order. Like bare `declare`, this
-listing hides the command's own temporary
+`set` sets positional parameters and supports `-e`/`+e`, `-f`/`+f`, and
+`-B`/`+B`, with named `-o`/`+o` forms for `errexit`, `noglob`, and
+`braceexpand`. With no expanded operands, it lists visible variable
+assignments followed by function definitions. Each group uses byte-name
+order. Like bare `declare`, this listing hides the command's own temporary
 prefixes and prints function bodies without their declaration attributes.
 A bare `+` continues the option scan. A bare `-` ends
 the scan, with following operands becoming positional parameters. `--` replaces
@@ -901,8 +901,8 @@ positions and negation suppress it through nested functions/groups and source/ev
 Command substitution clears errexit by default. It inherits the setting
 with `shopt -s inherit_errexit`. Parenthesized subshells inherit it directly.
 `$-` and `${-}` expose the supported mutable flags. `set -o` and `set +o`
-inspect `errexit` and `noglob`. `test -o` and `[[ -o ]]` query the active
-settings. Unsupported option changes report a diagnostic.
+inspect `braceexpand`, `errexit`, and `noglob`. `test -o` and `[[ -o ]]` query
+the active settings. Unsupported option changes report a diagnostic.
 Downstream closure stops inspection output and diagnostics routed to the
 same handle. Option and positional processing continues.
 With shell-closed stdout, an inspection reports a write failure only when
@@ -924,8 +924,12 @@ during application, preserving any changes already applied. After `-`,
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
 they list enabled and disabled options respectively. `-o` selects the
-`set` option namespace. That namespace exposes mutable `errexit` and
-`noglob` and the fixed `braceexpand` and `pipefail` settings.
+`set` option namespace. That namespace exposes mutable `braceexpand`,
+`errexit`, and `noglob`, and the fixed `pipefail` setting.
+
+`braceexpand` is enabled by default. `set +B` preserves authored braces
+as fields proceed through the remaining expansion stages. The setting
+also controls the brace pass over damaged capture spelling.
 
 `noglob` bypasses pathname expansion for command operands, array fields,
 loop items and redirection targets. Those fields still undergo their
@@ -974,8 +978,8 @@ reached shell state, including a capture's errexit setting, and appear in
 operand-free `set` and `declare -p` listings. They can
 be explicitly exported. An inherited list enables its recognized
 options in a fresh hosted launch after the leading launch options are
-applied. The supported `-e`, `+e`, `-f`, and `+f` flags and the `-o`/`+o`
-and `-O`/`+O` option-name pairs precede `-c` or a script operand. The
+applied. The supported `-e`, `+e`, `-f`, `+f`, `-B`, and `+B` flags and the
+`-o`/`+o` and `-O`/`+O` option-name pairs precede `-c` or a script operand. The
 application host supplies the selected source and positional parameters.
 `$_` holds the last expanded argument of a completed simple command. A command
 without arguments records its name, and a command with only assignments or
@@ -1076,8 +1080,8 @@ preparation and can then report the stored element spelling as an
 invalid identifier. A source integer or case flag prepares the reached
 array and its attribute without selecting the stored index or key.
 
-Inside a function, `local -` saves `errexit`, `noglob`, and `inherit_errexit`
-and restores them on return. A second `local -` keeps the first snapshot,
+Inside a function, `local -` saves `braceexpand`, `errexit`, `noglob`, and
+`inherit_errexit` and restores them on return. A second `local -` keeps the first snapshot,
 as in the pinned Bash 5.2.37 build. `local -p -` inspects the current function's
 snapshot.
 `localvar_inherit` persists across a function return. While enabled, new
@@ -1267,7 +1271,9 @@ expands normally. Only selected operands evaluate their expansions.
 Definition display uses the prepared spelling, including truncated operands
 in `[[` and conditional captures nested in ordinary words and other parameters.
 With brace expansion enabled, the argument word list checks damaged capture
-spelling before evaluating any of its words. A command-only assignment list
+spelling before evaluating any of its words. With it disabled, evaluation
+checks each damaged capture when it reaches the unquoted part or the start
+of its enclosing double-quoted segment. A command-only assignment list
 checks each value when it reaches that value. An ordinary capture can
 report a delimiter error while rereading the normalized word. Adjacent
 parentheses can report a missing delimiter in the truncated enclosing word.
@@ -2001,7 +2007,7 @@ decimal. A nonnumeric token stays in the expression and the predicate is false. 
 required operand and returns false for an invalid descriptor.
 
 The unary `-o` predicate in `[[ … ]]`, `test` and `[` reports the current
-`errexit` state and the always-enabled `braceexpand` and `pipefail` options.
+settings for `errexit`, `noglob`, and `braceexpand` and the fixed `pipefail` option.
 All other option names return false.
 
 `[[ … ]]`, `test` and `[` recognize `-v` and `-R`. An assigned empty value counts as

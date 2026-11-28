@@ -17,7 +17,7 @@ public static class ShellEvaluationStartup
     /// The supported <c>-c</c> form uses <paramref name="argumentZero"/> as the command reader's name.
     /// It initializes <c>BASH_EXECUTION_STRING</c> from the command argument.
     /// A script operand used as <paramref name="argumentZero"/> supplies the file reader's name.
-    /// Recognized leading <c>-e</c>, <c>+e</c>, <c>-f</c>, <c>+f</c> and named options initialize the reader.
+    /// Recognized leading <c>-e</c>, <c>+e</c>, <c>-f</c>, <c>+f</c>, <c>-B</c>, <c>+B</c> and named options initialize the reader.
     /// The host supplies the parsed source and handles launch argument diagnostics.
     /// </remarks>
     public static ShellEvaluation CreateInherited(

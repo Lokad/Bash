@@ -396,8 +396,9 @@ invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
 descriptor cleanup path. Command substitutions clear errexit on entry by
 default and inherit it when `inherit_errexit` is enabled. Subshells and
 pipeline stages inherit it directly.
-The `local -` operand saves `errexit`, `noglob`, and `inherit_errexit` on the
-active function invocation, including when reached through eval or source.
+The `local -` operand saves `braceexpand`, `errexit`, `noglob`, and
+`inherit_errexit` on the active function invocation, including when reached
+through eval or source.
 Normal return and expansion failure
 unwind the snapshot. A terminating exit or errexit lets the EXIT action see the
 active option state. A child evaluation forks the function frames and their

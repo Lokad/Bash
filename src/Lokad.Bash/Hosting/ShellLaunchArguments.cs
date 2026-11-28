@@ -23,7 +23,8 @@ internal readonly record struct ShellLaunchArguments(
                 break;
             }
             if (group.Length < 2 || group[0] is not ((byte)'-' or (byte)'+')
-                || group[1] is not (ShellOptions.ErrexitFlag or ShellOptions.NoglobFlag or (byte)'o' or (byte)'O' or (byte)'c'))
+                || group[1] is not (ShellOptions.ErrexitFlag or ShellOptions.NoglobFlag or ShellOptions.BraceExpandFlag
+                    or (byte)'o' or (byte)'O' or (byte)'c'))
                 break;
 
             var enable = group[0] == (byte)'-';

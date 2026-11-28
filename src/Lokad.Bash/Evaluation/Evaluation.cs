@@ -249,6 +249,7 @@ public sealed partial class Evaluation : IFileTester
     public EvaluationOptions Options { get; }
 
     internal ShellValue ShellOptionFlags => ShellOptions.Flags(_state.EnabledOptions);
+    internal bool BraceExpansionEnabled => _state.HasOption(ShellOption.BraceExpand);
     internal bool IgnoreCaseInPatterns => _state.HasOption(ShellOption.NoCaseMatch);
 
     /// <summary> Gets the last recorded exit code, if any. </summary>
