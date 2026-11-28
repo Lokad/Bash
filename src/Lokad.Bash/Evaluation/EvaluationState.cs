@@ -400,15 +400,34 @@ internal sealed class EvaluationState
     private FunctionBinding GetFunctionBinding(int slot) => _functionSlots[slot].Binding
         ?? throw new InvalidOperationException("The function slot is empty.");
 
-    internal (uint Bucket, long Chain) GetFunctionImportOrder(ShellValue name)
+    internal void SortFunctionImports(BashCommandInheritance.ImportEntry[] entries, EvaluationMemory memory)
     {
-        // Bash's function table uses FNV-1 with signed bytes on the pinned builds.
-        var hash = 2166136261u;
-        foreach (var value in name.Bytes.Span)
-            hash = unchecked((hash * 16777619u) ^ (uint)(sbyte)value);
+        using var scratch = memory.Budget.Reserve(MemoryCapacity.ArrayBackingBytes<(uint, long)>(entries.Length));
+        var order = new (uint Bucket, long Chain)[entries.Length];
+        var index = 0;
+        // The export payload was built in this same slot order.
+        if (_exportedFunctionBlocks.Count == 1)
+            FillOrder(_exportedFunctionBlocks.Min);
+        else
+            foreach (var block in _exportedFunctionBlocks)
+                FillOrder(block);
+        Array.Sort(order, entries);
 
-        var rank = _functionSlots[_functions[name]].InsertionRank;
-        return (hash & (_functionBucketCount - 1), _oddFunctionRehash ? rank : -rank);
+        void FillOrder(int block)
+        {
+            var first = block * FunctionSlotsPerBlock;
+            var mask = _functionSlotMasks[block].Exported;
+            while (TryTakeFunctionSlot(first, ref mask, out var slot))
+            {
+                // Bash's function table uses FNV-1 with signed bytes on the pinned builds.
+                var hash = 2166136261u;
+                foreach (var value in GetFunctionBinding(slot).Definition.Name.Value.Bytes.Span)
+                    hash = unchecked((hash * 16777619u) ^ (uint)(sbyte)value);
+
+                var rank = _functionSlots[slot].InsertionRank;
+                order[index++] = (hash & (_functionBucketCount - 1), _oddFunctionRehash ? rank : -rank);
+            }
+        }
     }
 
     /// <summary>Borrows the current export selection in function namespace order.</summary>
@@ -451,9 +470,22 @@ internal sealed class EvaluationState
         {
             var first = block * FunctionSlotsPerBlock;
             var membership = _functionSlotMasks[block];
-            for (var mask = exported ? membership.Exported : membership.Occupied; mask != 0; mask &= mask - 1)
-                yield return first + BitOperations.TrailingZeroCount(mask);
+            var mask = exported ? membership.Exported : membership.Occupied;
+            while (TryTakeFunctionSlot(first, ref mask, out var slot))
+                yield return slot;
         }
+    }
+
+    private static bool TryTakeFunctionSlot(int first, ref ulong mask, out int slot)
+    {
+        if (mask == 0)
+        {
+            slot = 0;
+            return false;
+        }
+        slot = first + BitOperations.TrailingZeroCount(mask);
+        mask &= mask - 1;
+        return true;
     }
 
     /// <summary>Clears the exported subset while an in-process replacement is in flight.</summary>

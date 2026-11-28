@@ -1922,13 +1922,7 @@ public sealed partial class Evaluation : IFileTester
             if (entries != null)
             {
                 if (entries.Length > 1)
-                {
-                    using var scratch = Memory.Budget.Reserve(MemoryCapacity.ArrayBackingBytes<(uint, long)>(entries.Length));
-                    var order = new (uint Bucket, long Chain)[entries.Length];
-                    for (var index = 0; index < order.Length; index++)
-                        order[index] = _state.GetFunctionImportOrder(owners[index].Definition.Name.Value);
-                    Array.Sort(order, entries);
-                }
+                    _state.SortFunctionImports(entries, Memory);
                 imports = new BashCommandInheritance.FunctionImports(result, entries);
             }
             exports = result;

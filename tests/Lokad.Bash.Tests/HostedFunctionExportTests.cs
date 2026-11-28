@@ -1,5 +1,6 @@
 using Lokad.Bash.Files;
 using Lokad.Bash.Tree;
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using Lokad.Bash.Memory;
 using Lokad.Bash.Commands;
@@ -67,6 +68,65 @@ public sealed class HostedFunctionExportTests
         }
         Assert.Null(await state.GetNextStep(deadline.Token));
         Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(64)]
+    public async Task WarmHostedExportOrdersEachFunctionWithOneNameRead(int padding)
+    {
+        using var first = new ObservedName("probe0"u8.ToArray());
+        using var second = new ObservedName("probe145"u8.ToArray());
+        var body = Assert.Single(Parser.Parse(":").Commands);
+        var commands = Parser.Parse("export -f probe0 probe145\ninspect\ninspect").Commands;
+        var unexported = Enumerable.Range(0, padding).Select(index =>
+            new FunctionDefinition(new FunctionName(ShellValue.FromText($"padding{index}"), FunctionNameSyntax.Plain), body));
+        var state = new Eval(new ParsedScript([
+            new FunctionDefinition(new FunctionName(ShellValue.FromBytes(first.Memory), FunctionNameSyntax.Plain), body),
+            .. unexported,
+            new FunctionDefinition(new FunctionName(ShellValue.FromBytes(second.Memory), FunctionNameSyntax.Plain), body),
+            .. commands]));
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var initial = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+            var firstReads = first.Reads;
+            var secondReads = second.Reads;
+            initial.SetResult(new CommandExecutionResult.Completed(0));
+
+            var warm = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+            try
+            {
+                Assert.Equal(firstReads + 1, first.Reads);
+                Assert.Equal(secondReads + 1, second.Reads);
+                var inheritance = Assert.IsType<CommandContext<BashCommandInheritance>>(warm.Command.Context).Inheritance;
+                var imports = Assert.IsType<BashCommandInheritance.FunctionImports>(inheritance.Imports);
+                Assert.Same(warm.Command.Functions, imports.Functions);
+                Assert.Equal(new[] { 1, 0 }, imports.Entries.Select(entry => entry.Index));
+            }
+            finally
+            {
+                warm.SetResult(new CommandExecutionResult.Completed(0));
+                Assert.Null(await state.GetNextStep(deadline.Token));
+            }
+            Assert.Equal(0, state.LastExitCode);
+        }
+        finally { state.ReleaseFunctions(); }
+    }
+
+    private sealed class ObservedName(byte[] bytes) : MemoryManager<byte>
+    {
+        internal int Reads { get; private set; }
+
+        public override Span<byte> GetSpan()
+        {
+            Reads++;
+            return bytes;
+        }
+
+        public override MemoryHandle Pin(int elementIndex) => throw new NotSupportedException();
+        public override void Unpin() => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { }
     }
 
     [Theory]
