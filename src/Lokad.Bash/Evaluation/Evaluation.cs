@@ -2543,7 +2543,7 @@ public sealed partial class Evaluation : IFileTester
                     if (local && functionContext is { } function)
                     {
                         if ((!setsNameref || !clearsArrayKind)
-                            && await TryRejectLocalElementInitializerAsync(reference, operand, function, setsNameref).ConfigureAwait(false))
+                            && await TryHandleLocalElementDeclarationAsync(reference, operand, function, setsNameref).ConfigureAwait(false))
                             continue;
                     }
                     else if (options.IndexedChange != DeclarationAttributeChange.Clear)
@@ -2562,7 +2562,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 else if (local && reference.Kind == VariableReferenceKind.Element
                     && functionContext is { } selectorFunction
-                    && await TryRejectLocalElementInitializerAsync(reference, operand, selectorFunction, setsNameref: false).ConfigureAwait(false))
+                    && await TryHandleLocalElementDeclarationAsync(reference, operand, selectorFunction, setsNameref: false).ConfigureAwait(false))
                 {
                     if (HasPendingExpansionError)
                         break;
@@ -2736,7 +2736,7 @@ public sealed partial class Evaluation : IFileTester
                         var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
                         if (arrayFunction.Locals.TryDeclare(declarationScope.Variables, targetVars, declaration, prefixNames,
                                 arrayKind, isNameref: false, options.Inherit, caseChange: default,
-                                elementAttributes: default, Memory, arrayFunction.Enclosing))
+                                elementAttributes: default, Memory, arrayFunction.Enclosing) == LocalDeclarationResult.Declared)
                             await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
                         else
                             await DiagnoseAsync(name, "invalid local declaration").ConfigureAwait(false);
@@ -3020,7 +3020,7 @@ public sealed partial class Evaluation : IFileTester
                 var declarationName = resolution == BindingResolution.LastNameref || followsLocalNameref && existingTargetLocal
                     ? sourceName : selectedLocalBinding?.Name ?? name;
                 var redeclaresLocalArray = followsLocalNameref && existingTargetLocal && element && operand.Value == null;
-                if (local && existingLocal && !element && arrayKind != ArrayAssignmentKind.Auto && setsNameref
+                if (local && existingLocal && !element && (arrayKind != ArrayAssignmentKind.Auto || operand.Value == null) && setsNameref
                     && targetVars.GetArrayMetadata(name) != null)
                 {
                     await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
@@ -3038,8 +3038,8 @@ public sealed partial class Evaluation : IFileTester
                         await DiagnoseAsync(name, ArrayConversionMessage(ArrayKind.Indexed)).ConfigureAwait(false);
                     continue;
                 }
-                if (!operand.CompoundApplied && (operand.Value != null || local && arrayKind == ArrayAssignmentKind.Auto && !redeclaresLocalArray
-                        || options.Nameref || options.ReadonlyChange == DeclarationAttributeChange.Clear)
+                if (!operand.CompoundApplied
+                    && (operand.Value != null || options.Nameref || options.ReadonlyChange == DeclarationAttributeChange.Clear)
                     && (!local || existingLocal) && readonlyBinding)
                 {
                     if (arrayAttributeAssignment)
@@ -3082,10 +3082,10 @@ public sealed partial class Evaluation : IFileTester
                         continue;
                     }
                     if (local && !existingLocal && functionContext is { } function
-                        && !function.Locals.TryDeclare(declarationScope.Variables, targetVars,
+                        && function.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty), prefixNames,
                             ArrayAssignmentKind.Auto, isNameref: false, options.Inherit, options.CaseChange,
-                            elementAttributes: default, Memory, function.Enclosing))
+                            elementAttributes: default, Memory, function.Enclosing) != LocalDeclarationResult.Declared)
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         continue;
@@ -3244,20 +3244,27 @@ public sealed partial class Evaluation : IFileTester
                         ? default : options.CaseChange;
                     var elementAttributes = element && operand.Value != null && !options.Readonly && !inheritedReadonly
                         ? GetAttributeChanges(assignmentExport) : default;
-                    if (!localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
+                    var declarationResult = localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             localOperand, prefixNames, arrayKind, options.Nameref, options.Inherit, localCaseChange,
-                            elementAttributes, Memory, localFunction.Enclosing))
+                            elementAttributes, Memory, localFunction.Enclosing);
+                    if (declarationResult != LocalDeclarationResult.Declared)
                     {
                         var rejectsArrayNamerefKind = operand.Value == null && arrayKind != ArrayAssignmentKind.Auto
                             && targetVars.IsArrayNameref(name);
-                        if (!redeclaresLocalArray && !rejectsArrayNamerefKind
+                        var kindConflict = declarationResult == LocalDeclarationResult.IncompatibleArrayKind;
+                        if (kindConflict && inheritedReadonly && followsLocalNameref)
+                            await DiagnoseReadonlyAsync(options.ReadonlyChange == DeclarationAttributeChange.Clear
+                                ? localDeclarationTarget : sourceName).ConfigureAwait(false);
+                        else if (!redeclaresLocalArray && !rejectsArrayNamerefKind
+                            && (!kindConflict || operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear)
                             && (followsLocalNameref ? readonlyBinding : targetVars.IsReadonly(name)))
                             await DiagnoseReadonlyAsync(declarationName).ConfigureAwait(false);
                         else
                         {
                             var message = arrayKind == ArrayAssignmentKind.Auto ? "invalid local declaration"
                                 : ArrayConversionMessage(arrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
-                            await DiagnoseAsync(declarationName, message).ConfigureAwait(false);
+                            await DiagnoseAsync(kindConflict && options.Inherit ? sourceName : declarationName, message)
+                                .ConfigureAwait(false);
                         }
                         continue;
                     }
@@ -3907,12 +3914,13 @@ public sealed partial class Evaluation : IFileTester
                         if (name == source)
                             return null;
                         var declaration = new VariableOperand(VariableOperandKind.Name, VariableReference.ForName(name), ShellValue.Empty);
-                        if (function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration, prefixNames,
+                        var declarationResult = function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration, prefixNames,
                                 requested, isNameref: false, options.Inherit, caseChange: default, elementAttributes: default,
-                                Memory, function.Enclosing))
+                                Memory, function.Enclosing);
+                        if (declarationResult == LocalDeclarationResult.Declared)
                             await ApplyAttributesAsync(name, commandVars, global: false, local: true, options.ExportChange)
                                 .ConfigureAwait(false);
-                        else if (commandVars.IsReadonlyBinding(name) && !function.IsLocal(name))
+                        else if (declarationResult == LocalDeclarationResult.Readonly)
                             await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         else
                             await DiagnoseAsync(source, ArrayConversionMessage(requestedKind)).ConfigureAwait(false);
@@ -4051,7 +4059,7 @@ public sealed partial class Evaluation : IFileTester
                 return null;
             }
 
-            async Task<bool> TryRejectLocalElementInitializerAsync(VariableReference reference, PreparedDeclarationOperand operand,
+            async Task<bool> TryHandleLocalElementDeclarationAsync(VariableReference reference, PreparedDeclarationOperand operand,
                 FunctionContext function, bool setsNameref)
             {
                 var name = reference.Name;
@@ -4068,10 +4076,10 @@ public sealed partial class Evaluation : IFileTester
                     await ReportCircularNameReferenceAsync(name, declarationScope).ConfigureAwait(false);
                     if (!existing)
                         return false;
-                    await PrepareAndRejectNamerefArrayAsync(initialized: true).ConfigureAwait(false);
+                    await PrepareNamerefArrayAsync(initialized: true).ConfigureAwait(false);
                     return true;
                 }
-                if (!setsNameref && (!existing || operand.Value == null))
+                if (!setsNameref && (!existing || operand.Value == null && (emptySelector || !resolved || !reached.IsUnsetNameref)))
                     return false;
                 var prepareTarget = setsNameref && (!existing || !hasReference && commandVars.GetArrayMetadata(name) == null);
                 if (existing && resolved)
@@ -4086,7 +4094,7 @@ public sealed partial class Evaluation : IFileTester
                             prepareTarget = emptySelector && (setsNameref || clearsNameref || conflictingArrayKinds);
                         else if (setsNameref || clearsNameref || missing || reached.IsUnsetNameref)
                         {
-                            await PrepareAndRejectNamerefArrayAsync(!previous.IsEmpty).ConfigureAwait(false);
+                            await PrepareNamerefArrayAsync(!previous.IsEmpty).ConfigureAwait(false);
                             return true;
                         }
                     }
@@ -4098,9 +4106,9 @@ public sealed partial class Evaluation : IFileTester
                     return false;
                 var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
                 var attributes = setsNameref || conflictingArrayKinds ? default : GetAttributeChanges(options.ExportChange);
-                if (prepareTarget && !function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration,
+                if (prepareTarget && function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration,
                         prefixNames, options.ArrayKind, isNameref: false, options.Inherit, caseChange: default,
-                        attributes, Memory, function.Enclosing))
+                        attributes, Memory, function.Enclosing) != LocalDeclarationResult.Declared)
                     await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                 else if (setsNameref)
                     await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
@@ -4110,7 +4118,7 @@ public sealed partial class Evaluation : IFileTester
                     await DiagnoseBadArraySubscriptAsync(operand.Name).ConfigureAwait(false);
                 return true;
 
-                async Task PrepareAndRejectNamerefArrayAsync(bool initialized)
+                async Task PrepareNamerefArrayAsync(bool initialized)
                 {
                     var kind = options.ArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed;
                     var readonlyBinding = commandVars.IsReadonlyBinding(name);
@@ -4120,14 +4128,27 @@ public sealed partial class Evaluation : IFileTester
                     var destroysArray = !setsNameref && (kind == ArrayKind.Indexed
                         ? options.IndexedChange == DeclarationAttributeChange.Clear
                         : options.AssociativeChange == DeclarationAttributeChange.Clear);
-                    var applyAttributes = !setsNameref && !invalidTarget && !readonlyBinding && !destroysArray && !conflictingArrayKinds;
+                    var declaresKindOnly = operand.Value == null && !emptySelector && !setsNameref && !circular;
+                    var rejectsAttributeRemoval = declaresKindOnly && readonlyBinding
+                        && (clearsNameref || options.ReadonlyChange == DeclarationAttributeChange.Clear);
+                    var applyAttributes = !setsNameref && !invalidTarget && !destroysArray && !conflictingArrayKinds
+                        && (!readonlyBinding || declaresKindOnly && !rejectsAttributeRemoval);
                     var reportsIndexedNamerefSpelling = kind == ArrayKind.Indexed
                         && (circular || (clearsNameref || reached.IsUnsetNameref)
                             && options.IndexedChange == DeclarationAttributeChange.Set);
-                    function.Locals.PrepareNamerefArray(commandVars, name, kind, initialized, retainNameref: true,
+                    var retainsNameref = !declaresKindOnly || !clearsNameref || !applyAttributes;
+                    function.Locals.PrepareNamerefArray(commandVars, name, kind, initialized, retainsNameref,
                         applyAttributes ? GetAttributeChanges(options.ExportChange) : default, Memory);
                     if (operand.Value == null)
+                    {
+                        if (declaresKindOnly && destroysArray)
+                            await DiagnoseAsync(name, "cannot destroy array variables in this way").ConfigureAwait(false);
+                        else if (declaresKindOnly && conflictingArrayKinds)
+                            await DiagnoseAsync(name, ArrayConversionMessage(kind)).ConfigureAwait(false);
+                        else if (rejectsAttributeRemoval)
+                            await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                         return;
+                    }
                     if (setsNameref)
                         await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
                     else if (invalidTarget)

@@ -57,7 +57,7 @@ public sealed partial class FunctionPrefixBindingTests
             Assert.Same(saved, write.Binding.Owner);
 
             void Declare(BindingName binding, string value, bool isNameref) =>
-                Assert.True(locals.TryDeclare(variables, variables,
+                Assert.Equal(LocalDeclarationResult.Declared, locals.TryDeclare(variables, variables,
                     new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName(binding), ShellValue.FromText(value)),
                     prefixes: null, ArrayAssignmentKind.Auto, isNameref, inherit: false, caseChange: default,
                     elementAttributes: default, memory, enclosingFunction: null));
@@ -108,7 +108,7 @@ public sealed partial class FunctionPrefixBindingTests
         Assert.Equal(0, governor.ReservedBytes);
 
         void Declare(Variables.LocalBindings locals, BindingName bindingName) =>
-            Assert.True(locals.TryDeclare(variables, variables,
+            Assert.Equal(LocalDeclarationResult.Declared, locals.TryDeclare(variables, variables,
                 new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName(bindingName), value),
                 prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false,
                 caseChange: default, elementAttributes: default, memory, enclosingFunction: null));
@@ -475,7 +475,7 @@ public sealed partial class FunctionPrefixBindingTests
         var memory = new EvaluationMemory(governor);
         try
         {
-            Assert.True(locals.TryDeclare(caller, caller,
+            Assert.Equal(LocalDeclarationResult.Declared, locals.TryDeclare(caller, caller,
                 new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("map"), ShellValue.FromText("local")),
                 prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default,
                 elementAttributes: default, memory, enclosingFunction: null));

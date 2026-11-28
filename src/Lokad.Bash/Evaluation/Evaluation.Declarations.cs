@@ -148,7 +148,10 @@ public sealed partial class Evaluation
                     }
                     var rejectsElementReference = !local && referencedElement && !globalInFunction;
                     var initializesReadonlyNameref = (initializesLocalNameref || retainsArrayNameref) && rejectsTarget;
-                    if ((rejectsTarget && !redeclaresArrayNameref || rejectsElementReference) && !initializesReadonlyNameref)
+                    var checksLocalArrayKind = local && targetLocal && !memberAssignment
+                        && compoundArrayKind != ArrayAssignmentKind.Auto && HasConflictingArrayKind(targetVariables, name, kind);
+                    if ((rejectsTarget && !redeclaresArrayNameref && !checksLocalArrayKind || rejectsElementReference)
+                        && !initializesReadonlyNameref)
                     {
                         var owner = declarationBinding.Owner;
                         var arrayName = declarationBinding.Name;
@@ -191,16 +194,18 @@ public sealed partial class Evaluation
                             ? kind == ArrayKind.Associative ? ArrayAssignmentKind.Associative : ArrayAssignmentKind.Indexed
                             : compoundArrayKind;
                         var localReference = literalLocal ? VariableReference.ForName(name) : declaredReference;
-                        if (!function.Locals.TryDeclare(scope.Variables, scope.Variables,
+                        var declarationResult = function.Locals.TryDeclare(scope.Variables, scope.Variables,
                                 new VariableOperand(VariableOperandKind.Name, localReference, ShellValue.Empty), prefixes: null,
                                 declarationKind, isNameref: false, inherit, caseChange: default, elementAttributes: default,
-                                Memory, function.Enclosing))
+                                Memory, function.Enclosing);
+                        if (declarationResult != LocalDeclarationResult.Declared)
                         {
-                            var subject = (literalLocal ? declaredName : name).ToValue();
+                            var kindConflict = declarationResult == LocalDeclarationResult.IncompatibleArrayKind;
+                            var subject = (literalLocal || kindConflict && inherit ? declaredName : name).ToValue();
                             var diagnosticName = _state.PreparationDiagnosticName;
                             ReadOnlySpan<ShellValue> diagnosticSubject = diagnosticName.IsEmpty
                                 ? [subject] : [diagnosticName, ShellValue.FromText(": "), subject];
-                            var message = !redeclaresArrayNameref && targetVariables.IsReadonly(name)
+                            var message = !kindConflict && !redeclaresArrayNameref && targetVariables.IsReadonly(name)
                                 ? "readonly variable" : ArrayConversionMessage(kind);
                             await ReportCommandDiagnosticAsync(diagnosticSubject, [ShellValue.FromText(message)], scope).ConfigureAwait(false);
                             // Dispatch still visits this name and later operands; a shadowing function can also run.

@@ -439,6 +439,101 @@ public sealed class LocalDeclarationOwnershipTestsEndToEnd
     }
 
 
+    [Theory]
+    [InlineData("local -r x=prior", "-x x", "declare -rx x=\"prior\"", 0, "")]
+    [InlineData("local -ar x=([2]=prior)", "-I x", "declare -ar x=([2]=\"prior\")", 0, "")]
+    [InlineData("local -Ar x=([key]=prior)", "-n x", "declare -Ar x=([key]=\"prior\" )", 1,
+        "line 3: local: x: reference variable cannot be an array\n")]
+    public async Task ValuelessReadonlyLocalDeclarationChecksTheRequestedAttribute(
+        string setup, string operand, string listing, int status, string diagnostics)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                {{setup}}
+                local {{operand}}
+                printf '<%s>\n' "$?"
+                declare -p x
+            }
+            f
+            """);
+
+        Assert.Equal($"<{status}>\n{listing}\n", result.StdOut);
+        Assert.Equal(diagnostics, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("ar", "2", "A", "indexed to associative", "")]
+    [InlineData("Ar", "key", "a", "associative to indexed", " ")]
+    public async Task ConflictingInheritedArrayKindNamesTheAuthoredReference(
+        string attributes, string index, string requestedKind, string conversion, string closingSpace)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            f() {
+                local -n ref=x
+                local -I{{requestedKind}} ref
+                printf '<%s>\n' "$?"
+                declare -p x ref
+            }
+            caller() {
+                local -{{attributes}} x=([{{index}}]=prior)
+                f
+                declare -p x
+            }
+            caller
+            """);
+
+        var listing = $"declare -{attributes} x=([{index}]=\"prior\"{closingSpace})\n";
+        Assert.Equal($"<1>\n{listing}declare -n ref=\"x\"\n{listing}", result.StdOut);
+        Assert.Equal($"line 3: local: ref: cannot convert {conversion} array\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task ConflictingCompoundLocalArrayKindKeepsTheExpandedEffects()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            i=0
+            f() {
+                local -ar x=([2]=prior)
+                local -IA x=([key]=new$((i++))) other
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p x other
+            }
+            f
+            """);
+
+        Assert.Equal("<1:1>\ndeclare -ar x=([2]=\"prior\")\ndeclare -A other\n", result.StdOut);
+        Assert.Equal("line 4: x: cannot convert indexed to associative array\n"
+            + "line 4: local: x: cannot convert indexed to associative array\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("local -nr x", "-x", "declare -anrx x", "", 0, "")]
+    [InlineData("local -nr y; local -n x=y", "+n", "declare -a x=()", "declare -nr y\n", 0, "")]
+    [InlineData("local -nr x", "+r", "declare -anr x", "", 1, "line 4: local: x: readonly variable\n")]
+    [InlineData("local -n x", "+a", "declare -an x", "", 1, "line 4: local: x: cannot destroy array variables in this way\n")]
+    public async Task ValuelessSelectorThroughUnsetNamerefDeclaresTheAuthoredArray(
+        string setup, string flag, string listing, string terminalListing, int status, string diagnostics)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            i=0; x=outside
+            f() {
+                {{setup}}
+                local {{flag}} 'x[i++]'
+                printf '<%s:%s>\n' "$?" "$i"
+                declare -p x y 2>/dev/null || :
+            }
+            f
+            declare -p x
+            """);
+
+        Assert.Equal($"<{status}:0>\n{listing}\n{terminalListing}declare -- x=\"outside\"\n", result.StdOut);
+        Assert.Equal(diagnostics, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Fact]
     public async Task Evaluation_DeclareScalar_ShadowsInheritedNameref()
     {

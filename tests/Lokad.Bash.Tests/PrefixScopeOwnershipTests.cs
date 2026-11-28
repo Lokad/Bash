@@ -719,7 +719,7 @@ public sealed class PrefixScopeOwnershipTests
             var staging = new EvaluationMemory(new MemoryGovernor(1024 * 1024));
             try
             {
-                Assert.True(locals.TryDeclare(caller, caller,
+                Assert.Equal(LocalDeclarationResult.Declared, locals.TryDeclare(caller, caller,
                     new VariableOperand(VariableOperandKind.Assignment, VariableReference.ForName("x"), visible),
                     prefixes: null, ArrayAssignmentKind.Auto, isNameref: false, inherit: false, caseChange: default,
                     elementAttributes: default, staging, enclosingFunction: null));

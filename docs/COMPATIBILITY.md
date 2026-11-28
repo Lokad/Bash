@@ -195,7 +195,11 @@ spelling occupies element zero unless the input writes that element.
 An ordinary local redeclaration through an existing local nameref can create
 a local for its whole-name referent. A readonly reference can select a writable
 referent. A readonly local in an enclosing function can be shadowed, and `-I`
-copies its readonly attribute into the new local. An array initializer or array
+copies its readonly attribute into the new local. A declaration without an
+initializer can apply attributes to an existing readonly local. A conflicting
+array kind in such a declaration reports a conversion error. A compound
+initializer expands its items before reporting the local array kind conflict
+and can continue to later declaration operands. An array initializer or array
 declaration with `+r` that reaches a readonly scalar local declares its array
 kind before reporting the readonly failure. An unassigned scalar becomes an
 uninitialized array. An assigned scalar becomes an initialized empty array.
@@ -1342,6 +1346,10 @@ integer attribute when computing the append. `local -I` and function-local
 `declare -I` inherit the outer value and
 declaration attributes. A nameref contributes its target spelling as scalar
 data unless the new declaration gives the local its own nameref attribute.
+An element declaration without an initializer can prepare an array under
+the authored local name when its nameref chain ends unset. The selector
+stays unevaluated. Clearing an applicable attribute can report failure
+after preparing the array.
 With combined `-i` and `-n`, a name-only declaration can retain both
 attributes. An explicit initializer can fail after creating an unassigned
 integer local or applying attributes to an existing binding. A missing

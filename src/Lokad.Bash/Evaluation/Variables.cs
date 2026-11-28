@@ -12,6 +12,7 @@ namespace Lokad.Bash.Evaluation;
 
 /// <summary>Whether a kind-only local declaration discards an existing scalar value.</summary>
 internal enum ScalarArrayPromotion { RetainValue, DiscardValue }
+internal enum LocalDeclarationResult { Declared, Invalid, Readonly, IncompatibleArrayKind }
 internal enum NamerefAssignmentFailure { None, InvalidTarget, IndirectUnsetTarget }
 internal enum ForAssignmentResult { Assigned, NeedsIntegerEvaluation, InvalidTarget, EmptyTarget, Readonly, IncompatibleAttributes }
 internal enum BindingResolution { Referent, LastNameref, LastExpansionNameref }
@@ -788,7 +789,7 @@ public sealed partial class Variables
 
         private bool IsScriptPrefix(BindingName name) => _parent != null && _prefixes?.Contains(name) == true;
 
-        public bool TryDeclare(
+        public LocalDeclarationResult TryDeclare(
             Variables active,
             Variables command,
             VariableOperand operand,
@@ -804,7 +805,7 @@ public sealed partial class Variables
             var hasAssignment = operand.Kind == VariableOperandKind.Assignment;
             var reference = operand.Reference;
             if (hasAssignment && reference.IsAggregate)
-                return false;
+                return LocalDeclarationResult.Invalid;
 
             var name = reference.Name;
             // Adding -n without an initializer changes only the temporary prefix binding.
@@ -817,7 +818,7 @@ public sealed partial class Variables
             if (!isNameref && declarationOwner._names.Contains(name) && command.NamerefTargets.ContainsKey(name))
             {
                 if (!command.TryResolveBinding(name, selectOwner: null, out var binding))
-                    return false;
+                    return LocalDeclarationResult.Invalid;
                 var resolved = binding.Name;
                 if (binding.IsUnsetNameref)
                 {
@@ -825,13 +826,13 @@ public sealed partial class Variables
                     {
                         // Unlike Bash 5.2's invalid nameref/array hybrid, conversion removes the reference.
                         if (!command.TryRemoveNamerefAttribute(name))
-                            return false;
+                            return LocalDeclarationResult.Readonly;
                     }
                     else
                     {
                         // An unset nameref has no referent to localize: initialize the reference itself.
                         if (hasAssignment && operand.Value.IsEmpty)
-                            return false;
+                            return LocalDeclarationResult.Invalid;
                         isNameref = true;
                     }
                 }
@@ -873,15 +874,16 @@ public sealed partial class Variables
                     updated = new Variables();
                     updated.CopyBindingFrom(prefixes?.Contains(name) == true ? command : savedBinding, name);
                 }
-                if (!TryUpdateBinding(updated))
-                    return false;
+                var result = TryUpdateBinding(updated);
+                if (result != LocalDeclarationResult.Declared)
+                    return result;
             }
             else
             {
                 // A new function local may shadow a readonly local in an enclosing invocation.
                 if ((command.IsReadonlyBinding(name) || unsetPrefixes != null && savedBinding.IsReadonlyBinding(name))
                     && enclosingFunction?.IsLocal(name) != true)
-                    return false;
+                    return LocalDeclarationResult.Readonly;
 
                 var local = new Variables();
                 var temporary = prefixes?.Contains(name) == true || command.IsTemporaryBinding(name);
@@ -905,8 +907,9 @@ public sealed partial class Variables
                 }
                 else if (savedBinding.HasAttribute(name, BindingAttributes.Exported))
                     local.SetAttribute(name, BindingAttributes.Exported, true);
-                if (!TryUpdateBinding(local))
-                    return false;
+                var result = TryUpdateBinding(local);
+                if (result != LocalDeclarationResult.Declared)
+                    return result;
 
                 declarationOwner.RememberDeclaration(name, savedBinding, memory);
                 updated = local;
@@ -943,32 +946,31 @@ public sealed partial class Variables
                 active.CopyBindingFrom(command, name);
             if (declarationOwner.IsScriptPrefix(name))
                 declarationOwner._declaredPrefixes.Add(name);
-            return true;
+            return LocalDeclarationResult.Declared;
 
-            bool TryUpdateBinding(Variables variables)
+            LocalDeclarationResult TryUpdateBinding(Variables variables)
             {
                 if (isNameref)
                 {
                     if (reference.Kind != VariableReferenceKind.Name
                         || arrayKind != ArrayAssignmentKind.Auto)
-                        return false;
+                        return LocalDeclarationResult.Invalid;
 
                     if (!hasAssignment && variables.NamerefTargets.ContainsKey(name))
-                        return true;
+                        return LocalDeclarationResult.Declared;
                     if (variables.IndexedArrays.ContainsKey(name) || variables.AssociativeArrays.ContainsKey(name))
-                        return false;
+                        return LocalDeclarationResult.Invalid;
 
                     var target = hasAssignment ? operand.Value
                         : variables.Scalars.GetValueOrDefault(name, ShellValue.Empty);
                     memory.Charge(checked(4L * target.Bytes.Length));
                     variables.SetCaseAttributes(name, caseChange);
-                    if (!variables.TrySetNameref(name, target, memory))
-                        return false;
-                    return true;
+                    return variables.TrySetNameref(name, target, memory)
+                        ? LocalDeclarationResult.Declared : LocalDeclarationResult.Invalid;
                 }
 
                 if (!variables.TryResolveWholeName(name, out var resolved) || resolved.IsEmpty)
-                    return false;
+                    return LocalDeclarationResult.Invalid;
 
                 var existingKind = variables.IndexedArrays.ContainsKey(resolved)
                     ? ArrayAssignmentKind.Indexed
@@ -977,7 +979,7 @@ public sealed partial class Variables
                         : ArrayAssignmentKind.Auto;
                 if (arrayKind != ArrayAssignmentKind.Auto
                     && existingKind != ArrayAssignmentKind.Auto && arrayKind != existingKind)
-                    return false;
+                    return LocalDeclarationResult.IncompatibleArrayKind;
 
                 var kind = arrayKind == ArrayAssignmentKind.Auto ? existingKind : arrayKind;
                 if (kind == ArrayAssignmentKind.Auto && reference.Kind != VariableReferenceKind.Name)
@@ -985,33 +987,34 @@ public sealed partial class Variables
                 if (!hasAssignment && (kind == ArrayAssignmentKind.Auto || kind == existingKind))
                 {
                     variables.DeclareUnassigned(resolved);
-                    return true;
+                    return LocalDeclarationResult.Declared;
                 }
 
                 if (hasAssignment && variables.IsReadonly(name))
-                    return false;
+                    return LocalDeclarationResult.Readonly;
 
                 variables.SetCaseAttributes(resolved, caseChange);
                 var index = reference.Kind == VariableReferenceKind.Element ? reference.Subscript.ToValue() : ShellValue.FromText("0");
                 if (kind == ArrayAssignmentKind.Auto)
                 {
                     variables.SetAssignedScalar(resolved, operand.Value, memory, prefixOperator: null);
-                    return true;
+                    return LocalDeclarationResult.Declared;
                 }
                 // Without an initializer, a selector declares the array type but is not evaluated.
                 if (hasAssignment && (kind == ArrayAssignmentKind.Indexed
                         ? !IndexedArrayIndex.TryParse(index.Bytes.Span, out _)
                         : !AssociativeArrayKey.TryCreate(index, out _)))
-                    return false;
+                    return LocalDeclarationResult.Invalid;
 
                 if (existingKind == ArrayAssignmentKind.Auto
                     && !variables.TryDeclareResolvedArray(resolved,
                         kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative,
                         ScalarArrayPromotion.DiscardValue))
-                    return false;
+                    return LocalDeclarationResult.Invalid;
 
                 return !hasAssignment || variables.TrySetResolvedArrayElement(resolved, index, operand.Value,
-                    kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative, memory);
+                    kind == ArrayAssignmentKind.Indexed ? ArrayKind.Indexed : ArrayKind.Associative, memory)
+                    ? LocalDeclarationResult.Declared : LocalDeclarationResult.Invalid;
             }
         }
 
