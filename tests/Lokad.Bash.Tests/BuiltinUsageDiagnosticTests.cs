@@ -159,7 +159,7 @@ public sealed class BuiltinUsageDiagnosticTests
     [InlineData("let \\\n--", 1, "line 3: let: expression expected\n")]
     [InlineData("let ''", 1, "")]
     [InlineData("command set \\\n-Z", 2, "line 2: set: -Z: invalid option\n"
-        + "set: usage: set [-aefuB|+aefuB] [-o name|+o name] [-|+|--] [arg ...]\n")]
+        + "set: usage: set [-aefnuB|+aefnuB] [-o name|+o name] [-|+|--] [arg ...]\n")]
     [InlineData("set -o \\\nsynthetic_missing", 2, "line 2: set: synthetic_missing: invalid option name\n")]
     public async Task BuiltinDiagnosticsUseTheReachedLineInAnUnnamedScript(string invocation, int failureStatus, string diagnostic)
     {

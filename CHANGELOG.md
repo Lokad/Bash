@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Support `set -n` and hosted `bash -n` to check syntax with command execution disabled.
 - Include the reached line in ambiguous redirection diagnostics from
   anonymous readers and failed descriptor-variable closes.
 - Apply temporary `GLOBIGNORE` filters to later prefix values and in-process

@@ -82,7 +82,7 @@ internal readonly record struct BuiltinDocumentation(string Arguments, string De
             "Report an empty command cache. -l lists its reusable entries and -r clears it. Both succeed silently.\n    -d deletes named entries and succeeds against the empty cache. -t reports each queried name as missing."),
         BuiltinKind.Shift => new("[--] [n]", "Remove the first n positional parameters. With no count, remove one.\n"
             + "    Enable shift_verbose with shopt to diagnose a count exceeding the remaining parameters."),
-        BuiltinKind.Set => new("[-aefuB|+aefuB] [-o name|+o name] [-|+|--] [arg ...]", "Change allexport, braceexpand, errexit, noglob and nounset, or replace positional parameters. A lone + is consumed while scanning options. -o/+o alone inspect the supported mutable options. With no arguments, list variable assignments and function definitions."),
+        BuiltinKind.Set => new("[-aefnuB|+aefnuB] [-o name|+o name] [-|+|--] [arg ...]", "Change allexport, braceexpand, errexit, noexec, noglob and nounset, or replace positional parameters. A lone + is consumed while scanning options. -o/+o alone inspect the supported mutable options. With no arguments, list variable assignments and function definitions."),
         BuiltinKind.Shopt => new("[-pqsu] [-o] [optname ...]",
             "Inspect or change shell options. With no arguments, list the supported shell options.\n"
             + "    -s enables, -u disables, -p prints reusable settings, and -q suppresses listings.\n"

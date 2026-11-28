@@ -10,6 +10,112 @@ public sealed class ScriptCommandUnitTests
 {
     private const string PrintParserStatus = "printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"";
 
+    [Theory]
+    [InlineData("set -n")]
+    [InlineData("set -o noexec")]
+    [InlineData("shopt -os noexec")]
+    public async Task NoExecSkipsSameUnitExpansionAndLaterRedirection(string enable)
+    {
+        var script = $"printf before; {enable}; printf '%s' \"${{missing:?skipped}}\"\n"
+            + "set +n\nprintf after >fixture\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            var memory = new MemoryGovernor(long.MaxValue);
+            await using var host = new TestHost { MemoryBudget = memory };
+            host.AddFile("/fixture", "original");
+            int status;
+            if (prepared)
+            {
+                using var evaluationMemory = memory.CreateScope();
+                var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(script));
+                status = (await new Engine().RunAsync(evaluation, host, evaluationMemory, CancellationToken.None)).ExitCode;
+            }
+            else
+            {
+                status = (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            }
+
+            Assert.Equal(0, status);
+            Assert.Equal("before", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal("original", host.ReadFile("/fixture"));
+            Assert.Equal(0, host.OpenFileCount);
+            Assert.Equal(0, memory.ReservedBytes);
+        }
+    }
+
+    [Fact]
+    public async Task NoExecReportsLaterStreamingSyntaxErrors()
+    {
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync("printf before; set -n\nif then; fi\nprintf later",
+            CancellationToken.None);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("before", host.StandardOutput.TextContent);
+        Assert.Equal("syntax error near unexpected token `then'\n`if then; fi'\n",
+            host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("! set -n; printf skipped\nprintf later", "", 1)]
+    [InlineData("f(){ local -; ! set -n; printf skipped; }; f; printf ':%s' \"$?\"", ":1", 0)]
+    [InlineData("f(){ local -; for x in first second; do set -n; done; }; f; printf '%s' \"$x\"", "second", 0)]
+    [InlineData("value=$(printf captured; set -n; printf skipped); printf '<%s>' \"$value\"", "<captured>", 0)]
+    [InlineData("set -n | cat; printf parent", "parent", 0)]
+    public async Task NoExecPreservesReachedStatusAndScope(string script, string output, int exitCode)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(exitCode, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData("bash -nc", "original")]
+    [InlineData("bash -o noexec -c", "original")]
+    [InlineData("bash -n +n -c", "updated")]
+    public async Task HostedNoExecSelectsExecutionBeforeFirstCommand(string launch, string content)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/fixture", "original");
+
+        var result = await host.RunAsync(launch + " 'printf updated >fixture'; printf ':%s' \"$?\"",
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(":0", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal(content, host.ReadFile("/fixture"));
+    }
+
+    [Fact]
+    public async Task NoExecLeavesLoadedSyntaxDiagnosticsOnTheActiveDescriptor()
+    {
+        const string script = "f(){ local -; . ./child 2>report; }; f; printf ':%s' \"$?\"";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/child", "printf before\nset -n\nif then; fi\nprintf later\n");
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("before:2", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+            Assert.Equal("./child: line 3: syntax error near unexpected token `then'\n./child: line 3: `if then; fi'\n",
+                host.ReadFile("/report"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     public static IEnumerable<object[]> CompleteUnits()
     {
         yield return ["printf A\n)\n", "A", 2, true];

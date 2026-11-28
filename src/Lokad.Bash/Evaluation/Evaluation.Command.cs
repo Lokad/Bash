@@ -46,7 +46,9 @@ public sealed partial class Evaluation
         }
         using var activeLine = lineScope;
 
-        var captureEnvironment = command is SimpleCommand or PipelineCommand
+        // A script node owns a reader. It keeps parsing even when execution is disabled.
+        var skipExecution = _state.NoExecEnabled && command is not ScriptCommand;
+        var captureEnvironment = !skipExecution && command is SimpleCommand or PipelineCommand
             && scope.Context.CaptureEnvironment is { CommandActive: false } environment ? environment : null;
         EvaluationResult result;
         try
@@ -83,6 +85,9 @@ public sealed partial class Evaluation
             result = await FinalizeResultAsync(EvaluationResult.FromExitCode(1),
                 negated ^ command is PipelineCommand { Negated: true }).ConfigureAwait(false);
         }
+
+        if (skipExecution)
+            return result;
 
         // A simple command (including a function, eval or source invocation) exposes a
         // fresh status. Compound commands retain the tested origin of their final status.
@@ -144,6 +149,9 @@ public sealed partial class Evaluation
                 && await ReportCompoundItemReadDiagnosticsAsync(items, scope, scope.Context.Coordinates.Offset)
                     .ConfigureAwait(false) is { } readFailure)
                 return EvaluationResult.Exit(readFailure.ExitCode);
+
+            if (skipExecution)
+                return EvaluationResult.FromExitCode(_state.LastExitCode.GetValueOrDefault());
 
             switch (command)
             {

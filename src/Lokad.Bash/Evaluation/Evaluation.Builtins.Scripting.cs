@@ -420,6 +420,7 @@ public sealed partial class Evaluation
                         ? await ExitLoadedExpansionSyntaxAsync(scope, readFailure).ConfigureAwait(false)
                         : EvaluationResult.Exit(readFailure.ExitCode);
                 var skipExecution = result.Flow is FlowControlKind.Break or FlowControlKind.Continue;
+                var noExec = _state.NoExecEnabled;
                 ICommand command;
                 if (failedUnit != null)
                 {
@@ -488,7 +489,7 @@ public sealed partial class Evaluation
                         result = result.WithExitCode(parserStatus);
                         continue;
                     }
-                    if (failedUnit.CompletedPrefix is { } prefix && !skipExecution)
+                    if (failedUnit.CompletedPrefix is { } prefix && !skipExecution && !noExec)
                         command = prefix;
                     else
                     {
@@ -513,6 +514,13 @@ public sealed partial class Evaluation
                 // Loop flow skips execution but still checks the remaining source/eval syntax.
                 if (skipExecution)
                     continue;
+                if (noExec)
+                {
+                    // A suppressed loaded unit reports success to its caller.
+                    if (sourceOrEval)
+                        result = EvaluationResult.FromExitCode(0);
+                    continue;
+                }
 
                 // The completed unit can outlive this reader through a function definition.
                 unitMemory.SyntaxMemory.ReleaseUnusedCapacityOnPublication();

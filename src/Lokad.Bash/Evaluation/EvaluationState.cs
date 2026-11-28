@@ -408,6 +408,7 @@ internal sealed class EvaluationState
         set => SetOption(ShellOption.InheritErrexit, value);
     }
     internal bool LocalVariableInheritance => HasOption(ShellOption.LocalVariableInheritance);
+    internal bool NoExecEnabled => (EnabledOptions & ShellOption.NoExec) != 0;
 
     private bool _borrowedPrefixDotglob;
     internal ShellOption ExpansionOptions => HasOption(ShellOption.Dotglob)
