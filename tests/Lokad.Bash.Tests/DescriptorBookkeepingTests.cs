@@ -77,6 +77,45 @@ public sealed class DescriptorBookkeepingTests
         }
     }
 
+    [Fact]
+    public async Task FailedPipelinePublicationClosesTheCreatedPipesInReverseOrder()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var failure = new IOException("pipeline publication failed");
+        var pipesCreated = 0;
+        var closed = new List<FileDescriptor>();
+        var evaluation = new Eval(Parser.Parse(": | : | :"), publishNextStep: operation =>
+        {
+            switch (operation)
+            {
+                case CreatePipeOperation pipe:
+                    var first = 10 + pipesCreated++ * 2;
+                    pipe.SetResult(PipeCreationResult.Created(new PipeDescriptors(first, first + 1)));
+                    break;
+                case RunPipelineEvaluations:
+                    throw failure;
+                case CloseDescriptorOperation close:
+                    closed.Add(close.Descriptor);
+                    close.SetResult(null);
+                    break;
+                default:
+                    throw new InvalidOperationException("Unexpected pipeline preparation operation.");
+            }
+        });
+        evaluation.Memory.Budget = owner;
+
+        var observed = await Assert.ThrowsAsync<IOException>(() => evaluation.EnsureRunning(deadline.Token));
+
+        Assert.Same(failure, observed);
+        Assert.Equal(2, pipesCreated);
+        Assert.Equal(new FileDescriptor[] { new(13), new(12), new(11), new(10) }, closed);
+        Assert.Empty(evaluation.GetDescriptorsForCleanup());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

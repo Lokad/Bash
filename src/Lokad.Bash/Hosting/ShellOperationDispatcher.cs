@@ -315,8 +315,11 @@ internal static class ShellOperationDispatcher
             }
             finally
             {
-                foreach (var descriptor in stage.DescriptorsToClose)
+                var descriptors = stage.DescriptorsToClose;
+                var count = descriptors.Count;
+                for (var index = 0; index < count; index++)
                 {
+                    var descriptor = descriptors[index];
                     // The request owns these streams through this awaited close;
                     // cleanup must not acquire new tracking storage after execution.
                     var result = await ShellDescriptorCleanup.TryCloseOwnedAsync(host, descriptor).ConfigureAwait(false);

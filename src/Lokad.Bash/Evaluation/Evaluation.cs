@@ -1033,9 +1033,10 @@ public sealed partial class Evaluation : IFileTester
             stageCount = checked(stageCount + 1);
             first = link.Left;
         }
-        // The parent owns these arrays and lists through dispatch, status publication and cleanup.
+        // Admit link scratch and the parent storage needed through dispatch, status publication and cleanup.
         var pipeCount = stageCount - 1;
-        Memory.Charge(MemoryCapacity.ArrayBackingBytes<PipelineCommand>(pipeCount));
+        var linkBytes = MemoryCapacity.ArrayBackingBytes<PipelineCommand>(pipeCount);
+        Memory.Charge(linkBytes);
         PreparePipelineStatusStorage(stageCount);
         Memory.Charge(checked(192L + 128L * stageCount));
         var links = new PipelineCommand[pipeCount];
@@ -1139,8 +1140,11 @@ public sealed partial class Evaluation : IFileTester
                 stages.Add(new PipelineEvaluationStage(stage, descriptorsToClose));
             }
 
-            // The stage snapshots and pending parent remain charged while the host runs the stages.
-            Memory.Workspace.ReleaseUnusedCapacityOnPublication();
+            // The stages hold their commands and endpoints. The parent keeps the pipe list for failed publication.
+            links = [];
+            var workspace = Memory.Workspace;
+            workspace.Resize(workspace.Bytes - linkBytes);
+            workspace.ReleaseUnusedCapacityOnPublication();
             var pipelineTask = RunPipelineEvaluations.AsTask(PublishOperation, stages);
             ownershipTransferred = true;
             Exception? pipelineFailure = null;

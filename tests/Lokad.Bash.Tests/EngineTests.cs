@@ -1056,29 +1056,43 @@ public class EngineTests
     [Fact]
     public async Task RunPipelineEvaluations_PublishesOrderedStatusesAfterEndpointCleanup()
     {
-        var descriptor = new FileDescriptor(10);
+        var input = new FileDescriptor(10);
+        var output = new FileDescriptor(11);
         var result = new TaskCompletionSource<IReadOnlyList<int>>(TaskCreationOptions.RunContinuationsAsynchronously);
         var operation = new RunPipelineEvaluations(result,
             [
-                new PipelineEvaluationStage(new Eval(Parser.Parse("exit 7")), [descriptor]),
+                new PipelineEvaluationStage(new Eval(Parser.Parse("exit 7")), [input, output]),
                 new PipelineEvaluationStage(new Eval(Parser.Parse("exit 3")), []),
                 new PipelineEvaluationStage(new Eval(Parser.Parse(":")), [])
             ]);
-        var closeCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inputClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outputClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outputReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var visitor = new TestOperationVisitor([]);
-        visitor.EnqueueCloseDescriptorTask(closeCompletion.Task);
+        visitor.BeforeDescriptorClose = descriptor =>
+        {
+            if (descriptor == output)
+                outputReached.TrySetResult();
+        };
+        visitor.EnqueueCloseDescriptorTask(inputClose.Task);
+        visitor.EnqueueCloseDescriptorTask(outputClose.Task);
 
         var dispatch = ShellOperationDispatcher.DispatchAsync(operation, visitor, CancellationToken.None);
         try
         {
-            await Task.Yield();
-            Assert.Contains(descriptor, visitor.ClosedDescriptors);
+            Assert.Equal([input], visitor.ClosedDescriptors);
+            Assert.False(result.Task.IsCompleted);
+
+            inputClose.SetResult();
+            await outputReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal([input, output], visitor.ClosedDescriptors);
             Assert.False(dispatch.IsCompleted);
             Assert.False(result.Task.IsCompleted);
         }
         finally
         {
-            closeCompletion.SetResult();
+            inputClose.TrySetResult();
+            outputClose.TrySetResult();
         }
         await dispatch;
         Assert.Equal([7, 3, 0], await result.Task);

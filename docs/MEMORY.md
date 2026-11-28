@@ -634,7 +634,10 @@ execution cleanup. All close attempts settle before this storage retires.
 Runtime available/borrowed collectors admit list/index growth and replacement
 overlap through the parent command workspace. Parent commands retain this storage
 through child execution, pipeline joins, host calls and cleanup; child workspace
-retirement does not release it. Inline subshells reuse the completed collector's
+retirement does not release it. The parent admits pipeline syntax links through
+stage construction and returns their allowance before dispatch. Stage snapshots
+and the parent pipe list stay charged through publication and settlement.
+Inline subshells reuse the completed collector's
 membership index. Their stack capacity stays charged to the execution cleanup
 owner through final users, then retires. The nearest entry already contains the
 complete ancestor union, so collection does not revisit older entry sets.
