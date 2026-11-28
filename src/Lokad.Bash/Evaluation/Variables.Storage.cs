@@ -57,12 +57,12 @@ public sealed partial class Variables
         public bool HasNamerefAttribute => this is NamerefSlot || IsArrayNameref;
 
         /// <summary>Copies mutable containers and attributes, sharing only immutable name/value bytes.</summary>
-        public VariableSlot Clone() => Clone(argumentZeroOwner: null);
+        public VariableSlot Clone() => Clone(shellOwner: null);
 
-        public VariableSlot Clone(Variables? argumentZeroOwner)
+        public VariableSlot Clone(Variables? shellOwner)
         {
-            var copy = this is ArgumentZeroSlot && argumentZeroOwner != null
-                ? new ArgumentZeroSlot(argumentZeroOwner) : CloneValue();
+            var copy = this is ShellStateSlot dynamic && shellOwner != null
+                ? dynamic.CloneForShell(shellOwner) : CloneValue();
             copy.Attributes = Attributes;
             return copy;
         }
@@ -116,16 +116,43 @@ public sealed partial class Variables
         protected override VariableSlot CloneValue() => new LineNumberSlot(Line);
     }
 
-    /// <summary>Projects the owning shell's name through a visible or saved binding.</summary>
-    private sealed class ArgumentZeroSlot(Variables shell) : ScalarSlot(ShellValue.Empty)
+    /// <summary>Projects shell state through a visible or saved binding.</summary>
+    private abstract class ShellStateSlot(Variables shell) : ScalarSlot(ShellValue.Empty)
+    {
+        protected Variables Shell { get; } = shell;
+        public abstract ShellStateSlot CloneForShell(Variables owner);
+        protected override VariableSlot CloneValue() => CloneForShell(Shell);
+    }
+
+    private sealed class ArgumentZeroSlot(Variables shell) : ShellStateSlot(shell)
     {
         public override ShellValue Value
         {
-            get => shell.ArgumentZero;
-            set => shell.ArgumentZero = value;
+            get => Shell.ArgumentZero;
+            set => Shell.ArgumentZero = value;
         }
 
-        protected override VariableSlot CloneValue() => new ArgumentZeroSlot(shell);
+        public override ShellStateSlot CloneForShell(Variables owner) => new ArgumentZeroSlot(owner);
+    }
+
+    private sealed class SubshellLevelSlot(Variables shell) : ShellStateSlot(shell)
+    {
+        private (int Level, ShellValue Value) _cached;
+
+        public override ShellValue Value
+        {
+            get
+            {
+                var level = Shell.SubshellLevel;
+                if (_cached.Value.IsEmpty || _cached.Level != level)
+                    _cached = (level, ShellValue.FromInteger(level));
+                return _cached.Value;
+            }
+            set => Shell.SubshellLevel = Integers.TryParseNumber(Integers.TrimWhitespace(value.Bytes.Span), out var level)
+                ? unchecked((int)level) : 0;
+        }
+
+        public override ShellStateSlot CloneForShell(Variables owner) => new SubshellLevelSlot(owner);
     }
 
     private sealed class IndexedSlot(IndexedArray value) : VariableSlot
@@ -276,7 +303,7 @@ public sealed partial class Variables
         foreach (var (name, slot) in EnumerateBindings())
         {
             if (slot is not AttributeSlot
-                && (slot is not ArgumentZeroSlot || attributes != BindingAttributes.None)
+                && (slot is not ShellStateSlot || attributes != BindingAttributes.None)
                 && (!filters.HasFlag(DeclarationListingAttributes.Indexed) || slot is IndexedSlot)
                 && (!filters.HasFlag(DeclarationListingAttributes.Associative) || slot is AssociativeSlot)
                 && (attributes == BindingAttributes.None || (slot.Attributes & attributes) != 0

@@ -45,6 +45,7 @@ public sealed partial class Variables
                 { PrefixCollectionMemory = prefixCollectionMemory },
             _positional = caller._positional,
             _argumentZero = caller._argumentZero,
+            SubshellLevel = caller.SubshellLevel,
             _getoptsCursor = caller._getoptsCursor,
             _deferFieldSeparators = caller._deferFieldSeparators,
             _indexedIfs = caller._indexedIfs,

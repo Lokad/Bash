@@ -1715,6 +1715,15 @@ A subshell can change its own name independently. A fresh Bash invocation
 initializes the binding from its launch name. Unset and array conversion keep
 the last shell name and end the dynamic scalar binding.
 
+`BASH_SUBSHELL` starts at zero in a new Bash invocation. Subshells,
+command substitutions and pipeline stages advance the level. A
+parenthesized pipeline stage counts once. A simple stage expands its
+arguments and prefix assignment values at the parent level. Its
+command redirections and body see the incremented level. A commandless
+stage expands redirections at the parent level. The dynamic scalar
+accepts decimal assignments. Local shadowing, unset and array conversion
+leave the ordinary binding independent of the shell's current level.
+
 Invalid loop variable and function definition names use the reader's completed
 unit line through the active stderr descriptor. A retained function uses its
 body opening line for an invalid loop name and the definition header for an

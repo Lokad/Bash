@@ -29,6 +29,7 @@ public sealed partial class Evaluation
         foreach (var variable in environment)
             SetExportedVariable(variable.Name, variable.Value);
         _vars.ArgumentZero = argumentZero;
+        _vars.SubshellLevel = 0;
         ReplacePositionalParameters(positionalParameters);
     }
 

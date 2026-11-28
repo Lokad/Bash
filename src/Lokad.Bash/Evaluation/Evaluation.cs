@@ -169,6 +169,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.TrySetScalar("OPTERR", one);
         _vars.InitializeLineNumber();
         _vars.InitializeArgumentZero();
+        _vars.InitializeSubshellLevel();
     }
 
     /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>
@@ -182,6 +183,7 @@ public sealed partial class Evaluation : IFileTester
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var (variables, context) = scope.ForkBindings();
+        variables.EnterSubshell();
         var line = Math.Max(scope.Context.FirstReaderLine, scope.Context.Coordinates.Line);
         context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line)
         {
@@ -856,6 +858,7 @@ public sealed partial class Evaluation : IFileTester
             memory.TrimExcess();
         }
         var (childVars, childContext) = scope.ForkBindings();
+        childVars.EnterSubshell();
         var coordinates = childContext.Coordinates;
         if (coordinates.Locations?.TryGet(subshellCommand, out var location) == true)
         {
@@ -1068,6 +1071,11 @@ public sealed partial class Evaluation : IFileTester
                     capturedInheritedExitBindings = true;
                 }
                 var (stageVars, stageContext) = scope.ForkBindings();
+                // A parenthesized stage enters its own level. Simple stages expand
+                // their argument fields and prefix right-hand sides first.
+                if (forkKind != ShellForkKind.PipelineSimpleCommand
+                    && command is not (SubshellCommand or RedirectedCommand { Body: SubshellCommand }))
+                    stageVars.EnterSubshell();
                 var stageState = _state.CloneForNestedEvaluation(script, descriptors, forkKind, Memory,
                     forkKind == ShellForkKind.Subshell ? inheritedExitBindings : null);
                 var stage = new Evaluation(
@@ -1403,6 +1411,12 @@ public sealed partial class Evaluation : IFileTester
         }
         if (assignmentError.HasValue)
             return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
+
+        if (directPipelineStage)
+        {
+            scope.Variables.EnterSubshell();
+            commandVars.SubshellLevel = scope.Variables.SubshellLevel;
+        }
 
         // In-process redirections write both caller bindings and the prepared command scope.
         // Do not infer writes by comparing values: assigning the caller's old value still replaces a prefix.
