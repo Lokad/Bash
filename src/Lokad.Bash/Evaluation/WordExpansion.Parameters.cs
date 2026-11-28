@@ -1094,7 +1094,8 @@ internal static partial class WordExpansion
                     ExpansionPurpose.ParameterReplacement).ConfigureAwait(false);
                 if (!scope.CanExpand)
                     return;
-                var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken) : null;
+                var matcher = canMatch ? ShellPattern.FromUnescaped(pattern.Value, pattern.Mask, budget, cancellationToken,
+                    scope.Effects.IgnoreCaseInPatterns) : null;
                 var replacementMask = replacement.Mask;
                 var syntaxStart = replacementMask == null ? -1
                     : replacement.Value.Bytes.Span.IndexOfAny((byte)'&', (byte)'\\');
@@ -1167,6 +1168,7 @@ internal static partial class WordExpansion
                     var bytes = value.Bytes.Span;
                     if (pattern.IsEmpty && mode is ParameterReplacementMode.First or ParameterReplacementMode.All)
                         return value;
+                    var matchBytes = pattern.GetMatchBytes(value, scratch, cancellationToken);
                     var byteCharacters = pattern.UsesByteCharacters(bytes);
                     var validSuffixStart = -1;
                     var replaced = false;
@@ -1182,17 +1184,17 @@ internal static partial class WordExpansion
                         if (mode == ParameterReplacementMode.Prefix)
                         {
                             offset = 0;
-                            found = pattern.TryMatchPrefix(bytes[position..], shortest: false, byteCharacters, cancellationToken, out length);
+                            found = pattern.TryMatchPrefix(matchBytes[position..], shortest: false, byteCharacters, cancellationToken, out length);
                         }
                         else if (mode == ParameterReplacementMode.Suffix)
                         {
-                            found = pattern.TryMatchSuffix(bytes[position..], shortest: false, byteCharacters, cancellationToken, out offset);
+                            found = pattern.TryMatchSuffix(matchBytes[position..], shortest: false, byteCharacters, cancellationToken, out offset);
                             length = found ? bytes.Length - position - offset : 0;
                         }
                         else if (mode == ParameterReplacementMode.All)
-                            found = search.TryFind(bytes[position..], byteCharacters, cancellationToken, out offset, out length);
+                            found = search.TryFind(matchBytes[position..], byteCharacters, cancellationToken, out offset, out length);
                         else
-                            found = pattern.TryFind(bytes[position..], byteCharacters, cancellationToken, out offset, out length);
+                            found = pattern.TryFind(matchBytes[position..], byteCharacters, cancellationToken, out offset, out length);
                         if (!found)
                             break;
                         replaced = true;
@@ -1829,7 +1831,7 @@ internal static partial class WordExpansion
             var mask = activity == null ? default : activity.AsSpan();
             var matched = activity == null ? pattern.SequenceEqual(character)
                 : TextGlobMatcher.MatchUtf8(pattern, in mask, character, requireEnd: true,
-                    _bytePattern, _memory, cancellationToken, out _) == GlobMatchResult.Match;
+                    _bytePattern, ignoreAsciiCase: false, _memory, cancellationToken, out _) == GlobMatchResult.Match;
             entry = key | (matched ? 1 : 0);
             return matched;
         }

@@ -109,12 +109,32 @@ public sealed class GlobPatternTests
     }
 
     [Fact]
+    public void CaseFoldedCachedBracketsPreserveCaseSensitiveNamedClasses()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var memory = new MemoryCapacity(governor, 0);
+        using (var matcher = new TextGlobMatcher.PathComponentMatcher(
+                   "[[:upper:]c-n3456789012]".AsMemory(), default, memory, ignoreAsciiCase: true))
+        {
+            Assert.True(matcher.Matches("A", CancellationToken.None));
+            Assert.False(matcher.Matches("a", CancellationToken.None));
+            Assert.True(memory.Bytes > 0);
+            Assert.True(matcher.Matches("Z", CancellationToken.None));
+            Assert.False(matcher.Matches("z", CancellationToken.None));
+            Assert.True(matcher.Matches("n", CancellationToken.None));
+        }
+        Assert.Equal(0, memory.Bytes);
+        memory.ReleaseUnusedCapacity();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void PathComponentMatcherReusesWideMembershipAndRefundsIt()
     {
         var governor = new MemoryGovernor(64 * 1024);
         using var memory = new MemoryCapacity(governor, 0);
         using (var matcher = new TextGlobMatcher.PathComponentMatcher(
-                   ("[!" + new string('a', 64) + "[:digit:]🙂]").AsMemory(), default, memory))
+                   ("[!" + new string('a', 64) + "[:digit:]🙂]").AsMemory(), default, memory, ignoreAsciiCase: false))
         {
             Assert.False(matcher.Matches("🙂", CancellationToken.None));
             Assert.Equal(0, memory.Bytes);

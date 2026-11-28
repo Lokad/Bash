@@ -7,6 +7,21 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationGlobTestsEndToEnd
 {
     [Fact]
+    public async Task NocaseglobFoldsWildcardComponentsAndKeepsOriginalDirectorySpellings()
+    {
+        var host = EndToEndHarness.BuildTree(["/Dir"], [("/Dir/UPPER.TXT", ""), ("/Dir/lower.txt", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s nocaseglob
+            printf '<%s>\n' d*/[u-z]*.txt d*/lower.txt
+            [[ A == a ]]; printf 'text:%s\n' "$?"
+            """, tree: host);
+
+        Assert.Equal("<Dir/UPPER.TXT>\n<Dir/lower.txt>\ntext:1\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task NullglobDropsFieldsBeforeCommandSelectionAndArrayPublication()
     {
         var host = EndToEndHarness.BuildTree([("/one.keep", "")]);

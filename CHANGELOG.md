@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `nocaseglob` for wildcard pathname components and `nocasematch`
+  for shell pattern comparisons, regex comparisons, and pattern replacement.
+
 - Support `dotglob`, `failglob`, and `nullglob` in pathname expansion.
   Include `BASHOPTS` and `SHELLOPTS` in operand-free variable listings.
 

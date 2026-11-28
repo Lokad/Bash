@@ -916,7 +916,7 @@ during application, preserving any changes already applied. After `-`,
 `--`, or the first positional operand, `--help` is a positional argument.
 
 `shopt` inspects and changes `dotglob`, `failglob`, `inherit_errexit`,
-`localvar_inherit`, and `nullglob`.
+`localvar_inherit`, `nocaseglob`, `nocasematch`, and `nullglob`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -932,6 +932,16 @@ target. `failglob` takes precedence, reports the unmatched pattern, and ends
 the reached command unit. With errexit off, the surrounding script reader
 can resume with status 1. The pathname options persist across a function
 return, including after `local -`.
+
+`nocaseglob` folds ASCII letters in wildcard pathname components. Fixed
+path components keep exact spelling and each returned wildcard match keeps
+the entry's spelling. `nocasematch` folds ASCII letters in `case`,
+`[[ == ]]`, `[[ != ]]`, and parameter pattern replacement. Quoting still
+controls whether a character is a pattern operator. Named glob bracket classes
+retain their ASCII/C membership. Parameter prefix and suffix removal, case
+conversion, and the `test` builtin keep case-sensitive matching. In `[[ =~ ]]`,
+`nocasematch` selects case-insensitive matching in the invariant .NET regex
+profile and captures retain their original bytes.
 
 `BASHOPTS` and `SHELLOPTS` are readonly, colon-separated lists of the
 enabled options in these two supported namespaces. They follow the

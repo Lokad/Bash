@@ -146,7 +146,8 @@ public sealed partial class Evaluation
                         return await MatchRegexAsync(left, ExpandedWord.JoinWithSpaces(rightFields, Memory)).ConfigureAwait(false);
                     if (predicate.Operator is BinaryPredicateKind.StringEqual or BinaryPredicateKind.StringNotEqual)
                     {
-                        var matched = ShellPattern.MatchesWords(rightFields, left.Bytes.Span, Memory, _cancellationToken);
+                        var matched = ShellPattern.MatchesWords(rightFields, left.Bytes.Span, Memory, _cancellationToken,
+                            IgnoreCaseInPatterns);
                         return matched == (predicate.Operator == BinaryPredicateKind.StringEqual) ? 0 : 1;
                     }
                     var right = ExpandedWord.JoinValuesWithSpaces(rightFields, Memory);
@@ -204,8 +205,10 @@ public sealed partial class Evaluation
             try
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                match = Regex.Match(text, expression,
-                    RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+                var options = RegexOptions.Singleline | RegexOptions.CultureInvariant;
+                if (IgnoreCaseInPatterns)
+                    options |= RegexOptions.IgnoreCase;
+                match = Regex.Match(text, expression, options, TimeSpan.FromMilliseconds(250));
             }
             catch (ArgumentException) { return 2; }
             catch (RegexMatchTimeoutException) { return 2; }

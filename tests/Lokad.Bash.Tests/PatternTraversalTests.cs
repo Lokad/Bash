@@ -9,6 +9,22 @@ namespace Lokad.Bash.Tests;
 public sealed class PatternTraversalTests
 {
     [Fact]
+    public async Task NocasematchReplacementPreservesMatchedBytesAndLeavesRemovalCaseSensitive()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s nocasematch
+            v=AbCaBcAbC
+            printf '<%s>\n' "${v/abc/X}" "${v//abc/<&>}" "${v/#[a]bc/<&>}" "${v/%[a]bc/<&>}"
+            printf '<%s>\n' "${v#abc}" "${v%abc}"
+            """);
+
+        Assert.Equal("<XaBcAbC>\n<<AbC><aBc><AbC>>\n<<AbC>aBcAbC>\n<AbCaBc<AbC>>\n<AbCaBcAbC>\n<AbCaBcAbC>\n",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public void TerminalEscapeKeepsPreviouslyDecodedBytesAndActivity()
     {
         var raw = ShellValue.FromBytes(new byte[] { (byte)'\\', (byte)'*', 0xff, (byte)'\\' });
@@ -167,7 +183,7 @@ public sealed class PatternTraversalTests
             Assert.True(pattern.TryMatchPrefix("55é"u8, false, CancellationToken.None, out length));
             Assert.Equal(4, length);
             Assert.Equal(GlobMatchResult.Match,
-                TextGlobMatcher.FindUtf8("[[:digit:]]*"u8, in mask, "é5x5z"u8, false, memory.Workspace,
+                TextGlobMatcher.FindUtf8("[[:digit:]]*"u8, in mask, "é5x5z"u8, byteCharacters: false, ignoreAsciiCase: false, memory.Workspace,
                     CancellationToken.None, out var start, out length));
             Assert.Equal(2, start);
             Assert.Equal(4, length);
@@ -190,15 +206,15 @@ public sealed class PatternTraversalTests
         var text = Convert.FromHexString(hex);
         var mask = default(GlobMaskSpan);
         Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Prefix("a*"u8, in mask, text,
-            shortest: true, byteCharacters, memory: null, CancellationToken.None, out var length));
+            shortest: true, byteCharacters, ignoreAsciiCase: false, memory: null, CancellationToken.None, out var length));
         Assert.Equal(1, length);
         Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Prefix("a*"u8, in mask, text,
-            shortest: false, byteCharacters, memory: null, CancellationToken.None, out length));
+            shortest: false, byteCharacters, ignoreAsciiCase: false, memory: null, CancellationToken.None, out length));
         Assert.Equal(text.Length, length);
 
         byte[] prefixed = [(byte)'z', .. text];
         Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.FindUtf8("a*"u8, in mask, prefixed, byteCharacters,
-            memory: null, CancellationToken.None, out var start, out length));
+            ignoreAsciiCase: false, memory: null, CancellationToken.None, out var start, out length));
         Assert.Equal(1, start);
         Assert.Equal(text.Length, length);
     }
@@ -209,10 +225,10 @@ public sealed class PatternTraversalTests
         var mask = default(GlobMaskSpan);
         int[] atoms = [0, 1];
         Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Suffix("*é"u8, in mask, atoms,
-            "aé🙂é"u8, shortest: false, byteCharacters: false, memory: null, CancellationToken.None, out var length));
+            "aé🙂é"u8, shortest: false, byteCharacters: false, ignoreAsciiCase: false, memory: null, CancellationToken.None, out var length));
         Assert.Equal("aé🙂é"u8.Length, length);
         Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.MatchUtf8Suffix("*é"u8, in mask, atoms,
-            "aé🙂é"u8, shortest: true, byteCharacters: false, memory: null, CancellationToken.None, out length));
+            "aé🙂é"u8, shortest: true, byteCharacters: false, ignoreAsciiCase: false, memory: null, CancellationToken.None, out length));
         Assert.Equal(2, length);
     }
 
@@ -221,7 +237,7 @@ public sealed class PatternTraversalTests
     {
         var mask = default(GlobMaskSpan);
         Assert.Equal(GlobMatchResult.Match, TextGlobMatcher.FindUtf8(ReadOnlySpan<byte>.Empty, in mask, "é🙂"u8,
-            byteCharacters: false, memory: null, CancellationToken.None, out var start, out var length));
+            byteCharacters: false, ignoreAsciiCase: false, memory: null, CancellationToken.None, out var start, out var length));
         Assert.Equal(0, start);
         Assert.Equal(0, length);
 
@@ -256,7 +272,7 @@ public sealed class PatternTraversalTests
                         for (var end = bytes.Length; end >= start; end--)
                         {
                             if (TextGlobMatcher.MatchUtf8(encoded, in mask, bytes.AsSpan(start, end - start),
-                                    requireEnd: true, byteCharacters: true, memory.Workspace,
+                                    requireEnd: true, byteCharacters: true, ignoreAsciiCase: false, memory.Workspace,
                                     CancellationToken.None, out _) != GlobMatchResult.Match)
                                 continue;
                             if (expectedStart < 0)
@@ -272,7 +288,7 @@ public sealed class PatternTraversalTests
                         }
                     }
                     var found = TextGlobMatcher.FindUtf8(encoded, in mask, bytes, byteCharacters: true,
-                        memory.Workspace, CancellationToken.None, out var actualStart, out var actualLength);
+                        ignoreAsciiCase: false, memory.Workspace, CancellationToken.None, out var actualStart, out var actualLength);
                     Assert.True((expectedStart >= 0) == (found == GlobMatchResult.Match), $"search {pattern} / {text}");
                     if (expectedStart >= 0)
                     {
@@ -283,7 +299,7 @@ public sealed class PatternTraversalTests
                     {
                         var expected = shortest ? shortestSuffixStart : longestSuffixStart;
                         var matched = TextGlobMatcher.MatchUtf8Suffix(encoded, in mask, atoms.Span, bytes,
-                            shortest, byteCharacters: true, memory.Workspace, CancellationToken.None, out var suffixLength);
+                            shortest, byteCharacters: true, ignoreAsciiCase: false, memory.Workspace, CancellationToken.None, out var suffixLength);
                         Assert.True((expected >= 0) == (matched == GlobMatchResult.Match), $"suffix {shortest} {pattern} / {text}");
                         if (expected >= 0) Assert.Equal(expected, bytes.Length - suffixLength);
                     }
@@ -494,7 +510,7 @@ public sealed class PatternTraversalTests
 
         bool Match(ShellValue pattern, bool quoted) =>
             ShellPattern.MatchesWords([new ExpandedWord([new(pattern, isGlobQuoted: quoted)])],
-                subject, memory, CancellationToken.None, ref subjectHasMalformedUtf8);
+                subject, memory, CancellationToken.None, ignoreAsciiCase: false, ref subjectHasMalformedUtf8);
     }
 
     [Fact]
@@ -682,11 +698,11 @@ public sealed class PatternTraversalTests
                 Assert.Equal(expected, atoms.ToArray());
                 Assert.Equal(GlobMatchResult.Match,
                     TextGlobMatcher.MatchUtf8Suffix(bytes, in mask, atoms.Span, bytes,
-                        false, byteCharacters, memory.Workspace, CancellationToken.None, out var length));
+                        shortest: false, byteCharacters, ignoreAsciiCase: false, memory.Workspace, CancellationToken.None, out var length));
                 Assert.Equal(bytes.Length, length);
                 Assert.Equal(GlobMatchResult.Match,
                     TextGlobMatcher.FindUtf8(bytes, in mask, bytes, byteCharacters,
-                        memory.Workspace, CancellationToken.None, out var start, out length));
+                        ignoreAsciiCase: false, memory.Workspace, CancellationToken.None, out var start, out length));
                 Assert.Equal(0, start);
                 Assert.Equal(bytes.Length, length);
             }

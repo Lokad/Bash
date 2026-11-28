@@ -315,6 +315,10 @@ components for host traversal.
 The pathname matcher returns only matched paths. On a miss the expansion
 publisher uses the original byte value for literal fallback, drops the field
 under `nullglob`, or publishes a command-unit error under `failglob`.
+Case-insensitive pathname and shell-word patterns share the glob traversal.
+Literal parameter replacement folds into scratch once per reached subject
+and uses its original byte offsets for publication. Wildcard matching folds
+characters at comparison time and reuses prepared bracket membership.
 Bracket lookahead and revisited wide memberships are shared across entries of a
 pathname component. The component retains its admitted membership through any
 pending link lookup and releases it before advancing or publishing results.

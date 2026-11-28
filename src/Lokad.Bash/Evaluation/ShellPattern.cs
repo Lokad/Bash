@@ -9,15 +9,17 @@ internal sealed class ShellPattern
     private readonly ShellValue _value;
     private readonly GlobMask? _mask;
     private readonly bool _literal;
+    private readonly bool _ignoreAsciiCase;
     private readonly EvaluationMemory _memory;
     private ReadOnlyMemory<int>? _scalarAtoms;
     private ReadOnlyMemory<int>? _byteAtoms;
 
-    private ShellPattern(ShellValue value, GlobMask? mask, bool literal, EvaluationMemory memory)
+    private ShellPattern(ShellValue value, GlobMask? mask, bool literal, bool ignoreAsciiCase, EvaluationMemory memory)
     {
         _value = value;
         _mask = mask;
         _literal = literal;
+        _ignoreAsciiCase = ignoreAsciiCase;
         RequiresByteCharacters = !literal && !System.Text.Unicode.Utf8.IsValid(value.Bytes.Span);
         _memory = memory;
     }
@@ -34,34 +36,41 @@ internal sealed class ShellPattern
 
     /// <summary>Retains an already unescaped value and its quoting metadata for this command's matching.</summary>
     public static ShellPattern FromUnescaped(ShellValue value, GlobMask? mask, EvaluationMemory memory, CancellationToken cancellationToken)
+        => FromUnescaped(value, mask, memory, cancellationToken, ignoreAsciiCase: false);
+
+    internal static ShellPattern FromUnescaped(ShellValue value, GlobMask? mask, EvaluationMemory memory,
+        CancellationToken cancellationToken, bool ignoreAsciiCase)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var literal = mask == null || IsLiteral(value.Bytes.Span, mask.AsSpan(), cancellationToken);
+        if (literal && ignoreAsciiCase)
+            value = FoldAscii(value, memory.Workspace, cancellationToken);
         memory.Charge(256);
-        return new ShellPattern(value, mask, literal, memory);
+        return new ShellPattern(value, mask, literal, ignoreAsciiCase, memory);
     }
 
     /// <summary>Compares expanded words once without retaining a prepared matcher.</summary>
     public static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
-        EvaluationMemory memory, CancellationToken cancellationToken)
+        EvaluationMemory memory, CancellationToken cancellationToken) =>
+        MatchesWords(words, text, memory, cancellationToken, ignoreAsciiCase: false);
+
+    internal static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
+        EvaluationMemory memory, CancellationToken cancellationToken, bool ignoreAsciiCase)
     {
         bool? subjectHasMalformedUtf8 = null;
-        return MatchesWords(words, text, memory, cancellationToken, ref subjectHasMalformedUtf8);
+        return MatchesWords(words, text, memory, cancellationToken, ignoreAsciiCase, ref subjectHasMalformedUtf8);
     }
 
     /// <summary>Reuses the UTF-8 classification across comparisons with the same immutable subject.</summary>
     public static bool MatchesWords(IReadOnlyList<ExpandedWord> words, ReadOnlySpan<byte> text,
-        EvaluationMemory memory, CancellationToken cancellationToken, ref bool? subjectHasMalformedUtf8)
+        EvaluationMemory memory, CancellationToken cancellationToken, bool ignoreAsciiCase, ref bool? subjectHasMalformedUtf8)
     {
         if (!TryPrepareWords(words, memory, cancellationToken, out var value, out var activity))
             return false;
         var bytes = value.Bytes.Span;
-        if (activity == null)
-            return text.SequenceEqual(bytes);
-
-        var mask = activity.AsSpan();
-        if (IsLiteral(bytes, mask, cancellationToken))
-            return text.SequenceEqual(bytes);
+        var mask = activity == null ? default : activity.AsSpan();
+        if (activity == null || IsLiteral(bytes, mask, cancellationToken))
+            return ignoreAsciiCase ? EqualIgnoringAsciiCase(bytes, text, cancellationToken) : text.SequenceEqual(bytes);
 
         var byteCharacters = !System.Text.Unicode.Utf8.IsValid(bytes);
         if (!byteCharacters)
@@ -70,7 +79,20 @@ internal sealed class ShellPattern
             byteCharacters = subjectHasMalformedUtf8.Value;
         }
         return TextGlobMatcher.MatchUtf8(bytes, in mask, text,
-            requireEnd: true, byteCharacters, memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
+            requireEnd: true, byteCharacters, ignoreAsciiCase, memory.Workspace, cancellationToken, out _) == GlobMatchResult.Match;
+
+        static bool EqualIgnoringAsciiCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right, CancellationToken cancellationToken)
+        {
+            if (left.Length != right.Length)
+                return false;
+            for (var index = 0; index < left.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (AsciiByte.ToLowerAscii(left[index]) != AsciiByte.ToLowerAscii(right[index]))
+                    return false;
+            }
+            return true;
+        }
     }
 
     private static bool TryPrepareWords(IReadOnlyList<ExpandedWord> words, EvaluationMemory memory,
@@ -110,6 +132,28 @@ internal sealed class ShellPattern
     public bool UsesByteCharacters(ReadOnlySpan<byte> text) =>
         !_literal && (RequiresByteCharacters || !System.Text.Unicode.Utf8.IsValid(text));
 
+    /// <summary>Normalizes a literal search subject once while preserving its byte offsets.</summary>
+    internal ReadOnlySpan<byte> GetMatchBytes(ShellValue value, MemoryCapacity scratch, CancellationToken cancellationToken) =>
+        (_literal && _ignoreAsciiCase ? FoldAscii(value, scratch, cancellationToken) : value).Bytes.Span;
+
+    private static ShellValue FoldAscii(ShellValue value, MemoryCapacity owner, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var source = value.Bytes.Span;
+        var first = source.IndexOfAnyInRange((byte)'A', (byte)'Z');
+        if (first < 0)
+            return value;
+        owner.Grow(MemoryCapacity.ArrayBackingBytes<byte>(source.Length));
+        var folded = new byte[source.Length];
+        source[..first].CopyTo(folded);
+        for (var index = first; index < folded.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            folded[index] = AsciiByte.ToLowerAscii(source[index]);
+        }
+        return ShellValue.FromBytes(folded);
+    }
+
     public bool TryMatchPrefix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int length) =>
         TryMatchPrefix(text, shortest, UsesByteCharacters(text), cancellationToken, out length);
 
@@ -123,7 +167,7 @@ internal sealed class ShellPattern
         }
         var mask = Mask;
         return TextGlobMatcher.MatchUtf8Prefix(_value.Bytes.Span, in mask, text,
-            shortest, byteCharacters, _memory.Workspace, cancellationToken, out length) == GlobMatchResult.Match;
+            shortest, byteCharacters, _ignoreAsciiCase, _memory.Workspace, cancellationToken, out length) == GlobMatchResult.Match;
     }
 
     public bool TryFind(ReadOnlySpan<byte> text, bool byteCharacters, CancellationToken cancellationToken, out int start, out int length)
@@ -134,10 +178,11 @@ internal sealed class ShellPattern
 
         var mask = Mask;
         return TextGlobMatcher.FindUtf8(_value.Bytes.Span, in mask, text,
-            byteCharacters, _memory.Workspace, cancellationToken, out start, out length) == GlobMatchResult.Match;
+            byteCharacters, _ignoreAsciiCase, _memory.Workspace, cancellationToken, out start, out length) == GlobMatchResult.Match;
     }
 
-    public TextGlobMatcher.Utf8Search CreateSearch(MemoryCapacity scratch) => new(_value.Bytes.Span, Mask, _literal, scratch);
+    public TextGlobMatcher.Utf8Search CreateSearch(MemoryCapacity scratch) =>
+        new(_value.Bytes.Span, Mask, _literal, _ignoreAsciiCase, scratch);
 
     public bool TryMatchSuffix(ReadOnlySpan<byte> text, bool shortest, CancellationToken cancellationToken, out int start) =>
         TryMatchSuffix(text, shortest, UsesByteCharacters(text), cancellationToken, out start);
@@ -154,7 +199,7 @@ internal sealed class ShellPattern
         var mask = Mask;
         prepared ??= TextGlobMatcher.PrepareUtf8Atoms(_value.Bytes.Span, in mask, byteCharacters, _memory, cancellationToken);
         var matched = TextGlobMatcher.MatchUtf8Suffix(_value.Bytes.Span, in mask, prepared.Value.Span, text,
-            shortest, byteCharacters, _memory.Workspace, cancellationToken, out var length) == GlobMatchResult.Match;
+            shortest, byteCharacters, _ignoreAsciiCase, _memory.Workspace, cancellationToken, out var length) == GlobMatchResult.Match;
         start = matched ? text.Length - length : -1;
         return matched;
     }

@@ -94,7 +94,7 @@ public sealed partial class Evaluation
                     if (_state.HasPendingExpansionError)
                         return caseCommand.Items.Count;
                     if (ShellPattern.MatchesWords(expanded, subject.Bytes.Span, Memory, _cancellationToken,
-                        ref subjectHasMalformedUtf8))
+                        IgnoreCaseInPatterns, ref subjectHasMalformedUtf8))
                         return index;
 
                     // Each alternative consumes its expanded pattern. Binding effects

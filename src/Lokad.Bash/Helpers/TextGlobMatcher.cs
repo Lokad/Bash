@@ -34,26 +34,33 @@ public static class TextGlobMatcher
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
         bool requireEnd, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
         MatchUtf8(pattern, in mask, text, requireEnd,
-            !System.Text.Unicode.Utf8.IsValid(pattern) || !System.Text.Unicode.Utf8.IsValid(text), memory, cancellationToken, out length);
+            !System.Text.Unicode.Utf8.IsValid(pattern) || !System.Text.Unicode.Utf8.IsValid(text),
+            ignoreAsciiCase: false, memory, cancellationToken, out length);
 
     internal static GlobMatchResult MatchUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool requireEnd, bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward, memory),
+        bool requireEnd, bool byteCharacters, bool ignoreAsciiCase, MemoryCapacity? memory,
+        CancellationToken cancellationToken, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward, memory)
+            { IgnoreAsciiCase = ignoreAsciiCase },
             new GlobInput(text, byteCharacters, reverse: false), requireEnd, shortestPrefix: false, cancellationToken, out _, out length);
 
     /// <summary>Finds a character-aligned prefix without rescanning every candidate length.</summary>
     internal static GlobMatchResult MatchUtf8Prefix(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool shortest, bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward, memory),
+        bool shortest, bool byteCharacters, bool ignoreAsciiCase, MemoryCapacity? memory,
+        CancellationToken cancellationToken, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Forward, memory)
+            { IgnoreAsciiCase = ignoreAsciiCase },
             new GlobInput(text, byteCharacters, reverse: false), requireEnd: false, shortest, cancellationToken, out _, out length);
 
     /// <summary>Finds the leftmost, longest match in one shared search, using an implicit leading wildcard.</summary>
     internal static GlobMatchResult FindUtf8(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<byte> text,
-        bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int start, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Search, memory),
+        bool byteCharacters, bool ignoreAsciiCase, MemoryCapacity? memory,
+        CancellationToken cancellationToken, out int start, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, default, PatternTraversal.Search, memory)
+            { IgnoreAsciiCase = ignoreAsciiCase },
             new GlobInput(text, byteCharacters, reverse: false), requireEnd: false, shortestPrefix: false, cancellationToken, out start, out length);
 
     internal static bool TryFindLiteral(ReadOnlySpan<byte> pattern, ReadOnlySpan<byte> text, out int start, out int length)
@@ -69,15 +76,17 @@ public static class TextGlobMatcher
         private readonly ReadOnlySpan<byte> _pattern;
         private readonly GlobMaskSpan _mask;
         private readonly bool _literal;
+        private readonly bool _ignoreAsciiCase;
         private readonly MemoryCapacity _memory;
         private PatternInput _input;
         private bool? _byteCharacters;
 
-        public Utf8Search(ReadOnlySpan<byte> pattern, GlobMaskSpan mask, bool literal, MemoryCapacity memory)
+        public Utf8Search(ReadOnlySpan<byte> pattern, GlobMaskSpan mask, bool literal, bool ignoreAsciiCase, MemoryCapacity memory)
         {
             _pattern = pattern;
             _mask = mask;
             _literal = literal;
+            _ignoreAsciiCase = ignoreAsciiCase;
             _memory = memory;
         }
 
@@ -92,7 +101,7 @@ public static class TextGlobMatcher
             {
                 Dispose();
                 _input = new PatternInput(new GlobInput(_pattern, byteCharacters, reverse: false), _mask, default,
-                    PatternTraversal.Search, _memory);
+                    PatternTraversal.Search, _memory) { IgnoreAsciiCase = _ignoreAsciiCase };
                 _byteCharacters = byteCharacters;
             }
 
@@ -110,8 +119,10 @@ public static class TextGlobMatcher
     /// <summary>Matches a suffix by reading pattern atoms and text characters in reverse.</summary>
     internal static GlobMatchResult MatchUtf8Suffix(
         ReadOnlySpan<byte> pattern, in GlobMaskSpan mask, ReadOnlySpan<int> atoms, ReadOnlySpan<byte> text,
-        bool shortest, bool byteCharacters, MemoryCapacity? memory, CancellationToken cancellationToken, out int length) =>
-        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, atoms, PatternTraversal.Reverse, memory),
+        bool shortest, bool byteCharacters, bool ignoreAsciiCase, MemoryCapacity? memory,
+        CancellationToken cancellationToken, out int length) =>
+        Match(new PatternInput(new GlobInput(pattern, byteCharacters, reverse: false), mask, atoms, PatternTraversal.Reverse, memory)
+            { IgnoreAsciiCase = ignoreAsciiCase },
             new GlobInput(text, byteCharacters, reverse: true), requireEnd: false, shortest, cancellationToken, out _, out length);
 
     /// <summary>Prepares reverse atom offsets when they cannot be derived from the byte positions.</summary>
@@ -150,7 +161,7 @@ public static class TextGlobMatcher
             var end = position;
             if (mask[position] == GlobMask.Active && input[position] == '[')
             {
-                var members = new BracketMembership(-1, default);
+                var members = new BracketMembership(-1, default, ignoreAsciiCase: false);
                 _ = TryReadBracket(input, in mask, ref end, ref members, ref scan, cancellationToken);
             }
             return end == position ? position + input.Width(position) : end;
@@ -168,7 +179,7 @@ public static class TextGlobMatcher
             cancellationToken.ThrowIfCancellationRequested();
             if (pattern[position] == (byte)'[' && mask[position] == GlobMask.Active)
             {
-                var members = new BracketMembership(-1, default);
+                var members = new BracketMembership(-1, default, ignoreAsciiCase: false);
                 if (!TryReadBracket(input, in mask, ref position, ref members, ref scan, cancellationToken))
                     return true;
             }
@@ -186,7 +197,8 @@ public static class TextGlobMatcher
             new GlobInput(text, scalarCharacters: false), requireEnd: true, shortestPrefix: false, cancellationToken, out _, out _);
 
     /// <summary>Retains bracket decisions for repeated scalar matches of one pathname component.</summary>
-    internal struct PathComponentMatcher(ReadOnlyMemory<char> pattern, ReadOnlyMemory<byte> mask, MemoryCapacity memory) : IDisposable
+    internal struct PathComponentMatcher(
+        ReadOnlyMemory<char> pattern, ReadOnlyMemory<byte> mask, MemoryCapacity memory, bool ignoreAsciiCase) : IDisposable
     {
         private PatternBrackets _brackets;
 
@@ -196,7 +208,8 @@ public static class TextGlobMatcher
                 default, PatternTraversal.Forward, memory)
             {
                 Brackets = _brackets,
-                RepeatedMatches = true
+                RepeatedMatches = true,
+                IgnoreAsciiCase = ignoreAsciiCase
             };
             try
             {
@@ -278,7 +291,7 @@ public static class TextGlobMatcher
                     continue;
                 }
             }
-            if (p < pattern.Length && pattern[p] == text[t])
+            if (p < pattern.Length && pattern.MatchesLiteral(p, text[t]))
             {
                 p = pattern.Next(p);
                 t += text.Width(t);
@@ -454,9 +467,10 @@ public static class TextGlobMatcher
 
     private readonly record struct BracketMember(int End, int Value, ShellCharacterClass.Kind Class, bool IsSet);
 
-    private ref struct BracketMembership(int value, Span<ulong> ranges)
+    private ref struct BracketMembership(int value, Span<ulong> ranges, bool ignoreAsciiCase)
     {
         private readonly Span<ulong> _ranges = ranges;
+        private readonly int _rangeValue = ignoreAsciiCase ? AsciiByte.ToLowerAscii(value) : value;
         public int RangeCount { get; private set; }
         public uint Classes { get; private set; }
         public bool Negate { get; set; }
@@ -464,9 +478,14 @@ public static class TextGlobMatcher
 
         public void AddRange(int lower, int upper)
         {
+            if (ignoreAsciiCase)
+            {
+                lower = AsciiByte.ToLowerAscii(lower);
+                upper = AsciiByte.ToLowerAscii(upper);
+            }
             if (lower < 0 || upper < lower)
                 return;
-            Matched |= value >= lower && value <= upper;
+            Matched |= _rangeValue >= lower && _rangeValue <= upper;
             if (!_ranges.IsEmpty)
                 _ranges[RangeCount] = PackRange(lower, upper);
             RangeCount++;
@@ -486,8 +505,9 @@ public static class TextGlobMatcher
 
     private readonly record struct PreparedBracket(int End, ReadOnlyMemory<ulong> Ranges, uint Classes, bool Negate)
     {
-        public bool Matches(int value)
+        public bool Matches(int value, bool ignoreAsciiCase)
         {
+            var candidate = ignoreAsciiCase ? AsciiByte.ToLowerAscii(value) : value;
             var ranges = Ranges.Span;
             var first = 0;
             var last = ranges.Length;
@@ -495,9 +515,9 @@ public static class TextGlobMatcher
             {
                 var middle = first + (last - first) / 2;
                 var range = ranges[middle];
-                if (value < LowerBound(range))
+                if (candidate < LowerBound(range))
                     last = middle;
-                else if (value > UpperBound(range))
+                else if (candidate > UpperBound(range))
                     first = middle + 1;
                 else
                     return !Negate;
@@ -595,6 +615,7 @@ public static class TextGlobMatcher
         private readonly MemoryCapacity? _memory;
         public PatternBrackets Brackets;
         public bool RepeatedMatches { get; init; }
+        public bool IgnoreAsciiCase { get; init; }
         private bool Reverse => _traversal == PatternTraversal.Reverse;
         private bool Search => _traversal == PatternTraversal.Search;
 
@@ -616,6 +637,11 @@ public static class TextGlobMatcher
             return _atoms.IsEmpty ? _source.Length - 1 - position : _atoms[_atoms.Length - 1 - position];
         }
         public int this[int position] => IsSearchStar(position) ? '*' : _source[Original(position)];
+        public bool MatchesLiteral(int position, int value)
+        {
+            var expected = this[position];
+            return expected == value || IgnoreAsciiCase && AsciiByte.ToLowerAscii(expected) == AsciiByte.ToLowerAscii(value);
+        }
         public bool IsActive(int position, int value) => this[position] == value
             && (IsSearchStar(position) || _mask[Original(position)] == GlobMask.Active);
         public int Next(int position) => Reverse || IsSearchStar(position) ? position + 1
@@ -625,7 +651,7 @@ public static class TextGlobMatcher
             if (Brackets.Prepared is { } brackets && brackets.TryGetValue(position, out var prepared))
             {
                 position = prepared.End;
-                return prepared.Matches(value);
+                return prepared.Matches(value, IgnoreAsciiCase);
             }
 
             var original = Original(position);
@@ -639,7 +665,7 @@ public static class TextGlobMatcher
                     return false; // Atom preparation already established a literal '['.
             }
             var end = original;
-            var members = new BracketMembership(value, default);
+            var members = new BracketMembership(value, default, IgnoreAsciiCase);
             if (!TryReadBracket(_source, in _mask, ref end, ref members, ref Brackets.Scan, cancellationToken))
                 return false;
 
@@ -668,7 +694,7 @@ public static class TextGlobMatcher
                 ChargeBracketMemory(MemoryCapacity.ArrayBackingBytes<ulong>(rangeCount));
                 cancellationToken.ThrowIfCancellationRequested();
                 var ranges = new ulong[rangeCount];
-                var members = new BracketMembership(-1, ranges);
+                var members = new BracketMembership(-1, ranges, IgnoreAsciiCase);
                 _ = TryReadBracket(_source, in _mask, ref original, ref members, ref Brackets.Scan, cancellationToken);
                 ranges.AsSpan().Sort();
                 var used = 0;

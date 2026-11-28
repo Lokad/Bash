@@ -37,10 +37,7 @@ public static class AsciiByte
         return value[index..];
     }
 
-    public static byte ToLowerAscii(byte value)
-    {
-        return value is >= (byte)'A' and <= (byte)'Z'
-            ? (byte)(value + 32)
-            : value;
-    }
+    public static byte ToLowerAscii(byte value) => (byte)ToLowerAscii((int)value);
+
+    internal static int ToLowerAscii(int value) => value is >= 'A' and <= 'Z' ? value + ('a' - 'A') : value;
 }

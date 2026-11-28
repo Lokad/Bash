@@ -249,6 +249,7 @@ public sealed partial class Evaluation : IFileTester
     public EvaluationOptions Options { get; }
 
     internal ShellValue ShellOptionFlags => _state.ErrexitEnabled ? ShellValue.FromByte((byte)'e') : ShellValue.Empty;
+    internal bool IgnoreCaseInPatterns => _state.HasOption(ShellOption.NoCaseMatch);
 
     /// <summary> Gets the last recorded exit code, if any. </summary>
     public int? LastExitCode => _state.LastExitCode;
@@ -5729,7 +5730,6 @@ public sealed partial class Evaluation : IFileTester
     {
         var skipUnmatched = _state.HasOption(ShellOption.Nullglob);
         var rejectUnmatched = _state.HasOption(ShellOption.Failglob);
-        var includeDotFiles = _state.HasOption(ShellOption.Dotglob);
         var count = expanded.Count;
         if (count > 1 && !skipUnmatched && !rejectUnmatched)
             Memory.PrepareListCapacity(backingOwner, results, count);
@@ -5753,7 +5753,7 @@ public sealed partial class Evaluation : IFileTester
             }
             using var globMemory = new MemoryCapacity(Memory.Budget, 0);
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
-                globMemory, _cancellationToken, includeDotFiles);
+                globMemory, _cancellationToken, _state.EnabledOptions);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
             if (matches.Count == 0)
             {

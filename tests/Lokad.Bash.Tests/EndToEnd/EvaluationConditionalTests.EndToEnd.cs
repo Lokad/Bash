@@ -10,6 +10,42 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationConditionalTestsEndToEnd
 {
+    [Fact]
+    public async Task NocasematchPreservesQuotingAndTheReachedOptionState()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s nocasematch
+            case A in
+                'a') printf 'matched\n'; shopt -u nocasematch ;;&
+                a) printf skipped ;;
+                A) printf 'retested\n' ;;
+            esac
+            shopt -s nocasematch
+            [[ A == 'a' ]]; printf 'quoted:%s\n' "$?"
+            [[ Ax == 'a*' ]]; printf 'wildcard:%s\n' "$?"
+            [[ $'A\377' == a? ]]; printf 'raw:%s\n' "$?"
+            test A = a; printf 'test:%s\n' "$?"
+            """);
+
+        Assert.Equal("matched\nretested\nquoted:0\nwildcard:1\nraw:0\ntest:1\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task NocasematchRegexCapturesKeepTheOriginalSubjectBytes()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s nocasematch
+            [[ AbC =~ ^('a')(b.)$ ]]
+            printf '<%s>\n' "$?" "${BASH_REMATCH[@]}"
+            """);
+
+        Assert.Equal("<0>\n<AbC>\n<A>\n<bC>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Theory]
     [InlineData("printf '%s\\n' [[ value ]]", "[[\nvalue\n]]\n")]
     [InlineData("printf '%s\\n' [[", "[[\n")]

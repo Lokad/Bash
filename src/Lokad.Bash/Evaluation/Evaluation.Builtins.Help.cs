@@ -130,7 +130,7 @@ public sealed partial class Evaluation
             foreach (var registration in BuiltinClassification.Entries)
             {
                 if (TextGlobMatcher.MatchUtf8(bytes, in activity, registration.NameBytes.Span,
-                        requireEnd: true, byteCharacters, scratch, _cancellationToken, out _) != GlobMatchResult.Match)
+                        requireEnd: true, byteCharacters, ignoreAsciiCase: false, scratch, _cancellationToken, out _) != GlobMatchResult.Match)
                     continue;
                 AppendTopic(registration.Name, registration.Kind, format);
                 found = true;

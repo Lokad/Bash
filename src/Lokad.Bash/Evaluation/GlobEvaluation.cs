@@ -53,10 +53,14 @@ internal sealed class GlobEvaluation
     private readonly ShellPath _directory;
     private readonly MemoryCapacity _memory;
     private readonly CancellationToken _cancellationToken;
-    private readonly bool _includeDotFiles;
+    private readonly ShellOption _options;
 
     public GlobEvaluation(GlobPattern pattern, ShellPath directory, MemoryCapacity memory,
-        CancellationToken cancellationToken, bool includeDotFiles = false)
+        CancellationToken cancellationToken)
+        : this(pattern, directory, memory, cancellationToken, ShellOption.None) { }
+
+    internal GlobEvaluation(GlobPattern pattern, ShellPath directory, MemoryCapacity memory,
+        CancellationToken cancellationToken, ShellOption options)
     {
         cancellationToken.ThrowIfCancellationRequested();
         memory.Grow(256);
@@ -64,7 +68,7 @@ internal sealed class GlobEvaluation
         _directory = directory;
         _memory = memory;
         _cancellationToken = cancellationToken;
-        _includeDotFiles = includeDotFiles;
+        _options = options;
     }
 
     /// <summary>Returns matching path spellings in order.</summary>
@@ -116,11 +120,12 @@ internal sealed class GlobEvaluation
             else
             {
                 var requireDirectory = hasNext || markDirectory;
-                var matchDot = _includeDotFiles || name.Span[0] == '.';
+                var matchDot = (_options & ShellOption.Dotglob) != 0 || name.Span[0] == '.';
                 var hasWildcard = component.Start.Value == firstWildcardStart
                     || GlobPattern.RequiresExpansion(name.Span, _pattern.GetMask(component));
                 long matchPathBytes = 0;
-                using (var matcher = new TextGlobMatcher.PathComponentMatcher(name, _pattern.GetMaskMemory(component), _memory))
+                using (var matcher = new TextGlobMatcher.PathComponentMatcher(name, _pattern.GetMaskMemory(component),
+                    _memory, ignoreAsciiCase: (_options & ShellOption.NoCaseGlob) != 0))
                 {
                     foreach (var parent in candidates)
                     {
