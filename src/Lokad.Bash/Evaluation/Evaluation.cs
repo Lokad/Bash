@@ -689,11 +689,8 @@ public sealed partial class Evaluation : IFileTester
         foreach (var command in script.Commands)
         {
             CheckCancellation();
-            var listReader = command is ListCommand ? authoredReader : null;
-            if (authoredReader != null && listReader == null)
-                await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.Unit(0),
-                    authoredReader.QuietLines).ConfigureAwait(false);
-            var result = await EvaluateCommandAsync(command, scope, negated: false, listReader)
+            var result = await EvaluateCommandAsync(command, scope, negated: false, authoredReader,
+                readerUnit: command is ListCommand ? -1 : 0)
                 .ConfigureAwait(false);
             var completedUnit = result.Flow == FlowControlKind.None;
 
@@ -6969,16 +6966,37 @@ public sealed partial class Evaluation : IFileTester
             fixedPrefix: new SyntaxDiagnosticPrefix(readerName,
                 line > 0 ? SyntaxDiagnosticOrigin.ScriptLine : SyntaxDiagnosticOrigin.Script, Math.Max(1, line)));
 
-    private async Task ReportHereDocumentWarningsAsync(
-        IReadOnlyList<HereDocumentWarning> warnings, int offset, ShellValue? readerName, bool useDocumentLine, SyntaxDiagnosticPrefix? fixedPrefix)
+    private Task ReportHereDocumentWarningsAsync(
+        IReadOnlyList<HereDocumentWarning> warnings, int offset, ShellValue? readerName,
+        bool useDocumentLine, SyntaxDiagnosticPrefix? fixedPrefix) =>
+        ReportReaderHereDocumentsAsync(default, warnings, offset, readerName, useDocumentLine, fixedPrefix);
+
+    private async Task ReportReaderHereDocumentsAsync(
+        ReaderInput input, IReadOnlyList<HereDocumentWarning>? warnings, int offset, ShellValue? readerName,
+        bool useDocumentLine, SyntaxDiagnosticPrefix? fixedPrefix)
     {
+        if (warnings == null)
+        {
+            await WriteVerboseSourceAsync(input.Source, input.Read, input.QuietLines).ConfigureAwait(false);
+            return;
+        }
+
         var descriptor = GetStdErrDescriptor();
         if (descriptor.IsClosed)
             return;
 
+        var remainingStart = input.Read.Start.Value;
+        var readEnd = _state.HasOption(ShellOption.Verbose) ? input.Read.End.Value : remainingStart;
         foreach (var warning in warnings)
         {
             CheckCancellation();
+            var next = warning.SourceEchoOffset == 0 ? readEnd
+                : Math.Clamp(warning.SourceEchoOffset, remainingStart, readEnd);
+            if (next != remainingStart)
+            {
+                await WriteVerboseSourceAsync(input.Source, remainingStart..next, input.QuietLines).ConfigureAwait(false);
+                remainingStart = next;
+            }
             var warningLine = warning.Line + offset;
             var readerLine = useDocumentLine && warning.PendingCaptureDocuments == 0 ? warning.Line : warning.ReaderLine;
             var reachedPrefix = fixedPrefix ?? (readerLine == 0 ? default
@@ -6995,6 +7013,8 @@ public sealed partial class Evaluation : IFileTester
                 [HereDocumentWarningPrefix, ShellValue.FromInteger(warningLine), HereDocumentWarningDelimiter,
                     warning.Delimiter.ToValue(), HereDocumentWarningClose], scope: null, reachedPrefix).ConfigureAwait(false);
         }
+        if (remainingStart < readEnd)
+            await WriteVerboseSourceAsync(input.Source, remainingStart..readEnd, input.QuietLines).ConfigureAwait(false);
     }
 
     /// <summary>

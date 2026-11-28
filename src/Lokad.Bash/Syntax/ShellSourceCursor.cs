@@ -1008,7 +1008,7 @@ internal sealed class ShellScanContext
         return HereDocumentReadAhead;
     }
 
-    internal void WarnPendingCaptureDocuments(int count, int readerLine)
+    internal void WarnPendingCaptureDocuments(int count, int readerLine, int sourceEchoOffset)
     {
         if (_captureWarnings == null)
         {
@@ -1016,7 +1016,12 @@ internal sealed class ShellScanContext
             _captureWarnings = [];
         }
         SyntaxMemory?.PrepareListCapacity(_captureWarnings, 1);
-        _captureWarnings.Add(new HereDocumentWarning { PendingCaptureDocuments = count, ReaderLine = readerLine });
+        _captureWarnings.Add(new HereDocumentWarning
+        {
+            PendingCaptureDocuments = count,
+            ReaderLine = readerLine,
+            SourceEchoOffset = sourceEchoOffset
+        });
     }
 
     internal IReadOnlyList<HereDocumentWarning>? TakeHereDocumentWarnings(IReadOnlyList<HereDocumentWarning>? trailing)

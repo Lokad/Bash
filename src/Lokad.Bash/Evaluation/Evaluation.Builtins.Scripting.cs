@@ -402,14 +402,17 @@ public sealed partial class Evaluation
             try
             {
                 var hasUnit = commands.MoveNext();
+                var readerInput = default(ReaderInput);
                 if (reportReaderInput && scanContext.ReaderEnd > readEnd)
                 {
-                    await WriteVerboseSourceAsync(source, readEnd..scanContext.ReaderEnd,
-                        scanContext.CollectReaderSilenceRanges()).ConfigureAwait(false);
+                    readerInput = new ReaderInput(source, readEnd..scanContext.ReaderEnd, scanContext.CollectReaderSilenceRanges());
                     readEnd = scanContext.ReaderEnd;
                 }
                 if (!hasUnit || commands.Current is CommandUnitParseResult.Empty)
+                {
+                    await WriteVerboseSourceAsync(readerInput.Source, readerInput.Read, readerInput.QuietLines).ConfigureAwait(false);
                     break;
+                }
                 var failedUnit = commands.Current as CommandUnitParseResult.Failed;
                 var path = scope.Context.DiagnosticName;
                 var diagnosticLine = failedUnit == null ? 0 : lineOffset + failedUnit.DiagnosticLine;
@@ -420,12 +423,9 @@ public sealed partial class Evaluation
                         UnitReadLine = commands.Current.UnitReadLine == 0 ? 0 : readerLineOffset + commands.Current.UnitReadLine
                     });
                 ApplyReadFunctionBraceLine(lineOffset, readDiagnostics.FunctionBraceLine);
-                if (readDiagnostics.HereDocumentWarnings is { } warnings)
-                {
-                    var adjacentCapture = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution;
-                    await ReportHereDocumentWarningsAsync(warnings, lineOffset, path,
-                        useDocumentLine: adjacentCapture, fixedPrefix: null).ConfigureAwait(false);
-                }
+                var adjacentCapture = kind == ScriptExecutionKind.Root && diagnosticOrigin == SyntaxDiagnosticOrigin.CommandSubstitution;
+                await ReportReaderHereDocumentsAsync(readerInput, readDiagnostics.HereDocumentWarnings,
+                    lineOffset, path, useDocumentLine: adjacentCapture, fixedPrefix: null).ConfigureAwait(false);
                 if (readDiagnostics.CompoundItems is { } items
                     && await ReportCompoundItemReadDiagnosticsAsync(items, scope, lineOffset).ConfigureAwait(false) is { } readFailure)
                     return nestedLoadedReader
@@ -606,6 +606,8 @@ public sealed partial class Evaluation
         }
         return await RecoverScriptExpansionFailureAsync(result, kind, scope).ConfigureAwait(false);
     }
+
+    private readonly record struct ReaderInput(ShellSource Source, Range Read, IReadOnlyList<Range>? QuietLines);
 
     private Task WriteVerboseSourceAsync(ShellSource source, Range read, IReadOnlyList<Range>? quietLines)
     {

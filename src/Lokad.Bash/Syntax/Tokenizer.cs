@@ -196,6 +196,9 @@ internal sealed class Tokenizer
             _scanContext.RecordEchoedCaptureDocument(_input, start, Position);
     }
 
+    internal int GetScriptReadOffset() =>
+        _scanContext.ScriptInput.TryGetViewOffset(_input, out var offset) ? offset + Position : 0;
+
     internal int HereDocumentHeaderLineAdvance
     {
         get
@@ -282,7 +285,7 @@ internal sealed class Tokenizer
         var readAhead = _scanContext.BeginHereDocumentReadAhead();
         var afterCloser = Position;
         var start = readAhead.FindBodyStart(afterCloser);
-        _scanContext.WarnPendingCaptureDocuments(pending.PendingCount, _scanContext.GetScriptDiagnosticLine(afterCloser));
+        _scanContext.WarnPendingCaptureDocuments(pending.PendingCount, _scanContext.GetScriptDiagnosticLine(afterCloser), start);
         _readingAhead = readAhead;
         Position = start;
         try

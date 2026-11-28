@@ -9,6 +9,8 @@ internal readonly record struct HereDocumentWarning(int Line, ShellSource Delimi
 {
     internal int ReaderLine { get; init; }
     internal int PendingCaptureDocuments { get; init; }
+    // Absolute offset at which the reader reports this diagnostic, or zero for a detached source.
+    internal int SourceEchoOffset { get; init; }
 }
 
 /// <summary>
@@ -73,7 +75,11 @@ internal sealed class HereDocumentReader
                 // The reader starts after the header LF or the previous delimiter line.
                 var documentLine = tokenizer.GetHereDocumentWarningLine(Math.Max(0, bodyStart - 1)) + documentLineAdvance;
                 var readerLine = tokenizer.GetHereDocumentWarningLine(Math.Max(0, tokenizer.Position - 1)) + eofLineAdvance;
-                _warnings.Add(new HereDocumentWarning(documentLine, delimiter) { ReaderLine = readerLine });
+                _warnings.Add(new HereDocumentWarning(documentLine, delimiter)
+                {
+                    ReaderLine = readerLine,
+                    SourceEchoOffset = tokenizer.GetScriptReadOffset()
+                });
             }
             var kind = allowExpansion ? WordPartKind.HereDocument : WordPartKind.SingleQuoted;
             _completed.Add(redirection, new Redirection(redirection.Kind, redirection.FileDescriptor,

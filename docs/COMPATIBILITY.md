@@ -955,8 +955,10 @@ comments, continuations and here-document lines. It appends LF to a reached
 unterminated line. A bare `set -` clears verbose. The option also works with
 `noexec` and through hosted `bash -v`, source, eval and EXIT readers.
 Continuation lines of modern command substitutions are quiet except for
-here-document collection. Lokad.Bash echoes those collected lines once.
-The pinned Bash builds can echo them again during capture preparation.
+here-document collection. A compact capture's pending-document warning
+precedes its body's echoed lines, and an EOF warning follows the available
+body. Lokad.Bash echoes collected lines once. The pinned Bash builds can
+echo them again during capture expansion.
 
 `allexport` is off at startup. `set -a` marks reached scalar assignments
 and function definitions for export. New global scalar declarations can

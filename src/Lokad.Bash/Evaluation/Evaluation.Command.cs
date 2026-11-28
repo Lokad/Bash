@@ -19,13 +19,14 @@ public sealed partial class Evaluation
         ICommand command,
         ScopedEvaluation scope,
         bool negated) =>
-        EvaluateCommandAsync(command, scope, negated, authoredReader: null);
+        EvaluateCommandAsync(command, scope, negated, authoredReader: null, readerUnit: -1);
 
     private async Task<EvaluationResult> EvaluateCommandAsync(
         ICommand command,
         ScopedEvaluation scope,
         bool negated,
-        ParsedScript.AuthoredReader? authoredReader)
+        ParsedScript.AuthoredReader? authoredReader,
+        int readerUnit)
     {
         // Async calls can all complete synchronously. Resume on a fresh stack
         // before nested functions/source/eval exhaust the embedding thread's stack.
@@ -54,7 +55,8 @@ public sealed partial class Evaluation
         using var activeLine = lineScope;
 
         // A script node owns a reader. It keeps parsing even when execution is disabled.
-        var skipExecution = _state.NoExecEnabled && command is not ScriptCommand && authoredReader == null;
+        var ownsPreparedReader = authoredReader != null && readerUnit < 0;
+        var skipExecution = _state.NoExecEnabled && command is not ScriptCommand && !ownsPreparedReader;
         var captureEnvironment = !skipExecution && command is SimpleCommand or PipelineCommand
             && scope.Context.CaptureEnvironment is { CommandActive: false } environment ? environment : null;
         EvaluationResult result;
@@ -149,9 +151,13 @@ public sealed partial class Evaluation
                 return EvaluationResult.Exit(failure.ExitCode);
             var readDiagnostics = scope.Context.Coordinates.Locations?.GetReadDiagnostics(command) ?? default;
             ApplyReadFunctionBraceLine(scope.Context.Coordinates.Offset, readDiagnostics.FunctionBraceLine);
-            if (readDiagnostics.HereDocumentWarnings is { } warnings)
-                await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset,
-                    scope.Context.DiagnosticName, useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
+            if (authoredReader != null && readerUnit >= 0)
+                await ReportReaderHereDocumentsAsync(new ReaderInput(authoredReader.Source, authoredReader.Unit(readerUnit), authoredReader.QuietLines),
+                    readDiagnostics.HereDocumentWarnings, scope.Context.Coordinates.Offset, scope.Context.DiagnosticName,
+                    useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
+            else if (readDiagnostics.HereDocumentWarnings is { } warnings)
+                await ReportHereDocumentWarningsAsync(warnings, scope.Context.Coordinates.Offset, scope.Context.DiagnosticName,
+                    useDocumentLine: false, fixedPrefix: GetHereDocumentWarningPrefix(scope)).ConfigureAwait(false);
             if (readDiagnostics.CompoundItems is { } items
                 && await ReportCompoundItemReadDiagnosticsAsync(items, scope, scope.Context.Coordinates.Offset)
                     .ConfigureAwait(false) is { } readFailure)
@@ -277,7 +283,7 @@ public sealed partial class Evaluation
                 var result = EvaluationResult.FromExitCode(0);
                 var unitScope = listScope;
                 var recoveredUnit = false;
-                var readerUnit = 0;
+                var nextReaderUnit = 0;
                 for (var index = 0; index < traversal.Count; index++)
                 {
                     CheckCancellation();
@@ -295,16 +301,15 @@ public sealed partial class Evaluation
                             break;
                         recoveredUnit = false;
                     }
-                    if (authoredReader != null && (index == 0 || step.StartsCommandUnit))
-                        await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.Unit(readerUnit++),
-                            authoredReader.QuietLines).ConfigureAwait(false);
+                    var unitReader = index == 0 || step.StartsCommandUnit ? authoredReader : null;
                     if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
                         unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
                     else if (step.StartsReaderUnit)
                         unitScope = BeginPreparedCommandUnit(unitScope, step.Command, beginsExecutionUnit: false);
                     var currentScope = step.ErrexitIgnored
                         ? unitScope with { Context = unitScope.Context.WithErrexitIgnored() } : unitScope;
-                    result = await EvaluateCommandAsync(step.Command, currentScope, negated: false).ConfigureAwait(false);
+                    result = await EvaluateCommandAsync(step.Command, currentScope, negated: false, unitReader,
+                        unitReader != null ? nextReaderUnit++ : -1).ConfigureAwait(false);
                     if (result.Flow != FlowControlKind.None)
                     {
                         var recoveryStatus = result.Flow == FlowControlKind.Exit && !result.DiscardsCommandUnit

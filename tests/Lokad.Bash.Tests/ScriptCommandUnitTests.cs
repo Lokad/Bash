@@ -11,6 +11,26 @@ public sealed class ScriptCommandUnitTests
     private const string PrintParserStatus = "printf \"<%s:%s>\" \"$?\" \"${PIPESTATUS[*]}\"";
 
     [Theory]
+    [InlineData("set -vn", "value=$(cat <<ONE)$(cat <<TWO)")]
+    [InlineData("set -v", "false && value=$(cat <<ONE)$(cat <<TWO)")]
+    public async Task VerboseInterleavesCaptureWarningsWithTheirBodyReads(string options, string header)
+    {
+        var script = $"{options}\n{header}\nfirst\nONE\nsecond\nTWO\n# tail\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(options == "set -vn" ? 0 : 1, status);
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+            Assert.Equal(header + "\nline 2: warning: command substitution: 1 unterminated here-document\nfirst\nONE\n"
+                + "line 4: warning: command substitution: 1 unterminated here-document\nsecond\nTWO\n# tail\n",
+                host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
     [InlineData("set -v")]
     [InlineData("set -o verbose")]
     [InlineData("shopt -os verbose")]
