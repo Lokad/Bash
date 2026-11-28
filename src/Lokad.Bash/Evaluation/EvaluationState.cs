@@ -409,10 +409,19 @@ internal sealed class EvaluationState
     }
     internal bool LocalVariableInheritance => HasOption(ShellOption.LocalVariableInheritance);
 
-    internal bool HasOption(ShellOption option) => (EnabledOptions & option) != 0;
+    private bool _borrowedPrefixDotglob;
+    internal ShellOption ExpansionOptions => HasOption(ShellOption.Dotglob)
+        ? EnabledOptions | ShellOption.Dotglob : EnabledOptions;
 
-    internal void SetOption(ShellOption option, bool enabled) =>
+    internal bool HasOption(ShellOption option) => (EnabledOptions & option) != 0
+        || (option & ShellOption.Dotglob) != 0 && (_borrowedPrefixDotglob || ExpandingGlobIgnore is { Dotglob: true });
+
+    internal void SetOption(ShellOption option, bool enabled)
+    {
+        if (option == ShellOption.Dotglob)
+            _borrowedPrefixDotglob = false;
         EnabledOptions = enabled ? EnabledOptions | option : EnabledOptions & ~option;
+    }
 
     private readonly record struct BashOptionProjection(ShellOption Flags, ShellValue Value, long OwnedBytes);
     private BashOptionProjection _bashOptionProjection;
@@ -429,43 +438,70 @@ internal sealed class EvaluationState
         return _bashOptionProjection.Value;
     }
 
-    internal ShellValue GlobIgnore { get; private set; }
+    private ShellValue _globIgnore;
     // Frozen when published. A fork can borrow the ranges with their source value.
     private List<Range>? _globIgnoreRanges;
-    internal IReadOnlyList<Range>? GlobIgnoreRanges => _globIgnoreRanges;
+    // Prefix expansion borrows from the current command while variable lookup still uses its own scope.
+    private GlobIgnorePrefix? ExpandingGlobIgnore =>
+        _shellMemory?.ActiveCommand is { ExpandingGlobIgnorePrefix: true } command ? command.PreparedGlobIgnorePrefix : null;
+    internal ShellValue GlobIgnore => ExpandingGlobIgnore?.Value ?? _globIgnore;
+    private List<Range>? SelectedGlobIgnoreRanges => ExpandingGlobIgnore is { } prefix ? prefix.Ranges : _globIgnoreRanges;
+    internal IReadOnlyList<Range>? GlobIgnoreRanges => SelectedGlobIgnoreRanges;
 
-    private long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore)
+    private long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(_globIgnore)
         + (_globIgnoreRanges == null ? 0 : 32 + MemoryCapacity.ArrayBackingBytes<Range>(_globIgnoreRanges.Capacity));
 
-    internal readonly record struct GlobIgnorePrefix(ShellValue Value, List<Range>? Ranges);
+    internal readonly record struct GlobIgnorePrefix(ShellValue Value, List<Range>? Ranges, bool Dotglob);
 
     internal void PrepareGlobIgnorePrefix(ShellValue value, EvaluationMemory memory)
     {
         if (memory.ActiveCommand is not { } command)
             return;
-        if (command.PreparedGlobIgnorePrefix is { } previous && SameGlobIgnoreValue(previous.Value, value))
+        if (ExpandingGlobIgnore is { } previous && SameGlobIgnoreValue(previous.Value, value))
             return;
-        var ranges = command.PreparedGlobIgnorePrefix == null && SameGlobIgnoreValue(GlobIgnore, value) && _globIgnoreRanges != null
+        var ranges = command.PreparedGlobIgnorePrefix == null && SameGlobIgnoreValue(_globIgnore, value) && _globIgnoreRanges != null
             ? _globIgnoreRanges : GlobIgnorePatterns.PrepareQuotedCommandRanges(value, memory);
-        command.PreparedGlobIgnorePrefix = new(value, ranges);
+        command.PreparedGlobIgnorePrefix = new(value, ranges, !value.IsEmpty || HasOption(ShellOption.Dotglob));
+        command.ExpandingGlobIgnorePrefix = true;
+    }
+
+    internal void FinishGlobIgnorePrefixExpansion()
+    {
+        if (_shellMemory?.ActiveCommand is { } command)
+            command.ExpandingGlobIgnorePrefix = false;
+    }
+
+    internal void RestoreUnusedGlobIgnorePrefix(Variables caller)
+    {
+        if (_shellMemory?.ActiveCommand is not { PreparedGlobIgnorePrefix: { } prefix } command)
+            return;
+        command.PreparedGlobIgnorePrefix = null;
+        ApplyGlobIgnore(caller.TryGetExpansionValue(Variables.GlobIgnoreName, out var value) ? value : null, prefix);
     }
 
     internal void RefreshGlobIgnore(ShellValue? selected, bool activatePrefix = false)
     {
-        var value = selected.GetValueOrDefault();
         GlobIgnorePrefix? prefix = null;
-        if (activatePrefix && _shellMemory?.ActiveCommand is { } command)
+        if (_shellMemory?.ActiveCommand is { } command && (activatePrefix || command.ExpandingGlobIgnorePrefix))
         {
+            // A reached write replaces the temporary selection, including a write of the caller's old value.
             prefix = command.PreparedGlobIgnorePrefix;
             command.PreparedGlobIgnorePrefix = null;
+            command.ExpandingGlobIgnorePrefix = false;
         }
-        if (!SameGlobIgnoreValue(GlobIgnore, value))
+        ApplyGlobIgnore(selected, prefix);
+    }
+
+    private void ApplyGlobIgnore(ShellValue? selected, GlobIgnorePrefix? previous)
+    {
+        var value = selected.GetValueOrDefault();
+        if (!SameGlobIgnoreValue(_globIgnore, value))
         {
             if (!value.IsEmpty)
             {
                 var bytes = Variables.EstimateValueBytes(value);
                 if (value.TryGetCompactArrayCapacity(out _))
-                    _shellMemory?.PrepareRetainedStorage(Math.Max(0, bytes - Variables.EstimateValueBytes(GlobIgnore)));
+                    _shellMemory?.PrepareRetainedStorage(Math.Max(0, bytes - Variables.EstimateValueBytes(_globIgnore)));
                 else
                 {
                     _shellMemory?.PrepareRetainedStorage(bytes);
@@ -473,15 +509,17 @@ internal sealed class EvaluationState
                 }
             }
             // The binding has already been changed. Publish its spelling before preparing derived ranges.
-            GlobIgnore = value;
+            _globIgnore = value;
             _globIgnoreRanges = null;
         }
         if (!selected.HasValue || !value.IsEmpty)
             SetOption(ShellOption.Dotglob, !value.IsEmpty);
-        if (prefix is { } prepared && SameGlobIgnoreValue(prepared.Value, value))
+        else if (previous is { Dotglob: true })
+            SetOption(ShellOption.Dotglob, true);
+        if (previous is { } prepared && SameGlobIgnoreValue(prepared.Value, value))
             _globIgnoreRanges = prepared.Ranges;
-        else if (_globIgnoreRanges == null && _shellMemory is { } memory)
-            _globIgnoreRanges = GlobIgnorePatterns.PrepareQuotedCommandRanges(GlobIgnore, memory);
+        else if ((_globIgnoreRanges == null || previous.HasValue) && _shellMemory is { } memory)
+            _globIgnoreRanges = GlobIgnorePatterns.PrepareQuotedCommandRanges(_globIgnore, memory);
     }
 
     private static bool SameGlobIgnoreValue(ShellValue left, ShellValue right) =>
@@ -903,8 +941,10 @@ internal sealed class EvaluationState
                 ? EnabledOptions & ~ShellOption.Errexit : EnabledOptions,
             // The enclosing evaluation retains the immutable value through this fork.
             _bashOptionProjection = _bashOptionProjection with { OwnedBytes = 0 },
-            GlobIgnore = GlobIgnore,
-            _globIgnoreRanges = _globIgnoreRanges,
+            _globIgnore = GlobIgnore,
+            _globIgnoreRanges = SelectedGlobIgnoreRanges,
+            // The inherited filter can enable dotglob without updating the BASHOPTS binding.
+            _borrowedPrefixDotglob = _borrowedPrefixDotglob || ExpandingGlobIgnore is { Dotglob: true },
             UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,

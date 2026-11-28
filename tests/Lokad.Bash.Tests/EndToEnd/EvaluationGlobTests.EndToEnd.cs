@@ -334,6 +334,110 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("printf '<%s>' f*")]
+    [InlineData("f f*")]
+    [InlineData("exec printf '<%s>' f*")]
+    public async Task GlobIgnorePrefixFiltersRedirectionAfterExpandingArguments(string command)
+    {
+        await using var host = EndToEndHarness.BuildTree([("/final", ""), ("/first", "")]);
+        var result = await host.RunAsync($$"""
+            f() { printf '<%s>' "$@"; }
+            GLOBIGNORE=final
+            GLOBIGNORE=first {{command}} >f*
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("<first>", host.ReadFile("/final"));
+        Assert.Empty(host.ReadFile("/first"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task GlobIgnorePrefixStartsFilteringBeforeTheNextAssignmentExpands()
+    {
+        var tree = EndToEndHarness.BuildTree([("/final", ""), ("/first", ""), ("/.hidden", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            GLOBIGNORE=first observation=$(
+                printf '<%s>' *
+                if shopt -q dotglob; then printf ':on'; fi
+                case :$BASHOPTS: in *:dotglob:*) printf ':listed';; esac
+            ) eval 'printf "%s\n" "$observation"'
+            printf '<%s>' *
+            """, tree: tree);
+
+        Assert.Equal("<.hidden><final>:on\n<final><first>", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreRedirectionCaptureUsesTheFilterAndTheCallerBinding()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/final", ""), ("/first", "")]);
+        var result = await host.RunAsync("""
+            GLOBIGNORE=first printf chosen >"$(printf '%s-' "${GLOBIGNORE:-caller}"; printf '%s' f*)"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("chosen", host.ReadFile("/caller-final"));
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/caller-finalfirst"));
+    }
+
+    [Fact]
+    public async Task GlobIgnoreWrittenByARedirectionTakesEffectInLaterRedirections()
+    {
+        await using var host = EndToEndHarness.BuildTree([("/final", ""), ("/first", "")]);
+        var result = await host.RunAsync("""
+            GLOBIGNORE=first printf chosen >"${GLOBIGNORE:=final}" >f*
+            printf '%s:<%s>' "$GLOBIGNORE" f*
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("final:<first>", host.StandardOutput.TextContent);
+        Assert.Equal("chosen", host.ReadFile("/first"));
+        Assert.Empty(host.ReadFile("/final"));
+    }
+
+    [Theory]
+    [InlineData("shopt -s dotglob", "off")]
+    [InlineData("GLOBIGNORE=", "on")]
+    public async Task GlobIgnorePrefixRestoresDotglobAfterAFailedRedirection(string setup, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($"""
+            {setup}
+            GLOBIGNORE=first printf skipped >missing/output
+            printf '%s:' "$?"
+            if shopt -q dotglob; then printf on; else printf off; fi
+            """);
+
+        Assert.Equal("1:" + expected, result.StdOut);
+        Assert.Equal("line 2: missing/output: No such file or directory\n", result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task GlobIgnoreRestoresTheCallerAfterClosingFailedCommandRedirections()
+    {
+        var value = ShellArgumentEscaping.EscapeArgument("\"left:$(case a in a) printf \"left:middle:right\":drop");
+        await using var host = new TestHost();
+        var result = await host.RunAsync($"""
+            GLOBIGNORE={value}
+            GLOBIGNORE=first printf skipped 2>diagnostic >missing/output
+            printf '%s' "$?"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("1", host.StandardOutput.TextContent);
+        Assert.Equal("command substitution: line 3: unexpected EOF while looking for matching `)'\n"
+            + "command substitution: line 4: unexpected EOF while looking for matching `)'\n", host.StandardError.TextContent);
+        Assert.Equal("line 2: missing/output: No such file or directory\n", host.ReadFile("/diagnostic"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Fact]
     public async Task GlobIgnoreUnexpectedTokenDiagnosticKeepsTheCommandBodySpelling()
     {

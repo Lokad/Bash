@@ -1011,9 +1011,12 @@ A nonempty assignment enables `dotglob` and excludes path spellings ending
 in `.` or `..` as a complete component. A trailing slash leaves those
 spellings eligible for pattern matching. Assigning an empty value clears
 the filter and preserves the option. Unsetting the binding clears the
-filter and disables `dotglob`. Function and loaded-reader prefixes apply
-the filter after caller operands are expanded, and restoration reapplies
-the caller binding. A fresh child imports the variable value with filtering
+filter and disables `dotglob`. Builtin, function and `exec` prefixes apply
+the filter after caller operands are expanded. Later prefix values and
+command redirections use the temporary filter. Parameter lookups in a
+redirection still use the caller's bindings. Restoration reapplies the
+caller binding, including after a failed redirection. A fresh child
+imports the variable value with filtering
 inactive. An assignment in that child activates the filter. `mapfile` and
 `read -a` can update array cells while the active filter retains the last
 assignment value.

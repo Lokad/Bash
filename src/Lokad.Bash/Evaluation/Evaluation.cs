@@ -1454,6 +1454,7 @@ public sealed partial class Evaluation : IFileTester
         }
         if (assignmentError.HasValue)
         {
+            _state.FinishGlobIgnorePrefixExpansion();
             if (HasFatalGlobIgnoreSyntax)
                 return EvaluationResult.Exit(2);
             return PublishStatus(await FailPreparationAsync(assignmentError.Value).ConfigureAwait(false));
@@ -1524,6 +1525,7 @@ public sealed partial class Evaluation : IFileTester
                 externalRedirections ? RedirectionOrigin.IsolatedHostCommand : RedirectionOrigin.Command,
                 reportMoveRestorationFailure: !externalRedirections && !directPipelineStage)
             .ConfigureAwait(false);
+        _state.FinishGlobIgnorePrefixExpansion();
         Exception? scopeFailure = null;
         FunctionBinding[]? exportOwners = null;
         var retainedExportCount = 0;
@@ -1553,6 +1555,8 @@ public sealed partial class Evaluation : IFileTester
             {
                 commandCloseError = await commandRedirections.CloseAsync(
                     scopeFailure != null || preparedResult.ExitCode != 0).ConfigureAwait(false);
+                if (scopeFailure == null)
+                    _state.RestoreUnusedGlobIgnorePrefix(scope.Variables);
             }
             finally
             {
@@ -2189,11 +2193,11 @@ public sealed partial class Evaluation : IFileTester
                 commandVars.UpdateBindingAttributes(name, BindingAttributes.None, BindingAttributes.Integer | BindingAttributes.Case);
                 commandVars.SetExported(name, true);
                 if (name == global::Lokad.Bash.Evaluation.Variables.GlobIgnoreName
-                    && preparation is PreparedCommand.Executable
-                        { Resolution: CommandResolution.Function or CommandResolution.EvaluatorBuiltin }
+                    && preparation is not PreparedCommand.Executable
+                        { Resolution: CommandResolution.Host, Completion: CommandCompletion.Continue }
                     && commandVars.TryGetExpansionValue(name, out var selected))
                 {
-                    // In-process prefixes select pattern syntax before the command opens its redirections.
+                    // A later RHS or redirection uses the temporary filter. The binding is still staged.
                     _state.PrepareGlobIgnorePrefix(selected, Memory);
                     await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
                     if (HasFatalGlobIgnoreSyntax)
@@ -5804,7 +5808,7 @@ public sealed partial class Evaluation : IFileTester
             }
             using var globMemory = new MemoryCapacity(Memory.Budget, 0);
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
-                globMemory, _cancellationToken, _state.EnabledOptions);
+                globMemory, _cancellationToken, _state.ExpansionOptions);
             var matches = await glob.EvaluateAsync(this, ignorePatterns).ConfigureAwait(false);
             if (matches.Count != 0)
             {

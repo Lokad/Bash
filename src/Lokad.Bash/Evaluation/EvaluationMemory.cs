@@ -147,6 +147,7 @@ internal sealed class EvaluationMemory
         internal CancellationToken CancellationToken => scope.Effects.CancellationToken;
         internal ScopedEvaluation Scope => scope;
         internal EvaluationState.GlobIgnorePrefix? PreparedGlobIgnorePrefix { get; set; }
+        internal bool ExpandingGlobIgnorePrefix { get; set; }
 
         internal void PrepareRetainedStorage(long bytes)
         {
