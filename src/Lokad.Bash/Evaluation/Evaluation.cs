@@ -6676,16 +6676,17 @@ public sealed partial class Evaluation : IFileTester
         Func<IReadOnlyList<bool>, bool> evaluator)
     {
         CheckCancellation();
+        var hasUnaryPathTest = HasUnaryPathTest();
         using var lookupMemory = new MemoryCapacity(Memory.Budget,
-            MemoryCapacity.ArrayBackingBytes<int>(tests.Count) + MemoryCapacity.ArrayBackingBytes<bool>(tests.Count));
+            MemoryCapacity.ArrayBackingBytes<bool>(tests.Count)
+            + (hasUnaryPathTest ? MemoryCapacity.ArrayBackingBytes<int>(tests.Count) : 0));
         var currentDirectory = _state.CurrentDirectory;
         List<FileDescriptor>? terminalDescriptors = null;
         List<int>? terminalResultIndices = null;
         PathLookupBatch<FilePathLookup>? kindPaths = null;
         PathLookupBatch<FilePathLookup>? metadataPaths = null;
         PathLookupBatch<FilePathLookup>? sizePaths = null;
-        var pathResultIndices = new int[tests.Count];
-        Array.Fill(pathResultIndices, -1);
+        var unaryPathIndices = hasUnaryPathTest ? new int[tests.Count] : null;
         List<(int TestIndex, FileTimeComparison Comparison, int Left, int Right)>? comparisons = null;
         List<(int TestIndex, int Left, int Right)>? identityTests = null;
         var results = new bool[tests.Count];
@@ -6732,7 +6733,8 @@ public sealed partial class Evaluation : IFileTester
                     continue;
                 var batch = test.Kind.MetadataPredicate is not null ? (metadataPaths ??= new())
                     : test.Kind.IsNonEmpty ? (sizePaths ??= new()) : (kindPaths ??= new());
-                pathResultIndices[index] = AddPath(batch, path, following);
+                // Zero denotes a predicate without a unary path response.
+                unaryPathIndices![index] = AddPath(batch, path, following) + 1;
             }
         }
 
@@ -6748,10 +6750,10 @@ public sealed partial class Evaluation : IFileTester
         var kinds = await ReadPathsAsync(kindPaths, FilePathInfoRequest.KindOnly).ConfigureAwait(false);
         var infos = await ReadPathsAsync(metadataPaths, FilePathInfoRequest.Metadata).ConfigureAwait(false);
         var sizes = await ReadPathsAsync(sizePaths, FilePathInfoRequest.MetadataWithExactSize).ConfigureAwait(false);
-        for (var index = 0; index < tests.Count; index++)
+        for (var index = 0; unaryPathIndices != null && index < unaryPathIndices.Length; index++)
         {
             CheckCancellation();
-            var pathIndex = pathResultIndices[index];
+            var pathIndex = unaryPathIndices[index] - 1;
             if (pathIndex < 0)
                 continue;
             var test = tests[index];
@@ -6821,6 +6823,18 @@ public sealed partial class Evaluation : IFileTester
         }
         CheckCancellation();
         return evaluator(results) ? 0 : 1;
+
+        bool HasUnaryPathTest()
+        {
+            for (var index = 0; index < tests.Count; index++)
+            {
+                CheckCancellation();
+                var kind = tests[index].Kind;
+                if (!kind.IsTerminal && !kind.ComparesIdentity && kind.TimeComparison is null)
+                    return true;
+            }
+            return false;
+        }
 
         int AddPath(PathLookupBatch<FilePathLookup> batch, RawShellPath operand, FileLinkFollowing following)
         {

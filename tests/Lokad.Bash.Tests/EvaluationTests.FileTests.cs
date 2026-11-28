@@ -360,6 +360,24 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    public async Task FileIdentityUsesProviderMetadataWithPreservedParentTraversal(bool knownIdentity, int expectedStatus)
+    {
+        var state = new Eval(Parser.Parse("test record -ef directory/../record"));
+        var operation = await NextMetadataAsync(state);
+        Assert.Equal(new[] { "/record", "/directory/../record" }, operation.Paths.Select(path => path.Path));
+
+        FileIdentity? identity = knownIdentity ? new FileIdentity(new object(), "record") : null;
+        var file = FilePathResolutionResult.Success(new FilePathInfo(FilePathKind.File,
+            new FileMetadata(1, DateTimeOffset.UnixEpoch, FileAccessRights.Read, null, null, null, null, identity)));
+        operation.SetResult([file, file]);
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(expectedStatus, state.LastExitCode);
+    }
+
+    [Theory]
     [InlineData("test -e special -a -a special -a ! -f special -a ! -d special -a -p special")]
     public async Task FileTests_SpecialFilesExistWithoutBeingRegularFilesOrDirectories(string script)
     {
