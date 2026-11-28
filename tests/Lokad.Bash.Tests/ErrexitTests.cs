@@ -125,6 +125,20 @@ public sealed class ErrexitTests
     }
 
     [Theory]
+    [InlineData("set", "BASHOPTS=dotglob", "SHELLOPTS=braceexpand:pipefail")]
+    [InlineData("declare -p", "declare -r BASHOPTS=\"dotglob\"", "declare -r SHELLOPTS=\"braceexpand:pipefail\"")]
+    public async Task OperandFreeVariableListingsIncludeTheLiveOptions(string command, string bashOptions, string setOptions)
+    {
+        var result = await EvaluationTestHelper.RunAsync("shopt -s dotglob\n" + command);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.StdErr);
+        var lines = result.StdOut.Split('\n');
+        Assert.Contains(bashOptions, lines);
+        Assert.Contains(setOptions, lines);
+    }
+
+    [Theory]
     [InlineData("BASHOPTS")]
     [InlineData("SHELLOPTS")]
     public async Task OptionBindingsRetainReadonlyProtectionAcrossAssignmentAndUnsetModes(string name)

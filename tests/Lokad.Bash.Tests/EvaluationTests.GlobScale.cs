@@ -10,6 +10,23 @@ namespace Lokad.Bash.Tests;
 
 public partial class EvaluationTests
 {
+    [Fact]
+    public async Task UnmatchedLiteralNullglobRedirectListsTheDirectoryOnce()
+    {
+        var state = new Eval(Parser.Parse("shopt -s nullglob\n: >*.missing"));
+
+        var listing = Assert.IsType<ListDirectoryOperation>(await NextStepAsync(state));
+        Assert.Equal("/", listing.Path.Path);
+        listing.SetResult(DirectoryListingResult.Success([]));
+
+        var diagnostic = Assert.IsType<WriteOperation>(await NextStepAsync(state));
+        Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+        Assert.Equal("line 2: *.missing: ambiguous redirect\n", ShellValue.FromBytes(diagnostic.Content).ToUtf8String());
+        diagnostic.SetResult(DescriptorWriteResult.Open);
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(1, state.LastExitCode);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

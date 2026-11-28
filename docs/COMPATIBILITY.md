@@ -866,7 +866,8 @@ After an ambiguous redirection, the evaluator expands the operand again to name
 it in the diagnostic. Direct command substitutions remain text in that pass.
 Arithmetic and braced parameter operands keep their own expansion behavior. If
 the pass produces zero or multiple fields, the diagnostic uses the operand's
-spelling. A descriptor move closes the destination when the operand produces
+spelling. An unmatched literal pattern removed by `nullglob` uses its authored
+spelling directly. A descriptor move closes the destination when the operand produces
 zero or multiple fields. A single quoted empty field reports a bad descriptor.
 An empty or closed descriptor reports the reached source filename and line.
 A closed literal source uses its descriptor number. An expanded duplication
@@ -914,7 +915,8 @@ followed by usage. It returns status 2 during validation or status 1
 during application, preserving any changes already applied. After `-`,
 `--`, or the first positional operand, `--help` is a positional argument.
 
-`shopt` inspects and changes `inherit_errexit` and `localvar_inherit`.
+`shopt` inspects and changes `dotglob`, `failglob`, `inherit_errexit`,
+`localvar_inherit`, and `nullglob`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -922,9 +924,19 @@ they list enabled and disabled options respectively. `-o` selects the
 `set` option namespace. That namespace exposes the mutable `errexit`
 setting and the fixed `braceexpand` and `pipefail` settings.
 
+`dotglob` allows pathname wildcards to match names that start with a dot.
+Wildcard matching still skips the directory entries `.` and `..`. An
+unmatched pathname pattern normally produces its literal spelling.
+`nullglob` removes that field and can leave a redirection with an ambiguous
+target. `failglob` takes precedence, reports the unmatched pattern, and ends
+the reached command unit. With errexit off, the surrounding script reader
+can resume with status 1. The pathname options persist across a function
+return, including after `local -`.
+
 `BASHOPTS` and `SHELLOPTS` are readonly, colon-separated lists of the
 enabled options in these two supported namespaces. They follow the
-reached shell state, including a capture's errexit setting. They can
+reached shell state, including a capture's errexit setting, and appear in
+operand-free `set` and `declare -p` listings. They can
 be explicitly exported. An inherited list enables its recognized
 options in a fresh hosted launch after the leading launch options are
 applied. The supported `-e` and `+e` flags and the `-O name` and

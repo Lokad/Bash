@@ -379,7 +379,7 @@ public sealed partial class Evaluation
                     // Generated operands use ordinary argument expansion before declaration dispatch.
                     var expanded = await WordExpansion.ExpandBraceArgumentsAsync(alternatives, scope).ConfigureAwait(false);
                     if (HasPendingExpansionError
-                        || !await AppendExpandedWordsAsync(expanded, fields, Memory.Workspace, static value => value)
+                        || !await AppendExpandedWordsAsync(expanded, fields, Memory.Workspace, scope, static value => value)
                             .ConfigureAwait(false))
                         break;
                     AddExpandedFields();

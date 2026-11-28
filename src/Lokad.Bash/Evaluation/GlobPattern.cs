@@ -17,16 +17,20 @@ internal sealed class GlobPattern
 
     private GlobPattern(
         string pattern,
-        GlobMask metaMask)
+        GlobMask metaMask,
+        ShellValue original)
     {
         Pattern = pattern;
         MetaMask = metaMask;
+        Original = original;
     }
 
     /// <summary>
     /// Gets the flattened pattern content.
     /// </summary>
     public string Pattern { get; }
+
+    internal ShellValue Original { get; }
 
     /// <summary>
     /// Gets the per-character metadata indicating whether glob metacharacters are active.
@@ -113,7 +117,7 @@ internal sealed class GlobPattern
     {
         if (word.Segments.Count == 0)
         {
-            result = new GlobPattern(string.Empty, new GlobMask(ReadOnlyMemory<byte>.Empty));
+            result = new GlobPattern(string.Empty, new GlobMask(ReadOnlyMemory<byte>.Empty), ShellValue.Empty);
             return true;
         }
 
@@ -133,7 +137,7 @@ internal sealed class GlobPattern
             }
         if (!hasQuotedContent)
         {
-            result = new GlobPattern(pattern, new GlobMask(ReadOnlyMemory<byte>.Empty));
+            result = new GlobPattern(pattern, new GlobMask(ReadOnlyMemory<byte>.Empty), value);
             return true;
         }
 
@@ -155,7 +159,7 @@ internal sealed class GlobPattern
             byteOffset += rune.Utf8SequenceLength;
         }
 
-        result = new GlobPattern(pattern, new GlobMask(maskBytes));
+        result = new GlobPattern(pattern, new GlobMask(maskBytes), value);
         return true;
     }
 

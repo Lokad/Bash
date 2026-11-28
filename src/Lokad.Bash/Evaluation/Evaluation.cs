@@ -5533,7 +5533,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             var expanded = await WordExpansion.ExpandToWordsAsync(word, scope).ConfigureAwait(false);
-            return await AppendExpandedWordsAsync(expanded, operands, backingOwner, static value => value)
+            return await AppendExpandedWordsAsync(expanded, operands, backingOwner, scope, static value => value)
                 .ConfigureAwait(false);
         }
     }
@@ -5553,12 +5553,33 @@ public sealed partial class Evaluation : IFileTester
         return (count, count == 1 ? await DecodeExpandedValueAsync(field).ConfigureAwait(false) : string.Empty);
     }
 
-    /// <summary>Expands a diagnostic operand as bytes, preserving command substitution spelling.</summary>
-    internal async Task<ShellValue?> ExpandRedirectionDiagnosticAsync(Word word, ScopedEvaluation scope)
+    /// <summary>Builds the ambiguity diagnostic before restoring the redirection frame.</summary>
+    internal async Task ReportAmbiguousRedirectAsync(
+        DescriptorTable descriptors, Word target, int fieldCount, ScopedEvaluation scope)
     {
-        var (count, field) = await CollectRedirectionFieldsAsync(
-            word, scope with { PreserveCommandSubstitutionSpelling = true }).ConfigureAwait(false);
-        return count == 1 ? field : null;
+        var emptyNullglob = fieldCount == 0 && _state.HasOption(ShellOption.Nullglob);
+        ShellValue? diagnosticField = null;
+        if (!emptyNullglob || target.LiteralFields == null)
+        {
+            // Dynamic operands can repeat arithmetic and parameter effects even with stderr closed.
+            var (count, field) = await CollectRedirectionFieldsAsync(
+                target, scope with { PreserveCommandSubstitutionSpelling = true }).ConfigureAwait(false);
+            if (_state.HasPendingExpansionError)
+                return;
+            if (count == 1)
+                diagnosticField = field;
+        }
+        var standardError = descriptors.Resolve(LogicalDescriptor.StdErr);
+        if (!standardError.IsClosed)
+        {
+            var detail = ShellValue.FromText("ambiguous redirect");
+            var prefix = emptyNullglob ? GetBuiltinDiagnosticPrefix(scope.Context) : default;
+            if (diagnosticField is { } value)
+                await WriteDiagnosticAsync(standardError, [value], [detail], scope: null, prefix).ConfigureAwait(false);
+            else
+                await WriteRedirectionSpellingDiagnosticAsync(standardError, target, detail, prefix).ConfigureAwait(false);
+        }
+        _state.SetExpansionError(1);
     }
 
     private async ValueTask<(int Count, ShellValue Value)> CollectRedirectionFieldsAsync(Word word, ScopedEvaluation scope)
@@ -5703,11 +5724,14 @@ public sealed partial class Evaluation : IFileTester
     }
 
     private async Task<bool> AppendExpandedWordsAsync<T>(
-        IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity backingOwner, Func<ShellValue, T> createItem)
+        IReadOnlyList<ExpandedWord> expanded, List<T> results, MemoryCapacity backingOwner, ScopedEvaluation scope,
+        Func<ShellValue, T> createItem)
     {
-        // Each expanded field contributes at least one value, including literal glob fallback.
+        var skipUnmatched = _state.HasOption(ShellOption.Nullglob);
+        var rejectUnmatched = _state.HasOption(ShellOption.Failglob);
+        var includeDotFiles = _state.HasOption(ShellOption.Dotglob);
         var count = expanded.Count;
-        if (count > 1)
+        if (count > 1 && !skipUnmatched && !rejectUnmatched)
             Memory.PrepareListCapacity(backingOwner, results, count);
         for (var index = 0; index < count; index++)
         {
@@ -5729,8 +5753,23 @@ public sealed partial class Evaluation : IFileTester
             }
             using var globMemory = new MemoryCapacity(Memory.Budget, 0);
             var glob = new GlobEvaluation(pattern, _state.CurrentDirectory,
-                globMemory, _cancellationToken);
+                globMemory, _cancellationToken, includeDotFiles);
             var matches = await glob.EvaluateAsync(this).ConfigureAwait(false);
+            if (matches.Count == 0)
+            {
+                if (rejectUnmatched)
+                {
+                    await ReportUnitExpansionFailureAsync([ShellValue.FromText("no match")], [pattern.Original], scope,
+                        ExpansionFailureKind.PathnameNoMatch, GetBuiltinDiagnosticPrefix(scope.Context)).ConfigureAwait(false);
+                    return false;
+                }
+                if (!skipUnmatched)
+                {
+                    Memory.PrepareListCapacity(backingOwner, results, 1);
+                    results.Add(createItem(pattern.Original));
+                }
+                continue;
+            }
             Memory.PrepareListCapacity(backingOwner, results, matches.Count);
             foreach (var match in matches)
             {
@@ -6277,13 +6316,6 @@ public sealed partial class Evaluation : IFileTester
 
         return WriteDiagnosticAsync(descriptor, name, message, scope, prefix);
     }
-
-    /// <summary>Writes one diagnostic to the descriptor reached during redirection.</summary>
-    internal Task WriteRedirectionDiagnosticAsync(FileDescriptor descriptor, ShellValue name, ShellValue message) =>
-        WriteDiagnosticAsync(descriptor, [name], [message], scope: null);
-
-    internal Task WriteRedirectionSpellingDiagnosticAsync(FileDescriptor descriptor, Word target, ShellValue detail) =>
-        WriteRedirectionSpellingDiagnosticAsync(descriptor, target, detail, default);
 
     private async Task WriteRedirectionSpellingDiagnosticAsync(
         FileDescriptor descriptor, Word target, ShellValue detail, SyntaxDiagnosticPrefix prefix)

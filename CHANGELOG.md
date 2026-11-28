@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support `dotglob`, `failglob`, and `nullglob` in pathname expansion.
+  Include `BASHOPTS` and `SHELLOPTS` in operand-free variable listings.
+
 - Expose readonly `BASHOPTS` and `SHELLOPTS` for the supported options
   and carry explicitly exported settings into fresh hosted launches.
   Support leading `-e`, `+e`, `-O name` and `+O name` at startup.

@@ -331,7 +331,7 @@ public sealed partial class Variables
         foreach (var (name, slot) in EnumerateBindings())
         {
             if (slot is not AttributeSlot
-                && (slot is not ShellStateSlot || attributes != BindingAttributes.None)
+                && (slot is not ShellStateSlot or ShellOptionsSlot || attributes != BindingAttributes.None)
                 && (!filters.HasFlag(DeclarationListingAttributes.Indexed) || slot is IndexedSlot)
                 && (!filters.HasFlag(DeclarationListingAttributes.Associative) || slot is AssociativeSlot)
                 && (attributes == BindingAttributes.None || (slot.Attributes & attributes) != 0

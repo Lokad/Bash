@@ -11,13 +11,18 @@ internal enum ShellOption
     Errexit = 1,
     InheritErrexit = 2,
     LocalVariableInheritance = 4,
-    BraceExpand = 8,
-    Pipefail = 16
+    Dotglob = 8,
+    Failglob = 16,
+    Nullglob = 32,
+    BraceExpand = 64,
+    Pipefail = 128
 }
 
 internal static class ShellOptions
 {
     internal const ShellOption Fixed = ShellOption.BraceExpand | ShellOption.Pipefail;
+    private const ShellOption BashMask = ShellOption.InheritErrexit | ShellOption.LocalVariableInheritance
+        | ShellOption.Dotglob | ShellOption.Failglob | ShellOption.Nullglob;
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
@@ -32,20 +37,17 @@ internal static class ShellOptions
 
     private static readonly Entry[] BashOptions =
     [
+        new(ShellValue.FromText("dotglob"), ShellOption.Dotglob),
+        new(ShellValue.FromText("failglob"), ShellOption.Failglob),
         new(ShellValue.FromText("inherit_errexit"), ShellOption.InheritErrexit),
-        new(ShellValue.FromText("localvar_inherit"), ShellOption.LocalVariableInheritance)
+        new(ShellValue.FromText("localvar_inherit"), ShellOption.LocalVariableInheritance),
+        new(ShellValue.FromText("nullglob"), ShellOption.Nullglob)
     ];
 
     private static readonly ShellValue[] SetValues =
         [Format(SetOptions, Fixed), Format(SetOptions, Fixed | ShellOption.Errexit)];
 
-    private static readonly ShellValue[] BashValues =
-    [
-        ShellValue.Empty,
-        Format(BashOptions, ShellOption.InheritErrexit),
-        Format(BashOptions, ShellOption.LocalVariableInheritance),
-        Format(BashOptions, ShellOption.InheritErrexit | ShellOption.LocalVariableInheritance)
-    ];
+    private static readonly ShellValue[] BashValues = BuildBashValues();
 
     internal static IReadOnlyList<Entry> Names(bool setOptions) => setOptions ? SetOptions : BashOptions;
 
@@ -59,7 +61,7 @@ internal static class ShellOptions
 
     internal static ShellValue FormatBinding(ShellOption enabled, bool setOptions) => setOptions
         ? SetValues[(int)(enabled & ShellOption.Errexit)]
-        : BashValues[(int)(enabled & (ShellOption.InheritErrexit | ShellOption.LocalVariableInheritance)) >> 1];
+        : BashValues[(int)(enabled & BashMask) >> 1];
 
     internal static ShellOption ParseImported(ReadOnlySpan<byte> value, bool setOptions)
     {
@@ -72,4 +74,13 @@ internal static class ShellOptions
     private static ShellValue Format(Entry[] entries, ShellOption enabled) =>
         ShellValue.FromText(string.Join(':', entries.Where(entry => (enabled & entry.Option) != 0)
             .Select(entry => entry.Name.ToUtf8String())));
+
+    private static ShellValue[] BuildBashValues()
+    {
+        // The mutable shopt flags occupy consecutive bits above errexit.
+        var values = new ShellValue[((int)BashMask >> 1) + 1];
+        for (var index = 0; index < values.Length; index++)
+            values[index] = Format(BashOptions, (ShellOption)(index << 1));
+        return values;
+    }
 }

@@ -628,6 +628,9 @@ public sealed partial class Evaluation
 
     private int? GetRecoverableScriptExpansionStatus(ScriptExecutionKind kind, ScopedEvaluation scope)
     {
+        if (_state.FatalExpansion is { Kind: ExpansionFailureKind.PathnameNoMatch } pathnameFailure)
+            return _state.ForkKind == null && (!_state.ErrexitEnabled || scope.Context.ErrexitIgnored)
+                ? pathnameFailure.ExitCode : null;
         if (RecoverableCommandSubstitutionStatus is { } substitutionStatus)
             return substitutionStatus;
         if (kind == ScriptExecutionKind.Root)

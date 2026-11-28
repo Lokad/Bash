@@ -18,6 +18,8 @@ internal enum ExpansionFailureKind
     Arithmetic,
     /// <summary>A generated word fails substitution parsing and discards its command unit.</summary>
     WordSyntax,
+    /// <summary>A pathname pattern selected by failglob has no matches.</summary>
+    PathnameNoMatch,
     /// <summary>A reached parenthesized substitution has invalid rendered syntax.</summary>
     CommandSubstitutionSyntax,
     /// <summary>A reached substitution ends in a bare pipeline prefix with errexit disabled.</summary>

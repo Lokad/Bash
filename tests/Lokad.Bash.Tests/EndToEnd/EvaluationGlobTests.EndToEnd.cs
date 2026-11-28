@@ -6,6 +6,77 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationGlobTestsEndToEnd
 {
+    [Fact]
+    public async Task NullglobDropsFieldsBeforeCommandSelectionAndArrayPublication()
+    {
+        var host = EndToEndHarness.BuildTree([("/one.keep", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            shopt -s nullglob
+            *.missing printf '<%s>\n' '*.missing' *.keep *.missing
+            scalar=*.missing
+            declare -a array=( *.missing *.keep *.missing )
+            printf 'scalar:%s array:%s:%s\n' "$scalar" "${#array[@]}" "${array[0]}"
+            """, tree: host);
+
+        Assert.Equal("<*.missing>\n<one.keep>\nscalar:*.missing array:1:one.keep\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DotglobPersistsAfterLocalOptionsAndMatchesHiddenComponents()
+    {
+        var host = EndToEndHarness.BuildTree(["/dir", "/.dir"],
+            [("/dir/visible", ""), ("/dir/.leaf", ""), ("/.dir/.leaf", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            printf 'before:%s\n' */*
+            enable() { local -; shopt -s dotglob; }
+            enable
+            printf 'after:%s\n' */*
+            """, tree: host);
+
+        Assert.Equal("before:dir/visible\nafter:.dir/.leaf\nafter:dir/.leaf\nafter:dir/visible\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("printf '<%s>' *.missing || printf skipped")]
+    [InlineData("if printf '<%s>' *.missing; then printf skipped; else printf skipped; fi")]
+    [InlineData(">*.missing; printf skipped")]
+    public async Task FailglobDiscardsTheCommandUnitAndPublishesItsStatus(string command)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "shopt -s failglob nullglob\n" + command
+            + "\nprintf 'end:%s:%s:%s\\n' \"$?\" \"${PIPESTATUS[*]}\" \"$_\"\n");
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("end:1:1:nullglob\n", host.StandardOutput.TextContent);
+        Assert.Equal("./unit: line 2: no match: *.missing\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/*.missing"));
+    }
+
+    [Theory]
+    [InlineData("*.missing", "*.missing", 0)]
+    [InlineData("${patterns[i++]}", "second", 2)]
+    public async Task NullglobRedirectionUsesTheReachedDiagnosticSpelling(string expression, string spelling, int index)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", "shopt -s nullglob\npatterns=('*.missing' second)\ni=0\n: >" + expression
+            + "\nprintf 'end:%s:%s\\n' \"$?\" \"$i\"\n");
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"end:1:{index}\n", host.StandardOutput.TextContent);
+        Assert.Equal($"./unit: line 4: {spelling}: ambiguous redirect\n", host.StandardError.TextContent);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.False(await EndToEndHarness.FileExistsAsync(host, "/second"));
+    }
+
     [Theory]
     [InlineData("?", "<7><é><😀><😁>")]
     [InlineData("??", "<😀x><😁x>")]

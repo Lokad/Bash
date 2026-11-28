@@ -101,7 +101,7 @@ public sealed partial class Evaluation
                             .ConfigureAwait(false);
                         if (_state.HasPendingExpansionError)
                             return null;
-                        if (!await AppendExpandedWordsAsync(fields, expanded, itemMemory,
+                        if (!await AppendExpandedWordsAsync(fields, expanded, itemMemory, scope,
                                 static value => new ExpandedArrayItem(null, ShellValue.Empty, value,
                                     AssignmentOperator.Replace, PrefixWithElementZero: false)).ConfigureAwait(false)
                             || _state.HasPendingExpansionError)

@@ -16,7 +16,7 @@ namespace Lokad.Bash.Evaluation;
 /// </summary>
 /// <remarks>
 /// Fixed prefixes select the initial directory. After wildcard expansion, every
-/// ordinary suffix component must exist; unmatched patterns stay literal.
+/// ordinary suffix component must exist.
 /// </remarks>
 internal sealed class GlobEvaluation
 {
@@ -53,9 +53,10 @@ internal sealed class GlobEvaluation
     private readonly ShellPath _directory;
     private readonly MemoryCapacity _memory;
     private readonly CancellationToken _cancellationToken;
+    private readonly bool _includeDotFiles;
 
     public GlobEvaluation(GlobPattern pattern, ShellPath directory, MemoryCapacity memory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool includeDotFiles = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         memory.Grow(256);
@@ -63,9 +64,10 @@ internal sealed class GlobEvaluation
         _directory = directory;
         _memory = memory;
         _cancellationToken = cancellationToken;
+        _includeDotFiles = includeDotFiles;
     }
 
-    /// <summary>Expands matching components in order, preserving the original word for literal fallback.</summary>
+    /// <summary>Returns matching path spellings in order.</summary>
     public async Task<IReadOnlyList<string>> EvaluateAsync(IFileTester tester)
     {
         var baseline = _memory.Bytes;
@@ -76,7 +78,7 @@ internal sealed class GlobEvaluation
         {
             _cancellationToken.ThrowIfCancellationRequested();
             if (!_pattern.TryReadPathComponent(ref cursor, out component))
-                return LiteralResult();
+                return [];
             if (GlobPattern.RequiresExpansion(text.AsSpan(component), _pattern.GetMask(component)))
                 break;
         }
@@ -114,7 +116,7 @@ internal sealed class GlobEvaluation
             else
             {
                 var requireDirectory = hasNext || markDirectory;
-                var matchDot = name.Span[0] == '.';
+                var matchDot = _includeDotFiles || name.Span[0] == '.';
                 var hasWildcard = component.Start.Value == firstWildcardStart
                     || GlobPattern.RequiresExpansion(name.Span, _pattern.GetMask(component));
                 long matchPathBytes = 0;
@@ -129,7 +131,7 @@ internal sealed class GlobEvaluation
                         {
                             _cancellationToken.ThrowIfCancellationRequested();
                             var entryName = entry.Name.AsSpan();
-                            if (entryName.IsEmpty || !matchDot && entryName[0] == '.')
+                            if (entryName.IsEmpty || entryName[0] == '.' && (!matchDot || entryName is "." or ".."))
                                 continue;
                             if (requireDirectory && entry.Kind is not (FilePathKind.Directory or FilePathKind.SymbolicLink))
                                 continue;
@@ -162,7 +164,9 @@ internal sealed class GlobEvaluation
                 if (matches.Count == 0)
                 {
                     ReleaseCandidateLists();
-                    return LiteralResult();
+                    _memory.Resize(baseline);
+                    _memory.ReleaseUnusedCapacity();
+                    return [];
                 }
                 (candidates, matches) = (matches, candidates);
                 matches.Clear();
@@ -193,13 +197,6 @@ internal sealed class GlobEvaluation
                 return result;
             }
             component = next;
-        }
-
-        IReadOnlyList<string> LiteralResult()
-        {
-            _memory.Resize(checked(baseline + MemoryCapacity.ArrayBackingBytes<string>(1)));
-            _memory.ReleaseUnusedCapacity();
-            return [text];
         }
 
         void ReleaseCandidateLists()

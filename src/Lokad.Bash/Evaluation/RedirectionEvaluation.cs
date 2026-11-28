@@ -227,7 +227,8 @@ internal sealed class RedirectionEvaluation
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
         if (fieldCount != 1 && !move)
         {
-            await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
+            await scope.Effects.ReportAmbiguousRedirectAsync(_descriptorTable, target, fieldCount, scope)
+                .ConfigureAwait(false);
             return RedirectionOutcome.Failure;
         }
         if (sourceWord == "-" || move && fieldCount != 1)
@@ -255,7 +256,8 @@ internal sealed class RedirectionEvaluation
                     .ConfigureAwait(false);
             if (move || redirection.Kind != RedirectionKind.DuplicateOutput || targetDescriptor != LogicalDescriptor.StdOut)
             {
-                await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
+                await scope.Effects.ReportAmbiguousRedirectAsync(_descriptorTable, target, fieldCount, scope)
+                    .ConfigureAwait(false);
                 return RedirectionOutcome.Failure;
             }
 
@@ -458,26 +460,6 @@ internal sealed class RedirectionEvaluation
         scope.Effects.SetExpansionError(1);
     }
 
-    /// <summary>Builds the diagnostic before restoring the redirection frame.</summary>
-    private async Task ReportAmbiguousRedirectAsync(ScopedEvaluation scope, Word target)
-    {
-        // The diagnostic pass can repeat arithmetic and parameter effects even with stderr closed.
-        var field = await scope.Effects.ExpandRedirectionDiagnosticAsync(target, scope).ConfigureAwait(false);
-        if (scope.Effects.HasPendingExpansionError)
-            return;
-
-        var standardError = _descriptorTable.Resolve(LogicalDescriptor.StdErr);
-        if (!standardError.IsClosed)
-        {
-            if (field is { } value)
-                await scope.Effects.WriteRedirectionDiagnosticAsync(standardError, value,
-                    ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
-            else await scope.Effects.WriteRedirectionSpellingDiagnosticAsync(standardError, target,
-                ShellValue.FromText("ambiguous redirect")).ConfigureAwait(false);
-        }
-        scope.Effects.SetExpansionError(1);
-    }
-
     private void SetDescriptor(ScopedEvaluation scope, LogicalDescriptor logicalDescriptor, DescriptorBinding binding)
     {
         AddDescriptorToSet(_touchedDescriptors, logicalDescriptor, scope.Effects.Memory);
@@ -529,7 +511,8 @@ internal sealed class RedirectionEvaluation
 
         if (fieldCount != 1)
         {
-            await ReportAmbiguousRedirectAsync(scope, target).ConfigureAwait(false);
+            await scope.Effects.ReportAmbiguousRedirectAsync(_descriptorTable, target, fieldCount, scope)
+                .ConfigureAwait(false);
             return null;
         }
 

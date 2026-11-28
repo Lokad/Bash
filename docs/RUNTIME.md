@@ -312,6 +312,9 @@ and other dynamic syntax stay late-bound. Pathname expansion scans components in
 the existing pattern and quote mask. It prepares the literal prefix once and
 keeps separate spellings for output and lookup. Lookup preserves dot and dot-dot
 components for host traversal.
+The pathname matcher returns only matched paths. On a miss the expansion
+publisher uses the original byte value for literal fallback, drops the field
+under `nullglob`, or publishes a command-unit error under `failglob`.
 Bracket lookahead and revisited wide memberships are shared across entries of a
 pathname component. The component retains its admitted membership through any
 pending link lookup and releases it before advancing or publishing results.
