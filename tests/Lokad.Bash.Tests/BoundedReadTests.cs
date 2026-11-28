@@ -7,6 +7,59 @@ namespace Lokad.Bash.Tests;
 
 public sealed class BoundedReadTests
 {
+    [Fact]
+    public async Task ReusableLineGrowthReturnsOnlyTheNextRecordAndKeepsTheOverlapAdmitted()
+    {
+        byte[] first = [0xff, 13, 0, (byte)'a', (byte)'b', (byte)'c', (byte)'d', 10];
+        byte[] second = [0, 13, 0xfe, (byte)'a', (byte)'b', (byte)'c', (byte)'d', (byte)'e', 10];
+        await using var host = new MockFileSystem();
+        host.SetStandardInputBytes([.. first, .. second]);
+        var governor = new MemoryGovernor(24);
+        using var budget = governor.CreateScope();
+        using var output = new ByteMemoryBuilder(8, budget);
+
+        var previous = await DescriptorReader.ReadReusableLineAsync(host, Read, output, CancellationToken.None);
+        Assert.False(previous.ReachedEoF);
+        Assert.Equal(first, previous.Content.ToArray());
+        var current = await DescriptorReader.ReadReusableLineAsync(host, Read, output, CancellationToken.None);
+
+        Assert.True(current.ReachedEoF);
+        Assert.Equal(second, current.Content.ToArray());
+        Assert.Equal(16, governor.ReservedBytes);
+        Assert.Equal(24, governor.PeakBytes);
+        output.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        static ValueTask<DescriptorReadBuffer> Read(MockFileSystem source, DescriptorReadRequest request, CancellationToken token) =>
+            source.ReadAsync(FileDescriptor.StdIn, request, token);
+    }
+
+    [Fact]
+    public void RefusedBufferGrowthPreservesTheWrittenPrefixUntilRetry()
+    {
+        var governor = new MemoryGovernor(24);
+        using var budget = governor.CreateScope();
+        using var output = new ByteMemoryBuilder(8, budget);
+        output.Append("original"u8);
+        var original = output.ToMemory();
+        output.Truncate(3);
+
+        using (budget.Reserve(1))
+        {
+            Assert.False(output.TryEnsureCapacity(9));
+            Assert.Equal(8, output.Capacity);
+            Assert.Equal("ori"u8.ToArray(), output.ToMemory().ToArray());
+            Assert.Equal(9, governor.ReservedBytes);
+        }
+        Assert.True(output.TryEnsureCapacity(9));
+        Assert.Equal("ori"u8.ToArray(), output.ToMemory().ToArray());
+        output.Append(original);
+        Assert.Equal("orioriginal"u8.ToArray(), output.ToMemory().ToArray());
+        Assert.Equal("original"u8.ToArray(), original.ToArray());
+        Assert.Equal(16, governor.ReservedBytes);
+        Assert.Equal(24, governor.PeakBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

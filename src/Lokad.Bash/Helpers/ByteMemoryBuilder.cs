@@ -225,7 +225,12 @@ public sealed class ByteMemoryBuilder : IDisposable, IByteMemoryWriter
             return false;
         if (_reservation is { } reservation && !reservation.TryResize(previousBytes + newSize))
             return false;
-        try { Array.Resize(ref _buffer, newSize); }
+        try
+        {
+            var replacement = new byte[newSize];
+            _buffer.AsSpan(0, _length).CopyTo(replacement);
+            _buffer = replacement;
+        }
         catch { _reservation?.Resize(previousBytes); throw; }
         _reservation?.Resize((long)newSize);
         return true;
