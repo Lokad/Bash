@@ -18,51 +18,55 @@ internal sealed class ListTraversal
 
     public IReadOnlyList<Step> Steps { get; }
 
-    private enum Preparation { Visit, Right, Finish }
+    private const int AfterLeft = -1;
+    private readonly record struct Continuation(ListCommand Command, int BranchStep, bool ErrexitIgnored);
 
     public ListTraversal(ListCommand root, CancellationToken cancellationToken)
     {
         var steps = new List<Step>();
-        var pending = new Stack<(ICommand Command, bool Ignored, Preparation Phase, int Branch)>();
-        pending.Push((root, false, Preparation.Visit, 0));
+        var pending = new Stack<Continuation>();
+        ICommand? command = root;
+        var errexitIgnored = false;
         var startsCommandUnit = false;
         var startsReaderUnit = false;
-        while (pending.TryPop(out var item))
+        while (command != null || pending.Count != 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (item.Phase == Preparation.Finish)
+            if (command is ListCommand nested)
             {
-                steps[item.Branch] = new Step(item.Command, steps.Count, errexitIgnored: false,
+                pending.Push(new Continuation(nested, AfterLeft, errexitIgnored));
+                errexitIgnored = errexitIgnored || nested.Operator is ListOperator.And or ListOperator.Or;
+                command = nested.Left;
+                continue;
+            }
+            if (command != null)
+            {
+                steps.Add(new Step(command, endExclusive: 0, errexitIgnored, startsCommandUnit, startsReaderUnit));
+                startsCommandUnit = false;
+                startsReaderUnit = false;
+                command = null;
+                continue;
+            }
+
+            var continuation = pending.Pop();
+            var list = continuation.Command;
+            if (continuation.BranchStep != AfterLeft)
+            {
+                steps[continuation.BranchStep] = new Step(list, steps.Count, errexitIgnored: false,
                     startsCommandUnit: false, startsReaderUnit: false);
                 continue;
             }
-            if (item.Phase == Preparation.Right)
+
+            startsCommandUnit |= list.StartsCommandUnit;
+            startsReaderUnit |= list.StartsReaderUnit;
+            if (list.Operator != ListOperator.Sequence)
             {
-                var list = (ListCommand)item.Command;
-                startsCommandUnit |= list.StartsCommandUnit;
-                startsReaderUnit |= list.StartsReaderUnit;
-                if (list.Operator != ListOperator.Sequence)
-                {
-                    var branch = steps.Count;
-                    // Finish fills the reserved slot before the traversal can be published.
-                    steps.Add(default);
-                    pending.Push((list, item.Ignored, Preparation.Finish, branch));
-                }
-                pending.Push((list.Right, item.Ignored, Preparation.Visit, 0));
-                continue;
+                // Fill the branch target when its right subtree ends.
+                pending.Push(continuation with { BranchStep = steps.Count });
+                steps.Add(default);
             }
-            if (item.Command is ListCommand nested)
-            {
-                pending.Push((nested, item.Ignored, Preparation.Right, 0));
-                pending.Push((nested.Left, item.Ignored || nested.Operator is ListOperator.And or ListOperator.Or,
-                    Preparation.Visit, 0));
-            }
-            else
-            {
-                steps.Add(new Step(item.Command, endExclusive: 0, item.Ignored, startsCommandUnit, startsReaderUnit));
-                startsCommandUnit = false;
-                startsReaderUnit = false;
-            }
+            command = list.Right;
+            errexitIgnored = continuation.ErrexitIgnored;
         }
         Steps = steps;
     }

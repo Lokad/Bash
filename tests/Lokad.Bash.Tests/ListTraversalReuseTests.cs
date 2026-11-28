@@ -101,6 +101,29 @@ public sealed class ListTraversalReuseTests
     }
 
     [Fact]
+    public void ReaderBoundaryReachesTheLeftLeafOfTheRightSubtree()
+    {
+        var first = Assert.Single(Parser.Parse("first").Commands);
+        var tested = Assert.Single(Parser.Parse("tested").Commands);
+        var alternative = Assert.Single(Parser.Parse("alternative").Commands);
+        var following = Assert.Single(Parser.Parse("following").Commands);
+        var branch = new ListCommand(tested, ListOperator.Or, alternative);
+        var reader = new ListCommand(first, ListOperator.Sequence, branch) { StartsReaderUnit = true };
+        var root = new ListCommand(reader, ListOperator.Sequence, following) { StartsCommandUnit = true };
+
+        var steps = root.GetTraversal(CancellationToken.None).Steps;
+        Assert.Equal(5, steps.Count);
+        Assert.Equal([1], Enumerable.Range(0, steps.Count).Where(index => steps[index].StartsReaderUnit));
+        Assert.Equal([4], Enumerable.Range(0, steps.Count).Where(index => steps[index].StartsCommandUnit));
+        Assert.Same(tested, steps[1].Command);
+        Assert.True(steps[1].ErrexitIgnored);
+        Assert.Same(branch, steps[2].Command);
+        Assert.Equal(4, steps[2].EndExclusive);
+        Assert.Same(alternative, steps[3].Command);
+        Assert.False(steps[3].ErrexitIgnored);
+    }
+
+    [Fact]
     public void RecordCopiesInvalidateTraversalForChangedOperandsOrOperator()
     {
         var left = Assert.Single(Parser.Parse("true").Commands);
