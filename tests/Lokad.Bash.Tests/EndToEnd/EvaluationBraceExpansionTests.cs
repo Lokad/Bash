@@ -89,6 +89,23 @@ public sealed class EvaluationBraceExpansionTests
     }
 
     [Theory]
+    [InlineData(4095)]
+    [InlineData(4096)]
+    [InlineData(4097)]
+    public async Task BraceGrammarPreservesProtectedCommasAfterLiteralRuns(int width)
+    {
+        var prefix = new string('p', width);
+        var suffix = new string('q', width);
+        const string group = "{a,\"b,c\",${value:-fallback},escaped\\,comma}";
+        var result = await EvaluationTestHelper.RunAsync("printf '<%s>' " + prefix + group + suffix);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{prefix}a{suffix}><{prefix}b,c{suffix}><{prefix}fallback{suffix}><{prefix}escaped,comma{suffix}>",
+            result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("", false)]
     [InlineData("\\", true)]
     [InlineData("\\\\", false)]

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,6 +19,8 @@ namespace Lokad.Bash.Evaluation;
 /// </remarks>
 internal static class BraceExpansion
 {
+    private static readonly SearchValues<byte> BraceScanMarkers = SearchValues.Create("{},.$`\\\"'"u8);
+
     private readonly record struct Position(int Part, int Offset);
     private readonly record struct Boundary(Position Position, int BraceIndex)
     {
@@ -334,6 +337,7 @@ internal static class BraceExpansion
     private static List<Brace> Scan(IReadOnlyList<WordPart> parts, MemoryCapacity scratch, CancellationToken cancellationToken)
     {
         const int BraceBytes = 192;
+        const int MaximumScanBytes = 4096;
         var braces = new List<Brace>();
         var open = new List<Brace>();
         var context = new ShellScanContext { SyntaxMemory = scratch };
@@ -363,6 +367,16 @@ internal static class BraceExpansion
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var offset = cursor.Position;
+                if (!BraceScanMarkers.Contains(cursor.Current) && !cursor.IsQuoted)
+                {
+                    // Plain bytes cannot change the cursor's quote or brace state.
+                    var next = offset + 1;
+                    var window = bytes.Slice(next, Math.Min(bytes.Length - next, MaximumScanBytes - 1));
+                    var marker = window.IndexOfAny(BraceScanMarkers);
+                    cursor = new ShellSourceCursor(source, next + (marker < 0 ? window.Length : marker), context);
+                    continue;
+                }
+
                 if (cursor.TryConsumeQuoteOrEscape())
                     continue;
                 if (cursor.Current is (byte)'$' or (byte)'`')
@@ -482,7 +496,6 @@ internal static class BraceExpansion
                 }
 
                 // Count commas in unescaped runs, keeping cancellation checks between bounded scans.
-                const int MaximumScanBytes = 4096;
                 var window = bytes.Slice(offset, Math.Min(end - offset, MaximumScanBytes));
                 var escape = window.IndexOf((byte)'\\');
                 var literalLength = escape < 0 ? window.Length : escape;
