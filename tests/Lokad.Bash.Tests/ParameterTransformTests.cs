@@ -136,6 +136,52 @@ public sealed class ParameterTransformTests
     }
 
     [Theory]
+    [InlineData("@", 2 * 1024 * 1024)]
+    [InlineData("*", 5 * 512 * 1024)]
+    public async Task NextProjectedFieldUsesTheAllowanceFromTheConsumedField(string aggregate, long limit)
+    {
+        const int width = 150 * 1024;
+        var bytes = new byte[width];
+        bytes.AsSpan().Fill((byte)'a');
+        bytes[^2] = 0xff;
+        bytes[^1] = (byte)'\r';
+        var raw = ShellValue.FromBytes(bytes);
+        await MeasureFieldsAsync($"\"${{items[{aggregate}]^^}}\"",
+            variables => Assert.True(variables.TryAssignArray("items", [raw, raw], ArrayKind.Indexed)),
+            Check, new MemoryGovernor(limit));
+
+        void Check(IReadOnlyList<ExpandedWord> words)
+        {
+            if (aggregate == "@")
+            {
+                Assert.Equal(2, words.Count);
+                Assert.All(words, word =>
+                {
+                    var segment = Assert.Single(word.Segments);
+                    Assert.True(segment.IsGlobQuoted);
+                    CheckField(segment.Content.Bytes.Span);
+                });
+                return;
+            }
+            var joined = Assert.Single(Assert.Single(words).Segments);
+            Assert.True(joined.IsGlobQuoted);
+            var value = joined.Content.Bytes.Span;
+            Assert.Equal(2 * width + 1, value.Length);
+            Assert.Equal((byte)':', value[width]);
+            CheckField(value[..width]);
+            CheckField(value[(width + 1)..]);
+        }
+
+        static void CheckField(ReadOnlySpan<byte> field)
+        {
+            Assert.Equal(width, field.Length);
+            Assert.Equal(-1, field[..^2].IndexOfAnyExcept((byte)'A'));
+            Assert.Equal(0xff, field[^2]);
+            Assert.Equal((byte)'\r', field[^1]);
+        }
+    }
+
+    [Theory]
     [InlineData("@")]
     [InlineData("*")]
     public async Task PositionalAssignmentRetainsOnlyEmittedWorkspace(string aggregate)
@@ -177,10 +223,13 @@ public sealed class ParameterTransformTests
         string source, IReadOnlyList<ShellValue> values, Action<IReadOnlyList<ExpandedWord>> check) =>
         MeasureFieldsAsync(source, variables => Assert.True(variables.TryAssignArray("items", values, ArrayKind.Indexed)), check);
 
+    private static Task<long> MeasureFieldsAsync(
+        string source, Action<Variables> prepare, Action<IReadOnlyList<ExpandedWord>> check) =>
+        MeasureFieldsAsync(source, prepare, check, new MemoryGovernor(4 * 1024 * 1024));
+
     private static async Task<long> MeasureFieldsAsync(
-        string source, Action<Variables> prepare, Action<IReadOnlyList<ExpandedWord>> check)
+        string source, Action<Variables> prepare, Action<IReadOnlyList<ExpandedWord>> check, MemoryGovernor governor)
     {
-        var governor = new MemoryGovernor(4 * 1024 * 1024);
         using var owner = governor.CreateScope();
         var evaluation = new Eval(Parser.Parse(string.Empty));
         evaluation.Memory.Budget = owner;

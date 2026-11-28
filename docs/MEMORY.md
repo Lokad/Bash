@@ -80,6 +80,10 @@ Returned/lazy results require an owner surviving consumption. Establish it befor
 allocation: child scopes cannot outlive parents, and there is no automatic
 reparenting or transfer to GC.
 
+The word builder admits bytes it copies or retains before advancing a transformed
+parameter field. The projection then releases the consumed field's logical
+charge and can reuse its prepaid capacity for the next transform.
+
 Supply a caller-owned scope to standalone `printf` and timing formatters and to
 whole-input readers that materialize results under a supplied budget. Keep the
 scope alive through the last consumer, including any pending host write, then

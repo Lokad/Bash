@@ -31,15 +31,14 @@ internal static partial class WordExpansion
         foreach (var field in fields)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var previousBytes = scratch.Bytes;
-            // The builder admits its own backing on append. Keep the previous
-            // field charged until the iterator replaces its Current.
-            yield return project(field, scratch);
-            if (previousBytes != 0)
-            {
-                scratch.Resize(scratch.Bytes - previousBytes);
+            // Before advancing, the emitter has copied the previous field or admitted its backing.
+            var hadPrevious = scratch.Bytes != 0;
+            if (hadPrevious)
+                scratch.Resize(0);
+            var projected = project(field, scratch);
+            if (hadPrevious)
                 scratch.TrimExcess();
-            }
+            yield return projected;
         }
     }
 
