@@ -225,6 +225,50 @@ public sealed class ScriptCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("set -v; printf first\n# note\n  printf second ; printf third\n# tail", "firstsecondthird",
+        "printf second; printf third\n")]
+    [InlineData("set -vn\nprintf skipped\n# tail", "", "printf skipped\n")]
+    [InlineData("set -v\nfor v in a b; do printf %s \"$v\"; done", "ab",
+        "for v in a b;\ndo\n    printf %s \"$v\";\ndone\n")]
+    [InlineData("set -v\nprintf '%s' \"$(printf first\nprintf second)\"\nprintf tail", "firstsecondtail",
+        "printf '%s' \"$(printf first\nprintf tail\n")]
+    [InlineData("set -v\nprintf '%s' \"$((1 + $(printf 2\n:)))\"\nprintf tail", "3tail",
+        "printf '%s' \"$((1 + $(printf 2\nprintf tail\n")]
+    [InlineData("set -v\nfalse && printf '%s' \"$(cat <<END\nbody\nEND\n)\"\nprintf tail", "tail",
+        "false && printf '%s' \"$(cat <<END\nbody\nEND\nprintf tail\n")]
+    public async Task ModernCaptureVerboseEchoUsesRenderedReaderUnits(string body, string output, string echo)
+    {
+        var script = $"value=\"$({body}\n)\"\nprintf '%s' \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(echo, host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task DocumentIntroducesRenderedReaderUnitAfterDescriptorReplacement()
+    {
+        const string script = "value=\"$(set -v; exec 2>trace <<END; printf reached\nbody\nEND\n)\"\nprintf '%s' \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("reached", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal(" printf reached\n", host.ReadFile("/trace"));
+        }
+    }
+
     [Fact]
     public async Task VerboseReadsTheFullOffendingLineBeforeReportingSyntax()
     {

@@ -492,7 +492,10 @@ internal static class ArithmeticExpansionScanner
                             ? ShellSourceCursor.ReadArithmeticForHeader(context,
                                 FunctionDefinitionFormatter.RenderReadAheadCaptures(source, context), out separators)
                             : ShellSourceCursor.PrepareExpansionSource(context, source, ref renderedLineAdjustment);
-                        expression = new SourceSpelling(normalized, null);
+                        var captures = trackRenderedLines && containsCommandSubstitution && context.RetainCaptureLookahead
+                            && normalized.Bytes.Equals(source.Bytes) && source.AsSpan().Contains((byte)'\n')
+                            ? FunctionDefinitionFormatter.RetainMultilineCaptures(source, context) : null;
+                        expression = new SourceSpelling(normalized, captures);
                     }
                 }
                 return ShellScanStatus.Complete;

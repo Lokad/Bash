@@ -10,7 +10,7 @@ namespace Lokad.Bash.Syntax;
 /// <summary>Renders retained syntax and its line layout without evaluation.</summary>
 internal static class FunctionDefinitionFormatter
 {
-    private enum Format { Display, Export, ImportValidation, ImportCoordinates, BraceSource, SubstitutionSource, SubstitutionWord, SubstitutionDisplay, SubstitutionDiagnostic, CaptureCoordinates }
+    private enum Format { Display, Export, ImportValidation, ImportCoordinates, BraceSource, SubstitutionSource, SubstitutionWord, SubstitutionDisplay, SubstitutionDiagnostic, CaptureCoordinates, CaptureReader }
     private enum CaptureSpelling { Source, Word, Display, Diagnostic }
 
     /// <remarks>False leaves partial output; callers must discard it.</remarks>
@@ -77,6 +77,11 @@ internal static class FunctionDefinitionFormatter
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget? budget,
         CancellationToken cancellationToken) => TryAppendSubstitution(substitution, output, budget, cancellationToken, CaptureSpelling.Source);
 
+    /// <summary>Renders the reached child's command text and records its complete reader units.</summary>
+    internal static bool TryAppendCaptureInput(ParsedScript script, RenderedCaptureInput input,
+        CancellationToken cancellationToken) =>
+        TryAppend(new Step.Commands(script.Commands), input, input.Budget, Format.CaptureReader, cancellationToken);
+
     /// <summary>Renders substitution spelling for an expansion that can read part of it as word text.</summary>
     internal static bool TryAppendSubstitutionWord(
         CommandSubstitutionSyntax substitution, IByteMemoryWriter output, IMemoryBudget budget,
@@ -96,24 +101,34 @@ internal static class FunctionDefinitionFormatter
             return style == CaptureSpelling.Word
                 ? CommandSubstitutionScanner.TryAppendLegacyWordSpelling(legacy, output, cancellationToken)
                 : output.TryAppend(legacy.Spelling.AsSpan());
-        if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling } adjacent
-            && (style is CaptureSpelling.Display or CaptureSpelling.Diagnostic || !adjacent.PreserveAdjacentOpening))
-            return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken, style)
-                && (spelling.EndsAtDecodedNul || output.TryAppend((byte)')'));
-        if (substitution is CommandSubstitutionSyntax.Parsed parsed && CanRender(parsed, style))
+        var input = output as RenderedCaptureInput;
+        var start = input?.EnterSubstitution() ?? -1;
+        var rendered = AppendModern();
+        if (rendered)
+            input?.LeaveSubstitution(start);
+        return rendered;
+
+        bool AppendModern()
         {
-            var commands = parsed.Script.AuthoredCaptureCommands ?? parsed.Script.Commands;
-            return output.TryAppend(StartsWithParenthesis(commands) ? "$( "u8 : "$("u8)
-                && TryAppend(new Step.Commands(commands), output, budget, style switch
-                {
-                    CaptureSpelling.Display => Format.SubstitutionDisplay,
-                    CaptureSpelling.Diagnostic => Format.SubstitutionDiagnostic,
-                    CaptureSpelling.Word => Format.SubstitutionWord,
-                    _ => Format.SubstitutionSource
-                }, cancellationToken)
-                && output.TryAppend((byte)')');
+            if (substitution is CommandSubstitutionSyntax.Parsed { AdjacentSpelling: { } spelling } adjacent
+                && (style is CaptureSpelling.Display or CaptureSpelling.Diagnostic || !adjacent.PreserveAdjacentOpening))
+                return output.TryAppend("$("u8) && AppendSpelling(spelling, 0, output, budget, cancellationToken, style)
+                    && (spelling.EndsAtDecodedNul || output.TryAppend((byte)')'));
+            if (substitution is CommandSubstitutionSyntax.Parsed parsed && CanRender(parsed, style))
+            {
+                var commands = parsed.Script.AuthoredCaptureCommands ?? parsed.Script.Commands;
+                return output.TryAppend(StartsWithParenthesis(commands) ? "$( "u8 : "$("u8)
+                    && TryAppend(new Step.Commands(commands), output, budget, style switch
+                    {
+                        CaptureSpelling.Display => Format.SubstitutionDisplay,
+                        CaptureSpelling.Diagnostic => Format.SubstitutionDiagnostic,
+                        CaptureSpelling.Word => Format.SubstitutionWord,
+                        _ => Format.SubstitutionSource
+                    }, cancellationToken)
+                    && output.TryAppend((byte)')');
+            }
+            return output.TryAppend("$("u8) && output.TryAppend(substitution.Source.AsSpan()) && output.TryAppend((byte)')');
         }
-        return output.TryAppend("$("u8) && output.TryAppend(substitution.Source.AsSpan()) && output.TryAppend((byte)')');
 
         static bool StartsWithParenthesis(IReadOnlyList<ICommand> commands)
         {
@@ -178,12 +193,14 @@ internal static class FunctionDefinitionFormatter
             _ => CaptureSpelling.Source
         };
         var substitutionSource = format is Format.SubstitutionSource or Format.SubstitutionWord or Format.SubstitutionDisplay
-            or Format.SubstitutionDiagnostic;
+            or Format.SubstitutionDiagnostic or Format.CaptureReader;
         var displayRedirections = display || substitutionSource;
         var displayHereDocumentDelimiters = display || format is Format.SubstitutionDisplay or Format.SubstitutionDiagnostic;
         var inlineSource = format == Format.BraceSource || substitutionSource;
         var lines = output as LineCounter;
         var capture = format == Format.CaptureCoordinates;
+        var renderedInput = output as RenderedCaptureInput;
+        var reader = format == Format.CaptureReader ? renderedInput : null;
         var importedOuterGroup = importCoordinates && initial is Step.Function { Value.Body: var importedBody }
             ? importedBody is RedirectedCommand rootRedirection ? rootRedirection.Body : importedBody : null;
         var functionDepth = 0;
@@ -305,7 +322,13 @@ internal static class FunctionDefinitionFormatter
                     }
                     else if (substitutionSource)
                     {
-                        if (pendingDocuments && !newline)
+                        if (pendingDocuments && reader != null && readerDepth == 0)
+                        {
+                            if (!FlushDocumentLine()) return false;
+                            reader.FinishUnit();
+                            if (!Append(newline ? "\n" : " ")) return false;
+                        }
+                        else if (pendingDocuments && !newline)
                         {
                             if (!FlushDocumentLine() || !Append(" ")) return false;
                         }
@@ -313,7 +336,12 @@ internal static class FunctionDefinitionFormatter
                         {
                             if (!WriteLine(indent, terminate: false)) return false;
                         }
-                        else if (!Append(newline ? "\n" : followsFlushedDocuments ? " " : "; ")) return false;
+                        else
+                        {
+                            if (!Append(newline ? "\n" : followsFlushedDocuments ? " " : "; ")) return false;
+                            if (newline && readerDepth == 0)
+                                reader?.FinishUnit();
+                        }
                     }
                     else if (!pendingDocuments)
                     {
@@ -520,6 +548,12 @@ internal static class FunctionDefinitionFormatter
                         new Step.Layout(indent + 4), new Step.Command(thenBody, indent + 4), new Step.Line(indent, Terminate: true));
                     break;
                 case Step.Command(var command, var indent) commandStep:
+                    if (reader != null && command is not ListCommand)
+                    {
+                        if (readerDepth++ == 0)
+                            reader.BeginCommand(command);
+                        PushStep(new Step.Location(command, LocationEdge.ReaderEnd));
+                    }
                     if (lines != null && command is not (ListCommand or NegatedCommand))
                         unitFirstCommand ??= command;
                     if (lines != null && locations?.TryGet(command, out var physical) == true)
@@ -916,6 +950,7 @@ internal static class FunctionDefinitionFormatter
 
         bool FlushHereDocuments()
         {
+            var documentStart = renderedInput is { InsideSubstitution: true } ? renderedInput.Length : -1;
             if (hereDocuments.Count != 0)
                 flushedHereDocuments = true;
             while (hereDocuments.TryDequeue(out var redirection))
@@ -925,6 +960,8 @@ internal static class FunctionDefinitionFormatter
                     ?? throw new InvalidOperationException("A here-document requires its delimiter syntax.");
                 if (!AppendHereDocumentDelimiterValue(redirection, delimiter, singleQuoted: false) || !Append("\n")) return false;
             }
+            if (documentStart >= 0 && renderedInput is { } input && input.Length != documentStart)
+                input.RecordDocumentLines(documentStart);
             return true;
         }
 
@@ -1107,6 +1144,26 @@ internal static class FunctionDefinitionFormatter
             next = position + parsed.Length;
             if (parsed.Substitution is CommandSubstitutionSyntax.Parsed { HasDiagnosticSpelling: true })
                 edits.AddCapture(context, start + position, start + next, parsed.Substitution);
+        }
+    }
+
+    /// <summary>Keeps multiline command boundaries for a rendered reader using existing lookahead syntax.</summary>
+    internal static IReadOnlyList<SpellingCapture>? RetainMultilineCaptures(ShellSource source, ShellScanContext context)
+    {
+        List<SpellingCapture>? retained = null;
+        var next = 0;
+        while (true)
+        {
+            var position = FindNextCapture(source, context, next, readAheadOnly: false, CancellationToken.None, out var parsed);
+            if (position < 0)
+                return retained;
+            next = position + parsed.Length;
+            if (parsed.Substitution is not CommandSubstitutionSyntax.Parsed { CanRenderBody: true, HasDecodedNulWord: false }
+                || !source.AsSpan(position, parsed.Length).Contains((byte)'\n'))
+                continue;
+            retained ??= [];
+            context.SyntaxMemory?.PrepareListCapacity(retained, 1);
+            retained.Add(new SpellingCapture(position, parsed.Length, parsed.Substitution));
         }
     }
 

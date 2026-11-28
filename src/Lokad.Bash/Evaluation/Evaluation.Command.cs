@@ -19,14 +19,15 @@ public sealed partial class Evaluation
         ICommand command,
         ScopedEvaluation scope,
         bool negated) =>
-        EvaluateCommandAsync(command, scope, negated, authoredReader: null, readerUnit: -1);
+        EvaluateCommandAsync(command, scope, negated, authoredReader: null, readerUnit: -1, renderedReader: null);
 
     private async Task<EvaluationResult> EvaluateCommandAsync(
         ICommand command,
         ScopedEvaluation scope,
         bool negated,
         ParsedScript.AuthoredReader? authoredReader,
-        int readerUnit)
+        int readerUnit,
+        ParsedScript? renderedReader)
     {
         // Async calls can all complete synchronously. Resume on a fresh stack
         // before nested functions/source/eval exhaust the embedding thread's stack.
@@ -55,7 +56,7 @@ public sealed partial class Evaluation
         using var activeLine = lineScope;
 
         // A script node owns a reader. It keeps parsing even when execution is disabled.
-        var ownsPreparedReader = authoredReader != null && readerUnit < 0;
+        var ownsPreparedReader = renderedReader != null || authoredReader != null && readerUnit < 0;
         var skipExecution = _state.NoExecEnabled && command is not ScriptCommand && !ownsPreparedReader;
         var captureEnvironment = !skipExecution && command is SimpleCommand or PipelineCommand
             && scope.Context.CaptureEnvironment is { CommandActive: false } environment ? environment : null;
@@ -284,66 +285,83 @@ public sealed partial class Evaluation
                 var unitScope = listScope;
                 var recoveredUnit = false;
                 var nextReaderUnit = 0;
-                for (var index = 0; index < traversal.Count; index++)
+                RenderedCaptureInput? renderedInput = null;
+                try
                 {
-                    CheckCancellation();
-                    var step = traversal[index];
-                    if (step.Command is ListCommand branch)
+                    for (var index = 0; index < traversal.Count; index++)
                     {
-                        if (!EvaluationRules.ShouldExecuteRight(branch.Operator, result.ExitCode))
-                            index = step.EndExclusive - 1;
-                        continue;
-                    }
+                        CheckCancellation();
+                        var step = traversal[index];
+                        if (step.Command is ListCommand branch)
+                        {
+                            if (!EvaluationRules.ShouldExecuteRight(branch.Operator, result.ExitCode))
+                                index = step.EndExclusive - 1;
+                            continue;
+                        }
 
-                    if (step.StartsCommandUnit)
-                    {
-                        if (!recoveredUnit && StopsAfterCommandUnit)
-                            break;
-                        recoveredUnit = false;
-                    }
-                    var unitReader = index == 0 || step.StartsCommandUnit ? authoredReader : null;
-                    if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
-                        unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
-                    else if (step.StartsReaderUnit)
-                        unitScope = BeginPreparedCommandUnit(unitScope, step.Command, beginsExecutionUnit: false);
-                    var currentScope = step.ErrexitIgnored
-                        ? unitScope with { Context = unitScope.Context.WithErrexitIgnored() } : unitScope;
-                    result = await EvaluateCommandAsync(step.Command, currentScope, negated: false, unitReader,
-                        unitReader != null ? nextReaderUnit++ : -1).ConfigureAwait(false);
-                    if (result.Flow != FlowControlKind.None)
-                    {
-                        var recoveryStatus = result.Flow == FlowControlKind.Exit && !result.DiscardsCommandUnit
-                            ? GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) : null;
-                        var resumeDiscard = result.DiscardsCommandUnit && _state.ForkKind == null;
-                        if (recoveryStatus == null && !resumeDiscard)
-                            return ApplyNegation(result, listNegated);
-                        while (index + 1 < traversal.Count && !traversal[index + 1].StartsCommandUnit)
+                        if (step.StartsCommandUnit)
                         {
-                            CheckCancellation();
-                            index++;
+                            if (!recoveredUnit && StopsAfterCommandUnit)
+                                break;
+                            recoveredUnit = false;
                         }
-                        if (index + 1 == traversal.Count)
-                            return ApplyNegation(result, listNegated);
-                        var adjustment = result.ReaderLineAdjustment(unitScope.Context.Coordinates.UnitReadLine);
-                        if (adjustment != 0)
+                        var unitReader = index == 0 || step.StartsCommandUnit ? authoredReader : null;
+                        if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
+                            unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
+                        else if (step.StartsReaderUnit)
+                            unitScope = BeginPreparedCommandUnit(unitScope, step.Command, beginsExecutionUnit: false);
+                        if (index != 0 && renderedReader != null && _state.HasOption(ShellOption.Verbose) && !GetStdErrDescriptor().IsClosed)
                         {
-                            var location = listScope.Context.Coordinates;
-                            listScope = listScope with
+                            if (renderedInput == null)
                             {
-                                Context = listScope.Context.WithCoordinates(location with { Offset = location.Offset + adjustment })
-                            };
+                                renderedInput = new RenderedCaptureInput(Memory.Budget);
+                                if (!FunctionDefinitionFormatter.TryAppendCaptureInput(renderedReader, renderedInput, CancellationToken))
+                                    throw new ByteMemoryBuilder.LimitExceededException();
+                                renderedInput.Complete();
+                            }
+                            if (renderedInput.TryGetUnit(step.Command, out var read))
+                                await WriteVerboseSourceAsync(renderedInput.Source, read, renderedInput.Spelling).ConfigureAwait(false);
                         }
-                        result = resumeDiscard
-                            ? await RecoverDiscardedCommandUnitAsync(listScope, result, listScope.InNestedCommandUnits).ConfigureAwait(false)
-                            : ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus.GetValueOrDefault(), listScope,
-                                loadedReader: false).ConfigureAwait(false), negated: false);
-                        recoveredUnit = true;
+                        var currentScope = step.ErrexitIgnored
+                            ? unitScope with { Context = unitScope.Context.WithErrexitIgnored() } : unitScope;
+                        result = await EvaluateCommandAsync(step.Command, currentScope, negated: false, unitReader,
+                            unitReader != null ? nextReaderUnit++ : -1, renderedReader: null).ConfigureAwait(false);
+                        if (result.Flow != FlowControlKind.None)
+                        {
+                            var recoveryStatus = result.Flow == FlowControlKind.Exit && !result.DiscardsCommandUnit
+                                ? GetRecoverableScriptExpansionStatus(ScriptExecutionKind.Root, listScope) : null;
+                            var resumeDiscard = result.DiscardsCommandUnit && _state.ForkKind == null;
+                            if (recoveryStatus == null && !resumeDiscard)
+                                return ApplyNegation(result, listNegated);
+                            while (index + 1 < traversal.Count && !traversal[index + 1].StartsCommandUnit)
+                            {
+                                CheckCancellation();
+                                index++;
+                            }
+                            if (index + 1 == traversal.Count)
+                                return ApplyNegation(result, listNegated);
+                            var adjustment = result.ReaderLineAdjustment(unitScope.Context.Coordinates.UnitReadLine);
+                            if (adjustment != 0)
+                            {
+                                var location = listScope.Context.Coordinates;
+                                listScope = listScope with
+                                {
+                                    Context = listScope.Context.WithCoordinates(location with { Offset = location.Offset + adjustment })
+                                };
+                            }
+                            result = resumeDiscard
+                                ? await RecoverDiscardedCommandUnitAsync(listScope, result, listScope.InNestedCommandUnits).ConfigureAwait(false)
+                                : ApplyNegation(await RecoverExpansionFailureAsync(recoveryStatus.GetValueOrDefault(), listScope,
+                                    loadedReader: false).ConfigureAwait(false), negated: false);
+                            recoveredUnit = true;
+                        }
                     }
+                    if (authoredReader != null && !StopsAfterCommandUnit)
+                        await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.TrailingInput,
+                            authoredReader.Spelling).ConfigureAwait(false);
+                    return ApplyNegation(result, listNegated);
                 }
-                if (authoredReader != null && !StopsAfterCommandUnit)
-                    await WriteVerboseSourceAsync(authoredReader.Source, authoredReader.TrailingInput,
-                        authoredReader.Spelling).ConfigureAwait(false);
-                return ApplyNegation(result, listNegated);
+                finally { renderedInput?.Dispose(); }
             }
         }
     }

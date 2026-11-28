@@ -690,7 +690,8 @@ public sealed partial class Evaluation : IFileTester
         {
             CheckCancellation();
             var result = await EvaluateCommandAsync(command, scope, negated: false, authoredReader,
-                readerUnit: command is ListCommand ? -1 : 0)
+                readerUnit: command is ListCommand ? -1 : 0,
+                renderedReader: _captureUsesRenderedReader && script.RenderedLineBreaks != 0 && command is ListCommand ? script : null)
                 .ConfigureAwait(false);
             var completedUnit = result.Flow == FlowControlKind.None;
 
