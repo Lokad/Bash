@@ -34,6 +34,46 @@ public sealed class DescriptorReferenceTests
         }
     }
 
+    [Fact]
+    public void RevertingOneHandleKeepsOtherPendingDeltasAddressable()
+    {
+        var first = new LogicalDescriptor(10);
+        var second = new LogicalDescriptor(11);
+        var third = new LogicalDescriptor(12);
+        var original = new FileDescriptor(40);
+        var shared = new FileDescriptor(41);
+        var temporary = new FileDescriptor(42);
+        var replacement = new FileDescriptor(43);
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+        bindings.Set(first, original);
+        bindings.Set(second, shared);
+        bindings.Set(third, shared);
+        var saved = bindings.Capture().Fork();
+
+        bindings.Set(first, temporary);
+        bindings.Set(second, replacement);
+        bindings.Set(first, original);
+        Assert.False(bindings.References(temporary));
+        Assert.True(bindings.References(shared));
+        Assert.True(bindings.References(replacement));
+
+        // The two surviving delta entries were moved when the first pair was removed.
+        bindings.Set(third, replacement);
+        Assert.False(bindings.References(shared));
+        bindings.Set(second, shared);
+        Assert.True(bindings.References(replacement));
+        bindings.Set(third, shared);
+        Assert.Empty(Changes(bindings));
+
+        bindings.Set(third, replacement);
+        var captured = bindings.Capture().Fork();
+        Assert.Equal(shared, captured.Resolve(second));
+        Assert.Equal(replacement, captured.Resolve(third));
+        Assert.True(captured.References(replacement));
+        Assert.Equal(shared, saved.Resolve(third));
+        Assert.False(saved.References(replacement));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

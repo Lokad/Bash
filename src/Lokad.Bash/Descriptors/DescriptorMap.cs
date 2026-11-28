@@ -96,19 +96,18 @@ internal sealed class DescriptorMap
 
         internal bool ContainsKey(LogicalDescriptor descriptor) => _positions.ContainsKey(descriptor);
 
-        internal bool ContainsValue(FileDescriptor handle) => ReferenceCount(handle) != 0;
-
-        private int ReferenceCount(FileDescriptor handle) =>
-            _referenceChanges.TryGetValue(handle, out var changed) ? changed.Count
-                : _references.TryGetValue(handle, out var count) ? count : 0;
+        internal bool ContainsValue(FileDescriptor handle) =>
+            _referenceChanges.TryGetValue(handle, out var changed) ? changed.Count != 0
+                : _references.TryGetValue(handle, out var count) && count != 0;
 
         private void ChangeReferences(FileDescriptor handle, int difference)
         {
-            var count = checked(ReferenceCount(handle) + difference);
+            var hasChange = _referenceChanges.TryGetValue(handle, out var previous);
             _references.TryGetValue(handle, out var baseline);
+            var count = checked((hasChange ? previous.Count : baseline) + difference);
             if (count == baseline)
                 RemoveReferenceChange(handle);
-            else if (_referenceChanges.TryGetValue(handle, out var previous))
+            else if (hasChange)
                 _referenceChanges[handle] = (count, previous.Position);
             else
             {
