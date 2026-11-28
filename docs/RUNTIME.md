@@ -377,13 +377,18 @@ Errexit is shell state. Execution context records whether a status is tested and
 carries that context through functions, groups, source/eval and child evaluations.
 Compound commands preserve the tested origin of their final status; simple
 invocations expose a fresh status. Early exit follows the ordinary EXIT-trap and
-descriptor cleanup path. Command substitutions clear errexit on entry, while
-subshells and pipeline stages inherit it.
-The `local -` operand saves errexit on the active function invocation, including
-when it is reached through eval or source. Normal return and expansion failure
+descriptor cleanup path. Command substitutions clear errexit on entry by
+default and inherit it when `inherit_errexit` is enabled. Subshells and
+pipeline stages inherit it directly.
+The `local -` operand saves errexit and its inheritance setting on the active
+function invocation, including when reached through eval or source.
+Normal return and expansion failure
 unwind the snapshot. A terminating exit or errexit lets the EXIT action see the
 active option state. A child evaluation forks the function frames and their
 snapshots alongside the ordinary shell state.
+`localvar_inherit` selects the existing inherited-declaration path during
+operand preparation and dispatch. It belongs to the shell state and persists
+on ordinary function return.
 
 Loop flow is settled at the loop that owns its remaining level. In while/until
 conditions, the condition gate precedes body suppression: a closed gate retains

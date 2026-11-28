@@ -388,6 +388,8 @@ internal sealed class EvaluationState
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
     public bool ErrexitEnabled { get; set; }
+    internal bool InheritErrexit { get; set; }
+    internal bool LocalVariableInheritance { get; set; }
     internal bool UsesCommandStringExpansionExit { get; set; }
     internal LaunchEnvironment CommandLaunchEnvironment { get; private set; }
     internal enum LaunchEnvironment { Ordinary, Pipeline, Parenthesized }
@@ -798,7 +800,9 @@ internal sealed class EvaluationState
             // The parent command remains alive through the child's execution and cleanup.
             PreparationDiagnosticName = PreparationDiagnosticName,
             FunctionBraceLine = FunctionBraceLine,
-            ErrexitEnabled = kind != ShellForkKind.CommandSubstitution && ErrexitEnabled,
+            ErrexitEnabled = ErrexitEnabled && (kind != ShellForkKind.CommandSubstitution || InheritErrexit),
+            InheritErrexit = InheritErrexit,
+            LocalVariableInheritance = LocalVariableInheritance,
             UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,

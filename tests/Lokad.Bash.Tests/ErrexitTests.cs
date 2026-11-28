@@ -43,6 +43,66 @@ public sealed class ErrexitTests
         Assert.Empty(host.StandardError.Content.ToArray());
     }
 
+    [Fact]
+    public async Task ShoptReportsReachedStateAndProcessesLaterNamesAfterAnError()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            shopt -s localvar_inherit invalid_test_option inherit_errexit
+            printf 'set:%s\n' "$?"
+            shopt -p localvar_inherit invalid_test_option inherit_errexit 2>&1
+            printf 'query:%s\n' "$?"
+            shopt -u localvar_inherit
+            shopt -pq localvar_inherit
+            printf 'quiet:%s\n' "$?"
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("set:1\nshopt -s localvar_inherit\n"
+            + "line 3: shopt: invalid_test_option: invalid shell option name\n"
+            + "shopt -s inherit_errexit\nquery:1\nquiet:1\n", host.StandardOutput.TextContent);
+        Assert.Equal("line 1: shopt: invalid_test_option: invalid shell option name\n", host.StandardError.TextContent);
+    }
+
+    [Theory]
+    [InlineData("printf 'capture:%s\\n' \"$(printf before; false; printf after)\"", 0, "capture:before\nouter\n")]
+    [InlineData("row=$(false; printf after)", 1, "")]
+    [InlineData("if row=$(false; printf after); then printf 'value:%s\\n' \"$row\"; fi", 0, "value:after\nouter\n")]
+    public async Task InheritErrexitRespectsTheCapturesReachedStatusContext(string capture, int status, string output)
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("set -e\nshopt -s inherit_errexit\n" + capture + "\nprintf 'outer\\n'\n",
+            CancellationToken.None);
+
+        Assert.Equal(status, result.ExitCode);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task LocalDashRestoresTheFirstErrexitInheritanceSetting()
+    {
+        await using var host = new TestHost();
+        var result = await host.RunAsync("""
+            shopt -s inherit_errexit
+            f() {
+                local -
+                shopt -u inherit_errexit
+                local -
+                shopt -s localvar_inherit
+                shopt -p inherit_errexit
+            }
+            f
+            shopt -p inherit_errexit localvar_inherit
+            """, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("shopt -u inherit_errexit\nshopt -s inherit_errexit\nshopt -s localvar_inherit\n",
+            host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
     [Theory]
     [InlineData('-', "+e", "errexit\toff\n", "errexit\ton\n", "e")]
     [InlineData('+', "-e", "set -o errexit\n", "set +o errexit\n", "")]

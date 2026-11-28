@@ -895,7 +895,8 @@ the scan, with following operands becoming positional parameters. `--` replaces
 the parameters even when no operands follow. Errexit stops unhandled failures,
 including failed pipelines under the fixed pipefail policy. Tested conditions, logical-list
 positions and negation suppress it through nested functions/groups and source/eval.
-Command substitution clears errexit by default; parenthesized subshells inherit it.
+Command substitution clears errexit by default. It inherits the setting
+with `shopt -s inherit_errexit`. Parenthesized subshells inherit it directly.
 `$-` and `${-}` expose the supported mutable flags. `set -o`/`set +o` inspect
 errexit only; other option changes return an error with a diagnostic.
 Downstream closure stops inspection output and diagnostics routed to the
@@ -912,6 +913,14 @@ when applying options. An unknown short flag reports its sign and byte
 followed by usage. It returns status 2 during validation or status 1
 during application, preserving any changes already applied. After `-`,
 `--`, or the first positional operand, `--help` is a positional argument.
+
+`shopt` inspects and changes `inherit_errexit` and `localvar_inherit`.
+`-p` prints reusable settings and `-q` suppresses listing output.
+Named queries return status 1 if a selected option is off or unrecognized.
+`-s` and `-u` with names set and unset the reached options. Without names
+they list enabled and disabled options respectively. `-o` selects the
+`set` option namespace. That namespace exposes the mutable `errexit`
+setting and the fixed `braceexpand` and `pipefail` settings.
 `$_` holds the last expanded argument of a completed simple command. A command
 without arguments records its name, and a command with only assignments or
 redirections records an empty value. Word and redirection expansion can read the
@@ -1011,9 +1020,12 @@ preparation and can then report the stored element spelling as an
 invalid identifier. A source integer or case flag prepares the reached
 array and its attribute without selecting the stored index or key.
 
-Inside a function, `local -` saves the active mutable option state. The function
-restores it on return. A second `local -` keeps the first snapshot, as in the
+Inside a function, `local -` saves `errexit` and `inherit_errexit` and restores
+them on return. A second `local -` keeps the first snapshot, as in the
 pinned Bash 5.2.37 build. `local -p -` inspects the current function's snapshot.
+`localvar_inherit` persists across a function return. While enabled, new
+function-local declarations inherit the outer binding's value and applicable
+attributes through the same path as `local -I`.
 Inside a function, `local -g` applies a declaration to the global binding.
 Named `local -p` still inspects the current function's local binding.
 A parser-recognized compound initializer takes its scope, array kind and

@@ -109,8 +109,11 @@ public sealed partial class Evaluation
         }
         finally
         {
-            if (!preserveExitOptions && functionContext.SavedErrexit is { } savedErrexit)
-                _state.ErrexitEnabled = savedErrexit;
+            if (!preserveExitOptions && functionContext.SavedOptions is { } saved)
+            {
+                _state.ErrexitEnabled = saved.Errexit;
+                _state.InheritErrexit = saved.InheritErrexit;
+            }
             functionContext.Locals.Restore();
         }
 

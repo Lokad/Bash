@@ -6,6 +6,39 @@ namespace Lokad.Bash.Tests.EndToEnd;
 
 public sealed class EvaluationFunctionTestsEndToEnd
 {
+    [Fact]
+    public async Task ShoptLocalInheritanceCopiesValuesAndAttributesIntoTheNewLocal()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            declare -iu amount=9
+            f() { local amount+=2; declare -p amount; }
+            shopt -s localvar_inherit
+            f
+            shopt -u localvar_inherit
+            f
+            declare -p amount
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -iu amount=\"11\"\ndeclare -- amount=\"2\"\ndeclare -iu amount=\"9\"\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
+    [InlineData("local -a slot", "declare -a slot\n")]
+    [InlineData("local -A slot", "declare -A slot\n")]
+    [InlineData("local slot=([120]=prior)", "declare -a slot=([120]=\"prior\")\n")]
+    [InlineData("init='slot=([120]=prior)'; local -a \"$init\"", "declare -a slot=([120]=\"prior\")\n")]
+    public async Task ShoptLocalInheritanceConvertsAnUnsetReferenceIntoAnOrdinaryArray(string declaration, string output)
+    {
+        var result = await EvaluationTestHelper.RunAsync("shopt -s localvar_inherit\n"
+            + "f() { local -n slot; " + declaration + "; declare -p slot; }\nf");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(output, result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
     [Theory]
     [InlineData("f() printf wrong")]
     [InlineData("function f x=wrong")]

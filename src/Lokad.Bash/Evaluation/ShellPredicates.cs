@@ -120,8 +120,14 @@ internal static class ShellPredicates
     };
 
     internal static bool IsOptionEnabled(ReadOnlySpan<byte> name, bool errexitEnabled) =>
-        name.SequenceEqual("pipefail"u8) || name.SequenceEqual("braceexpand"u8)
-        || errexitEnabled && name.SequenceEqual("errexit"u8);
+        GetOptionState(name, errexitEnabled) == true;
+
+    internal static bool? GetOptionState(ReadOnlySpan<byte> name, bool errexitEnabled) => name switch
+    {
+        _ when name.SequenceEqual("pipefail"u8) || name.SequenceEqual("braceexpand"u8) => true,
+        _ when name.SequenceEqual("errexit"u8) => errexitEnabled,
+        _ => null
+    };
 
     private static (char, char, char) AsciiToken<T>(ReadOnlySpan<T> token) where T : IBinaryInteger<T>
     {

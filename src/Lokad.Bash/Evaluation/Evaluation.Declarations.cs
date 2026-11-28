@@ -54,7 +54,7 @@ public sealed partial class Evaluation
                     var globalInFunction = compoundGlobal && scope.Context.FunctionContext != null;
                     var setCompoundTransforms = compoundAttributeSign != (byte)'+'
                         || compoundGlobal || compoundArrayKind != ArrayAssignmentKind.Auto;
-                    var inherit = compoundInherit && setCompoundTransforms;
+                    var inherit = compoundInherit && setCompoundTransforms || local && _state.LocalVariableInheritance;
                     var existingLocal = scope.Context.FunctionContext?.Locals.Declares(declaredName) == true;
                     VariableReference? literalTarget = null;
                     BindingName literalName = default;
@@ -261,7 +261,7 @@ public sealed partial class Evaluation
                     var appliedItems = await AwaitWordExpansionAsync(ApplyCompoundArrayItemsAsync(
                             name, assignment.Operator, kind, expanded, scope, scope, targetVariables, declaredName,
                             initializeReadonly: initializesReadonlyNameref, retainArrayNameref: retainsArrayNameref)).ConfigureAwait(false);
-                    if (initializesLocalNameref && targetVariables.GetArrayMetadata(name) != null)
+                    if (initializesLocalNameref && !_state.LocalVariableInheritance && targetVariables.GetArrayMetadata(name) != null)
                     {
                         // The array keeps its cells and carries the nameref attribute on the same slot.
                         targetVariables.UpdateBindingAttributes(name, BindingAttributes.ArrayNameref, BindingAttributes.None);

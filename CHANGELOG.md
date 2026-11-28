@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Support `shopt` inspection and changes for `inherit_errexit` and
+  `localvar_inherit`. Command substitutions and local declarations use
+  the reached option state.
+
 - Expose the active call stack through `BASH_SOURCE`, `BASH_LINENO` and
   `FUNCNAME`. In named files and inherited command strings, `caller`
   reports the call site's line and enclosing source, with the function

@@ -1377,7 +1377,7 @@ public sealed partial class Evaluation : IFileTester
                 or BuiltinKind.Set or BuiltinKind.Source or BuiltinKind.Getopts or BuiltinKind.Eval or BuiltinKind.Let
                 or BuiltinKind.Read or BuiltinKind.Mapfile or BuiltinKind.Unset or BuiltinKind.Return or BuiltinKind.Trap or BuiltinKind.Test
                 or BuiltinKind.Exit or BuiltinKind.Break or BuiltinKind.Continue or BuiltinKind.Cd or BuiltinKind.Shift
-                or BuiltinKind.Dirs or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller)
+                or BuiltinKind.Dirs or BuiltinKind.Pushd or BuiltinKind.Popd or BuiltinKind.Caller or BuiltinKind.Shopt)
             {
                 var operands = new List<ShellValue>();
                 if (kind is not null and not BuiltinKind.Printf and not BuiltinKind.Echo)
@@ -1850,6 +1850,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Set when byteOperands.Count == 1 => await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
                         new DeclarationOptions(BuiltinKind.Set), [], commandVars, bindings, builtinScope, false)).ConfigureAwait(false),
                     BuiltinKind.Set => await EvaluateBuiltinSetAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
+                    BuiltinKind.Shopt => await EvaluateBuiltinShoptAsync(byteOperands, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Unset => await AwaitWordExpansionAsync(EvaluateBuiltinUnsetAsync(byteOperands, commandVars, builtinScope, bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Eval or BuiltinKind.Source => await EvaluateBuiltinScriptingAsync(evaluatorBuiltin.Kind,
                         commandName, byteOperands, builtinScope with
@@ -2267,6 +2268,7 @@ public sealed partial class Evaluation : IFileTester
             var executionScope = declarationScope with { Variables = commandVars };
             var functionContext = declarationScope.Context.FunctionContext;
             var localBuiltinFrame = options.Builtin == BuiltinKind.Local ? functionContext : null;
+            var inheritLocals = options.Inherit || _state.LocalVariableInheritance;
             var skipReadonlyAttribute = options.Builtin == BuiltinKind.Readonly && !options.Readonly;
             var missingLocalScope = options.Builtin == BuiltinKind.Local && localBuiltinFrame == null;
             if (options.Help == DeclarationHelp.FirstField || options.Help == DeclarationHelp.AfterOptions && !missingLocalScope)
@@ -2880,7 +2882,7 @@ public sealed partial class Evaluation : IFileTester
                     {
                         var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
                         if (arrayFunction.Locals.TryDeclare(declarationScope.Variables, targetVars, declaration, prefixNames,
-                                arrayKind, isNameref: false, options.Inherit, caseChange: default,
+                                arrayKind, isNameref: false, inheritLocals, caseChange: default,
                                 elementAttributes: default, Memory, arrayFunction.Enclosing) == LocalDeclarationResult.Declared)
                             await DiagnoseAsync(name, NamerefArrayError).ConfigureAwait(false);
                         else
@@ -2890,10 +2892,13 @@ public sealed partial class Evaluation : IFileTester
                     if (reachedArrayTarget.IsUnsetNameref || setsNameref)
                     {
                         var readonlySource = targetVars.IsReadonlyBinding(name);
-                        var invalidValue = !setsNameref && operand.Value is { } proposedValue
+                        var convertsUnsetReference = _state.LocalVariableInheritance
+                            && reachedArrayTarget.IsUnsetNameref && !setsNameref;
+                        var invalidValue = !convertsUnsetReference && !setsNameref && operand.Value is { } proposedValue
                             && !VariableReference.TryParseNamerefTarget(proposedValue, Memory, out _);
                         var applyAttributes = !setsNameref && !readonlySource && !invalidValue && !conflictingArrayKinds;
-                        completesLocalNamerefArray = applyAttributes && kind == ArrayKind.Associative && operand.Value.HasValue;
+                        completesLocalNamerefArray = applyAttributes
+                            && (convertsUnsetReference || kind == ArrayKind.Associative && operand.Value.HasValue);
                         arrayFunction.Locals.PrepareNamerefArray(targetVars, name, kind,
                             initialized: !sourceReference.IsEmpty, retainNameref: !completesLocalNamerefArray,
                             applyAttributes && !completesLocalNamerefArray ? GetAttributeChanges(assignmentExport) : default, Memory);
@@ -3231,7 +3236,7 @@ public sealed partial class Evaluation : IFileTester
                     if (local && !existingLocal && functionContext is { } function
                         && function.Locals.TryDeclare(declarationScope.Variables, targetVars,
                             new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty), prefixNames,
-                            ArrayAssignmentKind.Auto, isNameref: false, options.Inherit, options.CaseChange,
+                            ArrayAssignmentKind.Auto, isNameref: false, inheritLocals, options.CaseChange,
                             elementAttributes: default, Memory, function.Enclosing) != LocalDeclarationResult.Declared)
                     {
                         await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
@@ -3384,7 +3389,7 @@ public sealed partial class Evaluation : IFileTester
                     var localOperand = new VariableOperand(
                         hasReferenceValue ? VariableOperandKind.Assignment : VariableOperandKind.Name,
                         reference, hasReferenceValue ? namerefTarget ?? localValue : ShellValue.Empty);
-                    var checkInheritedReadonly = !existingTargetLocal && options.Inherit
+                    var checkInheritedReadonly = !existingTargetLocal && inheritLocals
                         && (operand.Value != null || options.ReadonlyChange == DeclarationAttributeChange.Clear);
                     var inheritedReadonly = checkInheritedReadonly && targetVars.IsReadonlyBinding(localDeclarationTarget);
                     var localCaseChange = inheritedReadonly || setsNameref && arrayKind != ArrayAssignmentKind.Auto
@@ -3393,7 +3398,7 @@ public sealed partial class Evaluation : IFileTester
                         ? GetAttributeChanges(assignmentExport) : default;
                     var localArrayKind = mixedArrayKind == ArrayAssignmentKind.Auto ? arrayKind : mixedArrayKind;
                     var declarationResult = localFunction.Locals.TryDeclare(declarationScope.Variables, targetVars,
-                            localOperand, prefixNames, localArrayKind, options.Nameref, options.Inherit, localCaseChange,
+                            localOperand, prefixNames, localArrayKind, options.Nameref, inheritLocals, localCaseChange,
                             elementAttributes, Memory, localFunction.Enclosing);
                     if (declarationResult != LocalDeclarationResult.Declared)
                     {
@@ -3414,7 +3419,7 @@ public sealed partial class Evaluation : IFileTester
                         {
                             var message = localArrayKind == ArrayAssignmentKind.Auto ? "invalid local declaration"
                                 : ArrayConversionMessage(localArrayKind == ArrayAssignmentKind.Associative ? ArrayKind.Associative : ArrayKind.Indexed);
-                            await DiagnoseAsync(kindConflict && options.Inherit ? sourceName : declarationName, message)
+                            await DiagnoseAsync(kindConflict && inheritLocals ? sourceName : declarationName, message)
                                 .ConfigureAwait(false);
                         }
                         continue;
@@ -4146,7 +4151,7 @@ public sealed partial class Evaluation : IFileTester
                             return null;
                         var declaration = new VariableOperand(VariableOperandKind.Name, VariableReference.ForName(name), ShellValue.Empty);
                         var declarationResult = function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration, prefixNames,
-                                requested, isNameref: false, options.Inherit, caseChange: default, elementAttributes: default,
+                                requested, isNameref: false, inheritLocals, caseChange: default, elementAttributes: default,
                                 Memory, function.Enclosing);
                         if (declarationResult == LocalDeclarationResult.Declared)
                             await ApplyAttributesAsync(name, commandVars, global: false, local: true, options.ExportChange)
@@ -4338,7 +4343,7 @@ public sealed partial class Evaluation : IFileTester
                 var declaration = new VariableOperand(VariableOperandKind.Name, reference, ShellValue.Empty);
                 var attributes = setsNameref || conflictingArrayKinds ? default : GetAttributeChanges(options.ExportChange);
                 if (prepareTarget && function.Locals.TryDeclare(declarationScope.Variables, commandVars, declaration,
-                        prefixNames, options.ArrayKind, isNameref: false, options.Inherit, caseChange: default,
+                        prefixNames, options.ArrayKind, isNameref: false, inheritLocals, caseChange: default,
                         attributes, Memory, function.Enclosing) != LocalDeclarationResult.Declared)
                     await DiagnoseReadonlyAsync(name).ConfigureAwait(false);
                 else if (setsNameref)
@@ -4582,7 +4587,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 if (localBuiltinFrame == null || !operand.Bytes.Span.SequenceEqual("-"u8))
                     return false;
-                localBuiltinFrame.SaveErrexit(_state.ErrexitEnabled);
+                localBuiltinFrame.SaveOptions(_state.ErrexitEnabled, _state.InheritErrexit);
                 return true;
             }
 
@@ -7749,7 +7754,7 @@ public sealed partial class Evaluation : IFileTester
         public HashSet<BindingName> PromotedNames { get; } = new();
 
         /// <summary>The supported option state saved by the first local dash operand in this invocation.</summary>
-        internal bool? SavedErrexit { get; private set; }
+        internal (bool Errexit, bool InheritErrexit)? SavedOptions { get; private set; }
 
         internal FunctionContext InvocationOwner
         {
@@ -7763,14 +7768,14 @@ public sealed partial class Evaluation : IFileTester
             }
         }
 
-        internal void SaveErrexit(bool enabled) => InvocationOwner.SavedErrexit ??= enabled;
+        internal void SaveOptions(bool errexit, bool inheritErrexit) => InvocationOwner.SavedOptions ??= (errexit, inheritErrexit);
 
-        internal bool HasOwnOptionSnapshot => InvocationOwner.SavedErrexit.HasValue;
+        internal bool HasOwnOptionSnapshot => InvocationOwner.SavedOptions.HasValue;
 
         internal bool HasVisibleOptionSnapshot()
         {
             for (FunctionContext? frame = this; frame != null; frame = frame.Enclosing)
-                if (frame.SavedErrexit.HasValue)
+                if (frame.SavedOptions.HasValue)
                     return true;
             return false;
         }
@@ -7795,7 +7800,7 @@ public sealed partial class Evaluation : IFileTester
                 PrefixBindings = callPrefixes,
                 CallerPositionals = CallerPositionals,
                 CallerSourceMemory = CallerSourceMemory,
-                SavedErrexit = SavedErrexit
+                SavedOptions = SavedOptions
             };
         }
 
