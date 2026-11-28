@@ -168,6 +168,7 @@ public sealed partial class Evaluation : IFileTester
         _vars.GetoptsPosition = GetoptsCursor.AtArgument(1);
         _vars.TrySetScalar("OPTERR", one);
         _vars.InitializeLineNumber();
+        _vars.InitializeArgumentZero();
     }
 
     /// <summary>Forks bindings and shell state; descriptors stay borrowed and live memory shares the caller's allowance.</summary>

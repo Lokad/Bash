@@ -283,11 +283,15 @@ internal static partial class WordExpansion
                         if (!elementNameref && assignmentSource is { Kind: VariableReferenceKind.Name } named)
                         {
                             var resolved = scope.Variables.ResolveNamerefName(named.Name);
-                            if (scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
+                            var assignsArgumentZero = scope.Variables.IsDynamicArgumentZero(resolved);
+                            if (!assignsArgumentZero && scope.Variables.IsIntegerBinding(resolved) && !scope.Variables.IsReadonly(resolved))
                                 assigned = await EvaluateIntegerAssignmentAsync(expanded, null, scope, ShellValue.Empty).ConfigureAwait(false);
                             if (assigned is { } value && scope.CanExpand)
                                 assigned = !named.Name.IsEmpty && !scope.Variables.IsReadonlyWriteTarget(named.Name, out var writableBinding)
                                     ? TrySetWritableVariable(named.Name, writableBinding, value, scope) : null;
+                            // Bash installs the default but expands the previously empty dynamic value.
+                            if (assignsArgumentZero && assigned.HasValue)
+                                assigned = ShellValue.Empty;
                         }
                         else if (target != null && parameter.Source is { } source)
                         {

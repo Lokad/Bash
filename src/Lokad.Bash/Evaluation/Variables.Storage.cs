@@ -57,9 +57,12 @@ public sealed partial class Variables
         public bool HasNamerefAttribute => this is NamerefSlot || IsArrayNameref;
 
         /// <summary>Copies mutable containers and attributes, sharing only immutable name/value bytes.</summary>
-        public VariableSlot Clone()
+        public VariableSlot Clone() => Clone(argumentZeroOwner: null);
+
+        public VariableSlot Clone(Variables? argumentZeroOwner)
         {
-            var copy = CloneValue();
+            var copy = this is ArgumentZeroSlot && argumentZeroOwner != null
+                ? new ArgumentZeroSlot(argumentZeroOwner) : CloneValue();
             copy.Attributes = Attributes;
             return copy;
         }
@@ -111,6 +114,18 @@ public sealed partial class Variables
         }
 
         protected override VariableSlot CloneValue() => new LineNumberSlot(Line);
+    }
+
+    /// <summary>Projects the owning shell's name through a visible or saved binding.</summary>
+    private sealed class ArgumentZeroSlot(Variables shell) : ScalarSlot(ShellValue.Empty)
+    {
+        public override ShellValue Value
+        {
+            get => shell.ArgumentZero;
+            set => shell.ArgumentZero = value;
+        }
+
+        protected override VariableSlot CloneValue() => new ArgumentZeroSlot(shell);
     }
 
     private sealed class IndexedSlot(IndexedArray value) : VariableSlot
@@ -261,6 +276,7 @@ public sealed partial class Variables
         foreach (var (name, slot) in EnumerateBindings())
         {
             if (slot is not AttributeSlot
+                && (slot is not ArgumentZeroSlot || attributes != BindingAttributes.None)
                 && (!filters.HasFlag(DeclarationListingAttributes.Indexed) || slot is IndexedSlot)
                 && (!filters.HasFlag(DeclarationListingAttributes.Associative) || slot is AssociativeSlot)
                 && (attributes == BindingAttributes.None || (slot.Attributes & attributes) != 0

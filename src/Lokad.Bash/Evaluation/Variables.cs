@@ -48,6 +48,7 @@ public sealed partial class Variables
     private const int PositionalEntryBytes = 32;
     internal static readonly BindingName LastArgumentName = "_";
     private static readonly BindingName LineNumberName = "LINENO";
+    private static readonly BindingName ArgumentZeroName = "BASH_ARGV0";
 
     /// <summary>Retains an assigned spelling even when it does not parse as a reference.</summary>
     private readonly record struct NamerefTarget(ShellValue? AssignedValue, VariableReference? Reference, BindingName? LiteralName)
@@ -78,7 +79,9 @@ public sealed partial class Variables
             // The command source already owns borrowed positional/name/IFS bytes. Include it
             // for full child-snapshot admission, without charging that borrowed frame twice.
             var inherited = _commandSource?.Variables.EstimatedMemoryBytes
-                ?? checked(PositionalMemoryBytes + EstimateValueBytes(_argumentZero));
+                ?? PositionalMemoryBytes;
+            if (_commandSource is null || !_argumentZero.Bytes.Equals(_commandSource.Variables._argumentZero.Bytes))
+                inherited = checked(inherited + EstimateValueBytes(_argumentZero));
             var separators = _commandSource is { } source
                 && ReferenceEquals(CachedFieldSeparators, source.Variables.CachedFieldSeparators)
                     ? 0 : CachedFieldSeparators.EstimatedMemoryBytes;
@@ -105,6 +108,7 @@ public sealed partial class Variables
         return overhead + (slot switch
         {
             LineNumberSlot => EstimateValueBytes(11),
+            ArgumentZeroSlot => 0, // The shell retains the name independently of its binding.
             ScalarSlot scalar => EstimateValueBytes(scalar.Value),
             IndexedSlot indexed => indexed.Value.EstimatedMemoryBytes,
             AssociativeSlot associative => associative.Value.EstimatedMemoryBytes,
@@ -114,6 +118,11 @@ public sealed partial class Variables
     }
 
     internal void InitializeLineNumber() => StoreBinding(LineNumberName, new LineNumberSlot(1));
+
+    internal void InitializeArgumentZero() => StoreBinding(ArgumentZeroName, new ArgumentZeroSlot(this));
+
+    internal bool IsDynamicArgumentZero(BindingName name) => name == ArgumentZeroName
+        && TryGetBinding(name, detachBorrowed: false, out var slot) && slot is ArgumentZeroSlot;
 
     internal LineNumberScope EnterLineNumber(int line)
     {
@@ -308,12 +317,14 @@ public sealed partial class Variables
     /// Used for child evaluation and explicit snapshots. Prefix preparation detaches reached bindings instead.
     /// Caller-side expansion effects are handled by ScopedEvaluation, not inferred from clone differences.
     /// </summary>
-    public Variables Clone()
+    public Variables Clone() => Clone(argumentZeroOwner: null);
+
+    private Variables Clone(Variables? argumentZeroOwner)
     {
         var clone = new Variables();
         clone.CachedFieldSeparators = CachedFieldSeparators;
         foreach (var entry in EnumerateBindings())
-            clone.StoreBinding(entry.Key, entry.Value.Clone());
+            clone.StoreBinding(entry.Key, entry.Value.Clone(argumentZeroOwner ?? clone));
         clone._indexedIfs = _indexedIfs;
         clone._deferFieldSeparators = _deferFieldSeparators;
         clone._positional = _positional.CopyActiveValues();
@@ -392,7 +403,7 @@ public sealed partial class Variables
             _owner = owner;
             _prefixes = new HashSet<BindingName>(source._prefixes);
             _ownsPrefixNames = true;
-            _saved = source._saved.Clone();
+            _saved = source._saved.Clone(argumentZeroOwner: owner);
             _functionGetoptsPrefix = source._functionGetoptsPrefix;
             // Child contexts never restore the caller's pending output assignments.
             _retained = new Variables();
@@ -597,7 +608,7 @@ public sealed partial class Variables
                 _retainedCopyCapacity = required;
             }
             cancellationToken.ThrowIfCancellationRequested();
-            _retained.CopyBindingFrom(source, name, borrowedCopyAdmitted: true);
+            _retained.CopyBindingFrom(source, name, borrowedCopyAdmitted: true, argumentZeroOwner: null);
         }
 
         public void Dispose()
@@ -863,6 +874,7 @@ public sealed partial class Variables
             }
 
             var updated = command;
+            ArgumentZeroSlot? argumentZeroAssignment = null;
             if (declarationOwner._names.Contains(name))
             {
                 // A helper can unset this local without ending its namespace. An explicit
@@ -891,7 +903,7 @@ public sealed partial class Variables
                 if (inherited != null)
                 {
                     memory.Charge(inherited.EstimateBindingBytes(name));
-                    local.CopyBindingFrom(inherited, name, borrowedCopyAdmitted: true);
+                    local.CopyBindingFrom(inherited, name, borrowedCopyAdmitted: true, argumentZeroOwner: null);
                     if (inherit)
                         local.ResetGetoptsPosition(name);
                     if ((inherit || command.IsTemporaryBinding(name))
@@ -946,6 +958,9 @@ public sealed partial class Variables
                 active.CopyBindingFrom(command, name);
             if (declarationOwner.IsScriptPrefix(name))
                 declarationOwner._declaredPrefixes.Add(name);
+            // An inherited dynamic local can write the shell name after its binding is published.
+            if (argumentZeroAssignment != null)
+                argumentZeroAssignment.Value = operand.Value;
             return LocalDeclarationResult.Declared;
 
             LocalDeclarationResult TryUpdateBinding(Variables variables)
@@ -997,7 +1012,11 @@ public sealed partial class Variables
                 var index = reference.Kind == VariableReferenceKind.Element ? reference.Subscript.ToValue() : ShellValue.FromText("0");
                 if (kind == ArrayAssignmentKind.Auto)
                 {
-                    variables.SetAssignedScalar(resolved, operand.Value, memory, prefixOperator: null);
+                    if (resolved == ArgumentZeroName && variables.TryGetBinding(resolved, out var slot)
+                        && slot is ArgumentZeroSlot dynamic)
+                        argumentZeroAssignment = dynamic;
+                    else
+                        variables.SetAssignedScalar(resolved, operand.Value, memory, prefixOperator: null);
                     return LocalDeclarationResult.Declared;
                 }
                 // Without an initializer, a selector declares the array type but is not evaluated.
@@ -1023,7 +1042,7 @@ public sealed partial class Variables
             if (_names.Contains(name))
                 return;
             memory.Charge(active.EstimateBindingBytes(name));
-            _saved.CopyBindingFrom(active, name, borrowedCopyAdmitted: true);
+            _saved.CopyBindingFrom(active, name, borrowedCopyAdmitted: true, argumentZeroOwner: null);
             _names.Add(name);
         }
 
@@ -1049,7 +1068,7 @@ public sealed partial class Variables
             child._declaredPrefixes.UnionWith(_declaredPrefixes);
             child._promotedPrefixes.UnionWith(_promotedPrefixes);
             foreach (var name in _names)
-                child._saved.CopyBindingFrom(_saved, name);
+                child._saved.CopyBindingFrom(_saved, name, borrowedCopyAdmitted: false, argumentZeroOwner: variables);
             return child;
         }
 
@@ -1277,12 +1296,12 @@ public sealed partial class Variables
         AssignmentOperator? prefixOperator)
     {
         TryGetBinding(resolved, out var slot);
-        if (prefixOperator.HasValue && slot is LineNumberSlot)
+        if (prefixOperator.HasValue && slot is LineNumberSlot or ArgumentZeroSlot)
         {
             ReplaceValue(resolved, new ScalarSlot(value));
             return value;
         }
-        if (prefixOperator != AssignmentOperator.Replace)
+        if (prefixOperator != AssignmentOperator.Replace && slot is not ArgumentZeroSlot)
             value = ConvertAssignmentCase(slot?.Attributes ?? BindingAttributes.None, value, memory);
         // A prefix shadows the recovered array in its command scope.
         if (prefixOperator.HasValue && slot is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
@@ -1916,9 +1935,9 @@ public sealed partial class Variables
 
     /// <summary>Publishes a complete binding, reusing a slot already owned by the destination.</summary>
     internal void CopyBindingFrom(Variables source, BindingName name) =>
-        CopyBindingFrom(source, name, borrowedCopyAdmitted: false);
+        CopyBindingFrom(source, name, borrowedCopyAdmitted: false, argumentZeroOwner: null);
 
-    private void CopyBindingFrom(Variables source, BindingName name, bool borrowedCopyAdmitted)
+    private void CopyBindingFrom(Variables source, BindingName name, bool borrowedCopyAdmitted, Variables? argumentZeroOwner)
     {
         if (!source.TryGetBinding(name, detachBorrowed: false, out var slot))
             ClearBinding(name);
@@ -1930,7 +1949,7 @@ public sealed partial class Variables
                 borrow.Memory.Charge(EstimateSlotBytes(name, slot));
                 borrow.CancellationToken.ThrowIfCancellationRequested();
             }
-            var copy = slot.Clone();
+            var copy = slot.Clone(argumentZeroOwner);
             borrow?.CancellationToken.ThrowIfCancellationRequested();
             StoreBinding(name, copy);
         }
@@ -2010,7 +2029,7 @@ public sealed partial class Variables
         {
             if ((attributes & BindingAttributes.Readonly) != 0)
                 return ForAssignmentResult.Readonly;
-            if (!integerEvaluated && (attributes & BindingAttributes.Integer) != 0)
+            if (!integerEvaluated && (attributes & BindingAttributes.Integer) != 0 && slot is not ArgumentZeroSlot)
                 return ForAssignmentResult.NeedsIntegerEvaluation;
             SetResolvedValuePreservingArray(name, item, memory, slot);
         }

@@ -130,7 +130,8 @@ internal static partial class WordExpansion
             ShellValue? previous = operation == AssignmentOperator.Append && !recreatesBinding
                 && !target.AppendToEmpty && target.TryRead(destination, out var stored)
                 ? stored : null;
-            var attributes = recreatesBinding ? Variables.BindingAttributes.None : destination.GetAssignmentAttributes(Name);
+            var attributes = recreatesBinding || target is Scalar && destination.IsDynamicArgumentZero(Name)
+                ? Variables.BindingAttributes.None : destination.GetAssignmentAttributes(Name);
             if ((attributes & Variables.BindingAttributes.Integer) != 0
                 && declarationWrite == DeclarationWrite.Ordinary && destination.IsReadonly(Name))
                 return null;
@@ -736,7 +737,9 @@ internal static partial class WordExpansion
                 return null;
             }
             if (binding.Reference.Kind == VariableReferenceKind.Name)
-                return ResolveNameReference(binding.Name, targetVariables, appendToEmpty);
+                return ResolveNameReference(binding.Name, targetVariables, appendToEmpty
+                    || use == ReferenceUse.DirectAssign && sourceName == binding.Name
+                        && targetVariables.IsDynamicArgumentZero(binding.Name));
             // Bash's length expansion does not select an element reached through a nameref.
             if (use == ReferenceUse.Length)
                 return null;

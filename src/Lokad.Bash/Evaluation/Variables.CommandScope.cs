@@ -80,7 +80,7 @@ public sealed partial class Variables
             return true;
         source.Memory.Charge(EstimateSlotBytes(name, slot));
         source.CancellationToken.ThrowIfCancellationRequested();
-        slot = slot.Clone();
+        slot = slot.Clone(this);
         source.CancellationToken.ThrowIfCancellationRequested();
         var deferFieldSeparators = _deferFieldSeparators;
         var indexedIfs = _indexedIfs;

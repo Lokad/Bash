@@ -1706,6 +1706,15 @@ Backtick captures use the decoded body. Local and temporary bindings can shadow
 `LINENO`. Unsetting the dynamic binding allows later assignments to create an
 ordinary variable.
 
+`BASH_ARGV0` initially exposes `$0`. A write to its dynamic scalar binding
+sets the active shell name. A direct `BASH_ARGV0+=value` uses the
+right-hand value. Appending through a declaration or a nameref combines this
+value with the old one. An ordinary local or
+temporary prefix can shadow the binding, and `local -I` can inherit it.
+A subshell can change its own name independently. A fresh Bash invocation
+initializes the binding from its launch name. Unset and array conversion keep
+the last shell name and end the dynamic scalar binding.
+
 Invalid loop variable and function definition names use the reader's completed
 unit line through the active stderr descriptor. A retained function uses its
 body opening line for an invalid loop name and the definition header for an
