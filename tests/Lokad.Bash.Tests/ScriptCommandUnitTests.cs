@@ -169,6 +169,62 @@ public sealed class ScriptCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("set -v; printf first\n# note\n  printf second ; printf third\n# tail", "firstsecondthird",
+        "# note\n  printf second ; printf third\n# tail\n")]
+    [InlineData("set -v\nset +v; printf quiet\n# tail", "quiet", "set +v; printf quiet\n")]
+    [InlineData("set -vn\nprintf skipped\n# tail", "", "printf skipped\n# tail\n")]
+    [InlineData("set -v\ncat <<-END\n\tfirst\\\n\tsecond\n\tEND", "first\tsecond", "cat <<-END\n\tfirst\tsecond\n\tEND\n")]
+    public async Task BacktickVerboseEchoUsesReachedReaderUnits(string body, string output, string echo)
+    {
+        var script = $"value=\"`{body}`\"\nprintf '%s' \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(echo, host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task BacktickVerboseEchoPrecedesTheReachedSyntaxError()
+    {
+        const string script = "value=\"`set -v\nprintf before\nif then; fi\nprintf unread`\"\nprintf '<%s:%s>' \"$?\" \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<2:before>", host.StandardOutput.TextContent);
+            Assert.Equal("printf before\nif then; fi\ncommand substitution: line 6: syntax error near unexpected token `then'\n"
+                + "command substitution: line 6: `if then; fi'\n", host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task RetainedBacktickReaderUsesEachCallsActiveStderr()
+    {
+        const string script = "f(){ printf '<%s>' \"`set -v\nprintf inner\n`\"; }\nf 2>first\nf 2>second\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("<inner><inner>", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.Content.ToArray());
+            Assert.Equal("printf inner\n", host.ReadFile("/first"));
+            Assert.Equal("printf inner\n", host.ReadFile("/second"));
+        }
+    }
+
     [Fact]
     public async Task VerboseReadsTheFullOffendingLineBeforeReportingSyntax()
     {

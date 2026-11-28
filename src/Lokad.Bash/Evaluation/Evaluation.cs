@@ -672,7 +672,7 @@ public sealed partial class Evaluation : IFileTester
         RootFlowHandling rootFlowHandling)
     {
         var exitCode = 0;
-        var authoredReader = _state.ForkKind == null ? script.Reader : null;
+        var authoredReader = _state.ForkKind is null or ShellForkKind.CommandSubstitution ? script.Reader : null;
         if (StopsAfterCommandUnit && authoredReader is { EmptyFirstUnitEnd: > 0 } reader)
         {
             await WriteVerboseSourceAsync(reader.Source, 0..reader.EmptyFirstUnitEnd, reader.Spelling).ConfigureAwait(false);

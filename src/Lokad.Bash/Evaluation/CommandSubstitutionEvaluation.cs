@@ -32,8 +32,7 @@ internal sealed class CommandSubstitutionEvaluation(CommandSubstitutionSyntax sc
                     ParsedScript? prepared;
                     ParserFailure? failure;
                     if (temporary)
-                        Parser.TryParseScript(legacy.Source.Bytes,
-                            new ShellScanContext { SyntaxMemory = owner.SyntaxMemory, ReadsCommandString = true }, out prepared, out failure);
+                        Parser.TryParseLegacyCapture(legacy.Source.Bytes, owner.SyntaxMemory, out prepared, out failure);
                     else
                         owner.TryPrepareLegacy(legacy, outer.CancellationToken, out prepared, out failure);
 

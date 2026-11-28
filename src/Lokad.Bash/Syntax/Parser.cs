@@ -163,6 +163,16 @@ public static class Parser
         return true;
     }
 
+    /// <summary>Prepares a backtick body and keeps its authored reader when later input can be reached.</summary>
+    internal static bool TryParseLegacyCapture(ReadOnlyMemory<byte> input, MemoryCapacity memory,
+        [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out ParserFailure? failure) =>
+        TryParseScript(input, new ShellScanContext
+        {
+            SyntaxMemory = memory,
+            ReadsCommandString = true,
+            RetainAuthoredReader = input.Length > 1 && input.Span[..^1].Contains((byte)'\n')
+        }, out script, out failure);
+
     internal static bool TryParseScript(ReadOnlyMemory<byte> input, ShellScanContext context,
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out ParserFailure? failure)
     {
@@ -2134,7 +2144,10 @@ public static class Parser
             {
                 var end = lastReaderEnd ?? tokenizer.Position;
                 if (unitEnds.Count == 0 || unitEnds[^1] != end)
+                {
+                    tokenizer.ScanContext.SyntaxMemory?.PrepareListCapacity(unitEnds, 1);
                     unitEnds.Add(end);
+                }
             }
             if (unitMetadata != CommandUnitMetadata.All)
                 return;

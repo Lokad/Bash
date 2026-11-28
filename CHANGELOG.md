@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Echo reached input when a backtick substitution enables verbose mode.
 - Clear verbose mode when starting a command substitution child.
 - Echo joined here-document lines and the string reader's escaped EOF byte in verbose mode.
 - Interleave verbose here-document warnings with the source reads that produced them.

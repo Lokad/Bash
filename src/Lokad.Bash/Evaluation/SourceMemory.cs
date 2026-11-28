@@ -121,8 +121,7 @@ internal sealed class SourceMemory
                 syntaxMemory.Grow(32L + input.Length);
                 input = input.ToArray();
             }
-            if (!Parser.TryParseScript(input, new ShellScanContext { SyntaxMemory = syntaxMemory, ReadsCommandString = true },
-                    out script, out failure))
+            if (!Parser.TryParseLegacyCapture(input, syntaxMemory, out script, out failure))
                 return false;
             syntaxMemory.DetachReservation();
 

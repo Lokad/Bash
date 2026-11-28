@@ -804,6 +804,8 @@ surviving definitions and active users. Completed unrelated units release their
 metadata; deferred substitutions use the same parser with a reached syntax owner.
 Verbose readers borrow authored bytes through the ordinary stderr operation.
 Caller-prepared source trees retain the authored text and physical unit bounds.
+Multiline backtick captures keep these bounds in their retained parse. The
+reached streaming parser supplies the bounds when a malformed body is executed.
 At execution the reader consults the current option state at each reached
 boundary, including the final trivia after the last unit. Trees constructed from
 commands alone have no authored input to echo. Runtime readers keep their

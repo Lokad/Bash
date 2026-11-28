@@ -384,7 +384,7 @@ public sealed partial class Evaluation
             && diagnosticOrigin is SyntaxDiagnosticOrigin.Script or SyntaxDiagnosticOrigin.CommandString;
         var fileReader = streamedRoot && diagnosticOrigin == SyntaxDiagnosticOrigin.Script;
         var usesImmediateParserExit = streamedRoot || sourceOrEval || kind == ScriptExecutionKind.Trap;
-        var reportReaderInput = usesImmediateParserExit || kind == ScriptExecutionKind.ArrayReaderCallback;
+        var reportReaderInput = usesImmediateParserExit || kind is ScriptExecutionKind.ArrayReaderCallback or ScriptExecutionKind.LegacyCapture;
         var readEnd = 0;
         while (true)
         {
