@@ -305,6 +305,9 @@ assignment when it fits the assignment's buffer allowance. Larger framing
 buffers can be retired earlier by staging the record separately. Published
 fields detach from reusable backing, and large borrowed lines are released
 once assignment settles.
+Named `read` fields use backing bounded by the normalized record length
+and the destination count. Empty IFS requires at most one slot. Missing
+fields are assigned as empty values during ordered destination processing.
 Custom-delimiter and counted reads normalize borrowed descriptor windows
 directly into the reusable content buffer. Each successful window commits
 only the accepted prefix. The window borrow settles before field assignment.

@@ -196,10 +196,12 @@ public sealed partial class Evaluation
             }
             for (var index = 0; index < fieldCount; index++)
             {
+                CheckCancellation();
                 var reference = firstReference;
                 if (index != 0 && !TryParseTarget(words[argumentIndex + index], out reference))
                     return await InvalidTargetAsync(words[argumentIndex + index]).ConfigureAwait(false);
-                var assignment = await AssignReadFieldAsync(reference, fields[index], input.Content).ConfigureAwait(false);
+                var field = index < fields.Count ? fields[index] : ShellValue.Empty;
+                var assignment = await AssignReadFieldAsync(reference, field, input.Content).ConfigureAwait(false);
                 if (assignment == BuiltinAssignmentResult.Failed)
                 {
                     exitCode = 1;

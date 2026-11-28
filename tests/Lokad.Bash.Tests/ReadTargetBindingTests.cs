@@ -57,6 +57,62 @@ public sealed class ReadTargetBindingTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NamedReadFieldsFitTheReachedRecordWithinTheAllowance(bool emptyIfs)
+    {
+        var governor = new MemoryGovernor(256);
+        using var owner = governor.CreateScope();
+        using var scratch = new MemoryCapacity(owner, 0);
+        var memory = new EvaluationMemory(owner);
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("IFS", ShellValue.FromText(emptyIfs ? "" : ":")));
+        var record = ShellValue.FromText(emptyIfs ? new string('x', 1024) : ":a::");
+        var options = new ReadBuiltinOptions(FieldSeparators.FromVariables(variables),
+            ReadBackslashMode.Preserve, ReadFieldMode.Split);
+
+        var fields = ReadFieldSplitter.Split(record.Bytes, 256, options, scratch, variables, memory, CancellationToken.None);
+
+        ShellValue[] expected = emptyIfs ? [record] : [ShellValue.Empty, ShellValue.FromText("a"), ShellValue.Empty];
+        Assert.Equal(expected, fields);
+        memory.Finish(retainVariables: false);
+        scratch.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task MissingReadFieldsStillAssignToReachedElementAndScalarTargets()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            first=old; last=old; indexed=([4]=prior); i=4
+            IFS=: read -r first 'indexed[i++]' last
+            printf '<%s:%s>[%s][%s][%s]\n' "$?" "$i" "$first" "${indexed[4]}" "$last"
+            """, "one\n");
+
+        Assert.Equal("<0:5>[one][][]\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData(":", "'bad-name' b", "line 2: read: `bad-name': not a valid identifier\n")]
+    [InlineData("readonly b", "b c", "line 2: b: readonly variable\n")]
+    public async Task MissingReadFieldsStillCheckDestinationsInOrder(string setup, string remaining, string diagnostic)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            a=old; b=old; c=old; {{setup}}
+            IFS=: read -r a {{remaining}}
+            printf '<%s>[%s][%s][%s]\n' "$?" "$a" "$b" "$c"
+            IFS= read -r next
+            printf '<%s>[%s]\n' "$?" "$next"
+            """, "one\nnext\n");
+
+        Assert.Equal("<1>[one][old][old]\n<0>[next]\n", result.StdOut);
+        Assert.Equal(diagnostic, result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
     [InlineData("a=([1]=old [4]=seed); declare -n REPLY='a[4]'; builtin read -r; status=$?",
         "${a[1]}", "${a[4]}")]
     [InlineData("declare -A a=([keep]=old [key]=seed); f(){ local -n REPLY='a[key]'; command read -r; }; f; status=$?",

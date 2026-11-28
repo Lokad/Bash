@@ -16,7 +16,10 @@ internal static class ReadFieldSplitter
     {
         var fieldSeparators = options.FieldSeparators;
         const int FieldListOverheadBytes = 32;
-        var capacity = options.FieldMode == ReadFieldMode.SplitAll ? 0 : fieldCount;
+        // Each reached field consumes at least one record byte, including explicit empty fields.
+        var capacity = options.FieldMode == ReadFieldMode.SplitAll ? 0 : Math.Min(fieldCount, content.Length);
+        if (fieldSeparators.IsEmpty)
+            capacity = Math.Min(capacity, 1);
         scratch.Grow(FieldListOverheadBytes + MemoryCapacity.ArrayBackingBytes<ShellValue>(capacity));
         return SplitReadFields(content.Length);
 
@@ -57,22 +60,16 @@ internal static class ReadFieldSplitter
 
             for (var fieldIndex = 0; fieldIndex < fieldCount - 1; fieldIndex++)
             {
-                splitFields.Add(TryReadField(ref position, boundaries, asciiWhitespace, out var start, out var end)
-                    ? BuildValue(start, end)
-                    : ShellValue.Empty);
+                if (!TryReadField(ref position, boundaries, asciiWhitespace, out var start, out var end))
+                    return splitFields;
+                splitFields.Add(BuildValue(start, end));
             }
 
-            if (!TryReadField(ref position, boundaries, asciiWhitespace, out var firstStart, out var firstEnd))
+            if (TryReadField(ref position, boundaries, asciiWhitespace, out var firstStart, out var firstEnd))
             {
-                splitFields.Add(ShellValue.Empty);
-            }
-            else if (!TryReadCharacter(position, out _, out _))
-            {
-                splitFields.Add(BuildValue(firstStart, firstEnd));
-            }
-            else
-            {
-                splitFields.Add(BuildValue(firstStart, TrimRemainderEnd(firstStart, asciiWhitespace)));
+                var end = TryReadCharacter(position, out _, out _)
+                    ? TrimRemainderEnd(firstStart, asciiWhitespace) : firstEnd;
+                splitFields.Add(BuildValue(firstStart, end));
             }
 
             return splitFields;
