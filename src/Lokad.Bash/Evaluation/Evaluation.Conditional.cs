@@ -40,56 +40,63 @@ public sealed partial class Evaluation
         ConditionalCommand command, ScopedEvaluation scope, bool negated)
     {
         PreparePipelineStatusStorage(1);
-        using var workMemory = new MemoryCapacity(Memory.Budget, 0);
-        var work = new List<(ConditionalExpression Expression, bool Complete)>();
-        Push(command.Condition, false);
-        using var predicateMemory = command.Condition is ConditionalExpression.Logical or ConditionalExpression.Negated
-            ? Memory.BeginCommand(scope) : null;
         var status = 1;
-        while (work.Count > 0)
+        if (command.Condition is not (ConditionalExpression.Logical or ConditionalExpression.Negated))
         {
-            _cancellationToken.ThrowIfCancellationRequested();
-            var frame = work[^1];
-            work.RemoveAt(work.Count - 1);
-            if (frame.Complete)
+            CheckCancellation();
+            status = await AwaitWordExpansionAsync(EvaluatePredicateAsync(command.Condition)).ConfigureAwait(false);
+        }
+        else
+        {
+            using var workMemory = new MemoryCapacity(Memory.Budget, 0);
+            var work = new List<(ConditionalExpression Expression, bool Complete)>();
+            Push(command.Condition, false);
+            using var predicateMemory = Memory.BeginCommand(scope);
+            while (work.Count > 0)
             {
-                if (_state.HasPendingExpansionError)
-                    break;
+                CheckCancellation();
+                var frame = work[^1];
+                work.RemoveAt(work.Count - 1);
+                if (frame.Complete)
+                {
+                    if (_state.HasPendingExpansionError)
+                        break;
+                    switch (frame.Expression)
+                    {
+                        case ConditionalExpression.Negated: status = status == 0 ? 1 : 0; break;
+                        case ConditionalExpression.Logical logical:
+                            if (logical.And ? status == 0 : status != 0)
+                                Push(logical.Right, false);
+                            break;
+                    }
+                    continue;
+                }
                 switch (frame.Expression)
                 {
-                    case ConditionalExpression.Negated: status = status == 0 ? 1 : 0; break;
                     case ConditionalExpression.Logical logical:
-                        if (logical.And ? status == 0 : status != 0)
-                            Push(logical.Right, false);
+                        Push(logical, true);
+                        Push(logical.Left, false);
+                        break;
+                    case ConditionalExpression.Negated not:
+                        Push(not, true);
+                        Push(not.Inner, false);
+                        break;
+                    default:
+                        status = await AwaitWordExpansionAsync(EvaluatePredicateAsync(frame.Expression)).ConfigureAwait(false);
+                        // All scratch users have settled. Retain the bindings for the next operand.
+                        if (work.Count > 0)
+                            predicateMemory.ResetWorkspace();
                         break;
                 }
-                continue;
             }
-            switch (frame.Expression)
+
+            void Push(ConditionalExpression expression, bool complete)
             {
-                case ConditionalExpression.Logical logical:
-                    Push(logical, true);
-                    Push(logical.Left, false);
-                    break;
-                case ConditionalExpression.Negated not:
-                    Push(not, true);
-                    Push(not.Inner, false);
-                    break;
-                default:
-                    status = await AwaitWordExpansionAsync(EvaluatePredicateAsync(frame.Expression)).ConfigureAwait(false);
-                    // All scratch users have settled. Retain the bindings for the next operand.
-                    if (work.Count > 0)
-                        predicateMemory?.ResetWorkspace();
-                    break;
+                Memory.PrepareListCapacity(workMemory, work, 1);
+                work.Add((expression, complete));
             }
         }
         return await FinalizeResultAsync(EvaluationResult.FromExitCode(status), negated).ConfigureAwait(false);
-
-        void Push(ConditionalExpression expression, bool complete)
-        {
-            Memory.PrepareListCapacity(workMemory, work, 1);
-            work.Add((expression, complete));
-        }
 
         Task<IReadOnlyList<ExpandedWord>> ExpandAsync(Word word, ExpansionPurpose purpose) =>
             WordExpansion.ExpandWithoutBraceAsync(word, scope with { SelectorParameterDiagnostics = true },

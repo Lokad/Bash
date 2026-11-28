@@ -190,10 +190,13 @@ public partial class EvaluationTests
     [InlineData(true)]
     public async Task FlatConditionalKeepsItsFramesUntilTheReachedQuerySettles(bool cancel)
     {
-        var baseline = await MeasureAsync(0, cancel);
+        var single = await MeasureAsync(0, cancel);
+        var pair = await MeasureAsync(1, cancel);
         var wide = await MeasureAsync(1023, cancel);
-        Assert.True(wide.Pending - baseline.Pending >= 1023 * IntPtr.Size);
-        Assert.Equal(baseline.Settled, wide.Settled);
+        Assert.Equal(MemoryCapacity.ArrayBackingBytes<(ConditionalExpression, bool)>(4), pair.Pending - single.Pending);
+        Assert.True(wide.Pending - single.Pending >= 1023 * IntPtr.Size);
+        Assert.Equal(single.Settled, pair.Settled);
+        Assert.Equal(single.Settled, wide.Settled);
 
         static async Task<(long Pending, long Settled)> MeasureAsync(int skipped, bool cancel)
         {

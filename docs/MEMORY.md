@@ -185,9 +185,10 @@ two from that starting estimate so adjacent additions can use prepaid capacity.
 Settled usage reflects all retained bytes. Workspace growth uses relative size
 classes within the usual total-capacity rounding.
 
-Conditional evaluation admits its traversal buffer before growing it, including
-overlap during replacement. Reached predicates reuse the buffer, which stays
-charged through pending operations and is refunded when traversal unwinds.
+Single-predicate conditionals use the predicate's existing workspace and
+admissions. Compound conditionals admit their traversal buffer before growing it,
+including overlap during replacement. Reached predicates reuse the buffer, which
+stays charged through pending operations and is refunded when traversal unwinds.
 `test` and `[` store the first two parse steps inline. They admit larger
 step lists and file operands in the command workspace before growing their
 backing. They admit reduction scratch before running any predicates that
