@@ -60,7 +60,9 @@ public sealed class DelimitedRecordReader : IDisposable
     /// Amortizes host reads across records. ReleaseBorrow or Dispose must precede any other
     /// operation on the input descriptor, including output or diagnostics aliased to that input.
     /// </param>
-    /// <param name="cancellationToken">Cancels computation and pending reads.</param>
+    /// <param name="cancellationToken">
+    /// Cancels computation and pending reads. Observing cancellation releases the window and commits its processed prefix.
+    /// </param>
     /// <param name="host">The application-owned I/O boundary.</param>
     /// <param name="inputDescriptor">The descriptor containing input records.</param>
     /// <param name="storage">Controls whether returned record bytes remain valid after later reads.</param>
@@ -104,12 +106,14 @@ public sealed class DelimitedRecordReader : IDisposable
             {
                 while (!_reachedEnd)
                 {
+                    CheckCancellation();
                     if (!_hasBorrow)
                     {
                         var available = _bufferWriteOffset == RawReadBufferSize ? RawReadBufferSize : RawReadBufferSize - _bufferWriteOffset;
                         _borrow = await _host.ReadAsync(_inputDescriptor, DescriptorReadRequest.UpTo(available), _cancellationToken)
                             .ConfigureAwait(false);
                         _hasBorrow = true;
+                        CheckCancellation();
                     }
                     var bytes = _borrow.Content[_borrowOffset..];
                     if (_borrow.Result.IsError && !_readFailure.IsError)
@@ -159,6 +163,15 @@ public sealed class DelimitedRecordReader : IDisposable
             {
                 if (!_keepBorrow)
                     ReleaseBorrow();
+            }
+
+            void CheckCancellation()
+            {
+                if (_cancellationToken.IsCancellationRequested)
+                {
+                    ReleaseBorrow();
+                    _cancellationToken.ThrowIfCancellationRequested();
+                }
             }
 
             ReadOnlyMemory<byte> CopyRecord(ReadOnlySpan<byte> content)

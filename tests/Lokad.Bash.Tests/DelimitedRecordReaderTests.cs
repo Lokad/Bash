@@ -166,6 +166,127 @@ public sealed class DelimitedRecordReaderTests
         AssertRecord(await reader.ReadNextAsync(), "tail"u8.ToArray(), hasTerminator: false);
     }
 
+    [Theory]
+    [InlineData(DelimitedRecordStorage.Reusable, false)]
+    [InlineData(DelimitedRecordStorage.Reusable, true)]
+    [InlineData(DelimitedRecordStorage.Retained, false)]
+    [InlineData(DelimitedRecordStorage.Retained, true)]
+    public async Task CancellationBetweenRecordsPreservesTheNextRecord(DelimitedRecordStorage storage, bool keepBorrow)
+    {
+        using var cancellation = new CancellationTokenSource();
+        await using var host = new MockFileSystem();
+        host.SetStandardInput("one|two|tail");
+        var reservations = new List<long>();
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            storage, reservations.Add, keepBorrow, cancellation.Token);
+        var first = Assert.IsType<DelimitedRecord>(await reader.ReadNextAsync());
+
+        cancellation.Cancel();
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            reader.ReadNextBoundedAsync(1, DelimitedRecordOverflow.Discard).AsTask());
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(1, host.ReadCallCount);
+        Assert.Equal([DelimitedRecordReader.RawReadBufferMemoryBytes], reservations);
+        AssertRecord(first, "one"u8.ToArray(), hasTerminator: true);
+        using var remaining = await host.ReadAsync(FileDescriptor.StdIn, DescriptorReadRequest.UpTo(16), CancellationToken.None);
+        Assert.Equal("two|tail"u8.ToArray(), remaining.Content.ToArray());
+        Assert.Equal(4, remaining.Position.Offset);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CancellationBeforeProcessingARecordBorrowReleasesIt(bool keepBorrow, bool suspended)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var committed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(committed.Add, new MemoryGovernor(0));
+        var reply = new TaskCompletionSource<DescriptorReadBuffer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reservations = new List<long>();
+        var releases = 0;
+        var operationError = new OperationError("late input error\n");
+        await using var host = new CallbackReadHost(Read);
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            DelimitedRecordStorage.Reusable, reservations.Add, keepBorrow, cancellation.Token);
+
+        var read = reader.ReadNextAsync().AsTask();
+        var waitedForBorrow = true;
+        if (suspended)
+        {
+            cancellation.Cancel();
+            waitedForBorrow = !read.IsCompleted;
+            reply.SetResult(Borrow());
+        }
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+
+        Assert.True(waitedForBorrow);
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal(1, releases);
+        Assert.Equal([0], committed);
+        Assert.Equal(0, owner.Position);
+        Assert.Empty(reservations);
+        Assert.False(reader.ReadFailure.IsError);
+        reader.ReleaseBorrow();
+        Assert.Equal(1, releases);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadRequest _, CancellationToken token)
+        {
+            Assert.Equal(cancellation.Token, token);
+            if (suspended)
+                return new ValueTask<DescriptorReadBuffer>(reply.Task);
+            var borrow = Borrow();
+            cancellation.Cancel();
+            return ValueTask.FromResult(borrow);
+        }
+
+        DescriptorReadBuffer Borrow()
+        {
+            var buffer = owner.Borrow("one|tail"u8.ToArray(), ByteReadResult.Failure(8, operationError, reachedEoF: false),
+                canRetain: false);
+            buffer.ReleaseWith(() => releases++);
+            return buffer;
+        }
+    }
+
+    [Fact]
+    public async Task CancellationBetweenRecordFragmentsPreservesTheCommittedPrefix()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var committed = new List<int>();
+        var owner = new DescriptorReadBufferOwner(committed.Add, new MemoryGovernor(0));
+        var reply = new TaskCompletionSource<DescriptorReadBuffer>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reservations = new List<long>();
+        var reads = 0;
+        var releases = 0;
+        await using var host = new CallbackReadHost(Read);
+        using var reader = new DelimitedRecordReader(host, FileDescriptor.StdIn, (byte)'|',
+            DelimitedRecordStorage.Retained, reservations.Add, keepBorrow: true, cancellation.Token);
+
+        var reading = reader.ReadNextBoundedAsync(8, DelimitedRecordOverflow.Stop).AsTask();
+        Assert.Equal(2, reads);
+        Assert.Equal([3], committed);
+        var prefixReservation = Assert.Single(reservations);
+        cancellation.Cancel();
+        var suffix = owner.Borrow("t|next"u8.ToArray(), ByteReadResult.Success(6, reachedEoF: true), canRetain: false);
+        suffix.ReleaseWith(() => releases++);
+        reply.SetResult(suffix);
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reading);
+
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
+        Assert.Equal([3, 0], committed);
+        Assert.Equal(3, owner.Position);
+        Assert.Equal(1, releases);
+        Assert.Equal([prefixReservation], reservations);
+
+        ValueTask<DescriptorReadBuffer> Read(DescriptorReadRequest _, CancellationToken __) =>
+            reads++ == 0
+                ? ValueTask.FromResult(owner.Borrow("par"u8.ToArray(), ByteReadResult.Success(3, reachedEoF: false), canRetain: false))
+                : new ValueTask<DescriptorReadBuffer>(reply.Task);
+    }
+
     [Fact]
     public async Task TerminalFailureIsPreservedWhileDrainingBorrowedBytes()
     {
@@ -188,6 +309,17 @@ public sealed class DelimitedRecordReaderTests
         Assert.Equal(expected, record.Content.ToArray());
         Assert.Equal(hasTerminator, record.HasTerminator);
         Assert.False(record.ExceedsLimit);
+    }
+
+    private sealed class CallbackReadHost(Func<DescriptorReadRequest, CancellationToken, ValueTask<DescriptorReadBuffer>> read)
+        : MockFileSystem
+    {
+        public override ValueTask<DescriptorReadBuffer> ReadAsync(FileDescriptor descriptor, DescriptorReadRequest request,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(FileDescriptor.StdIn, descriptor);
+            return read(request, cancellationToken);
+        }
     }
 
     private sealed class TerminalReadHost(OperationError error) : MockFileSystem
