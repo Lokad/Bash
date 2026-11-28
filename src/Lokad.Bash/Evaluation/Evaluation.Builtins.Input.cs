@@ -180,19 +180,32 @@ public sealed partial class Evaluation
                         .ConfigureAwait(false);
                     return await FinishAsync(assigned ? exitCode : 1).ConfigureAwait(false);
                 }
-                Memory.Charge((long)fields.Count * IndexedArray.ElementMemoryBytes);
-                for (var index = 0; index < fields.Count; index++)
+                var beforePublication = Memory.Workspace.Bytes;
+                var published = false;
+                try
                 {
+                    Memory.Charge((long)fields.Count * IndexedArray.ElementMemoryBytes);
+                    for (var index = 0; index < fields.Count; index++)
+                    {
+                        _cancellationToken.ThrowIfCancellationRequested();
+                        var field = fields[index];
+                        var converted = global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, field, Memory);
+                        fields[index] = converted.Bytes.Equals(field.Bytes) ? RetainField(field, input.Content.Span) : converted;
+                    }
+                    var replacement = IndexedArray.FromSequential(fields);
                     _cancellationToken.ThrowIfCancellationRequested();
-                    var field = fields[index];
-                    var converted = global::Lokad.Bash.Evaluation.Variables.ConvertAssignmentCase(attributes, field, Memory);
-                    fields[index] = converted.Bytes.Equals(field.Bytes) ? RetainField(field, input.Content.Span) : converted;
+                    published = array.TryPublish(replacement);
                 }
-                var replacement = IndexedArray.FromSequential(fields);
-                _cancellationToken.ThrowIfCancellationRequested();
-                if (!array.TryPublish(replacement))
-                    exitCode = 1;
-                return await FinishAsync(exitCode).ConfigureAwait(false);
+                finally
+                {
+                    if (!published)
+                    {
+                        fields.Clear();
+                        Memory.Workspace.Resize(beforePublication);
+                        Memory.ReleaseUnusedCapacity();
+                    }
+                }
+                return await FinishAsync(published ? exitCode : 1).ConfigureAwait(false);
             }
             for (var index = 0; index < fieldCount; index++)
             {

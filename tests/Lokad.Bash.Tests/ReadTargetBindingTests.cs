@@ -440,6 +440,51 @@ public sealed class ReadTargetBindingTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadArrayRefundsUnpublishedFieldsBeforeItsRefusalDiagnostic(bool convertCase)
+    {
+        var line = System.Text.Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat(new string('x', 1024) + " ", 128)) + "\n");
+        var early = await ObserveRefusalAsync(16 * 1024);
+        var late = await ObserveRefusalAsync(96 * 1024);
+        Assert.Equal(early, late);
+
+        async Task<(long Workspace, long Reserved)> ObserveRefusalAsync(long available)
+        {
+            var governor = new MemoryGovernor(1024 * 1024);
+            using var owner = governor.CreateScope();
+            var declaration = convertCase ? "declare -au a=(old keep)" : "a=(old keep)";
+            var state = new Eval(Parser.Parse(declaration + "; read -ra a"));
+            state.Memory.Budget = owner;
+
+            var read = Assert.IsType<ReadLineOperation>(await state.GetNextStep());
+            state.Memory.ReleaseUnusedCapacity();
+            var workspaceBefore = state.Memory.Workspace.Bytes;
+            var reservedBefore = governor.ReservedBytes;
+            using var held = governor.Reserve(governor.LimitBytes - reservedBefore - available);
+            read.SetResult(ReadResult.Success(line, [], reachedEoF: true));
+
+            var diagnostic = Assert.IsType<WriteOperation>(await state.GetNextStep());
+            var workspace = state.Memory.Workspace.Bytes - workspaceBefore;
+            var reserved = governor.ReservedBytes - held.Bytes - reservedBefore;
+            var target = state.IndexedArrays["a"];
+            var error = diagnostic.Content.ToArray();
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+            Assert.Null(await state.GetNextStep());
+
+            Assert.Equal(1, state.LastExitCode);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Equal("read: shared memory budget exhausted\n"u8.ToArray(), error);
+            Assert.Equal(convertCase ? new[] { ShellValue.FromText("OLD"), ShellValue.FromText("KEEP") }
+                : new[] { ShellValue.FromText("old"), ShellValue.FromText("keep") }, target);
+            owner.Dispose();
+            held.Dispose();
+            Assert.Equal(0, governor.ReservedBytes);
+            return (workspace, reserved);
+        }
+    }
+
+    [Theory]
     [InlineData("-rN81920")]
     [InlineData("-rd:")]
     public async Task ReadKeepsItsTargetOnInputBufferRefusal(string options)
