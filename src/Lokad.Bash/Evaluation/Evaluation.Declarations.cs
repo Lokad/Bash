@@ -146,6 +146,7 @@ public sealed partial class Evaluation
                             GetCommandDiagnosticPrefix(scope)).ConfigureAwait(false);
                         break;
                     }
+                    targetVariables.InitializeCallerArgumentSnapshot(name, Memory);
                     if (targetVariables.IsCallerArray(name))
                     {
                         var operand = new PreparedDeclarationOperand(declaredValue, null, assignment.Operator, CompoundApplied: false);

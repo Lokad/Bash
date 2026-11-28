@@ -363,7 +363,8 @@ public partial class EvaluationTests
         var terms = string.Join(" -a ", Enumerable.Repeat("-f record", 16));
         var state = new Eval(Parser.Parse("test " + terms),
             options: EvaluationOptions.Default with { CurrentDirectory = new ShellPath(directory) });
-        var budget = new MemoryGovernor(16 * 1024);
+        // Include the two default caller argument bindings in the shell baseline.
+        var budget = new MemoryGovernor(16 * 1024 + 292);
         using var owner = budget.CreateScope();
         var host = new TestOperationVisitor([]) { MemoryBudget = owner, RecordAppends = true };
         host.EnqueuePathInfo(FilePathInfo.FromKind(FilePathKind.File));

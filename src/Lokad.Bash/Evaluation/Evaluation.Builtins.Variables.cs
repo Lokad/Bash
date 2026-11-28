@@ -99,17 +99,18 @@ public sealed partial class Evaluation
             }
             if (name.IsEmpty)
                 continue;
+            var selectedName = !namerefs && resolvedBinding ? binding.Name : unsetName;
+            commandVars.InitializeCallerArgumentSnapshot(selectedName, Memory);
+            if (commandVars.IsProtectedCallerArray(selectedName) && !commandVars.IsReadonlyBinding(selectedName))
+            {
+                exitCode = 1;
+                await ReportBuiltinDiagnosticAsync([command], [unsetName.ToValue(), ShellValue.FromText(": cannot unset")],
+                    context).ConfigureAwait(false);
+                continue;
+            }
             if (namerefs && !commandVars.HasNamerefAttribute(name))
             {
                 commandVars.ReselectGetoptsIndex(name);
-                continue;
-            }
-            var selectedName = resolvedBinding ? binding.Name : unsetName;
-            if (!namerefs && commandVars.IsProtectedCallerArray(selectedName) && !commandVars.IsReadonlyBinding(selectedName))
-            {
-                exitCode = 1;
-                await ReportBuiltinDiagnosticAsync([command], [selectedName.ToValue(), ShellValue.FromText(": cannot unset")],
-                    context).ConfigureAwait(false);
                 continue;
             }
             var unsetFlags = namerefs ? UnsetFlags.NamerefOnly : UnsetFlags.None;

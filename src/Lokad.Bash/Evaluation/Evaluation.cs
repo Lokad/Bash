@@ -2125,6 +2125,7 @@ public sealed partial class Evaluation : IFileTester
                 }
                 else
                 {
+                    commandVars.InitializeCallerArgumentSnapshot(name, Memory);
                     if (assignment.Operator == AssignmentOperator.Append)
                     {
                         var hasPrevious = commandVars.TryGetExpansionValue(name, out var previous);
@@ -2322,10 +2323,14 @@ public sealed partial class Evaluation : IFileTester
                         await ReportDeclarationOperandAsync(name.ToValue(), "not found").ConfigureAwait(false);
                         continue;
                     }
+                    if (!listing)
+                    {
+                        variables.InitializeCallerArgumentSnapshot(name, Memory);
+                        if (!outputClosed)
+                            variables.RefreshDirectoryStackListing(name);
+                    }
                     if (outputClosed)
                         continue;
-                    if (!listing)
-                        variables.RefreshDirectoryStackListing(name);
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     if (optionSnapshot)
                         output.Append(listing && localBuiltinFrame != null ? "local -\n"u8 : "declare -- -\n"u8);
@@ -2711,6 +2716,7 @@ public sealed partial class Evaluation : IFileTester
                     ? DeclarationAttributeChange.Set : options.ExportChange;
                 // Global declarations can write indexed elements through the active scope.
                 var sourceName = reference.Name;
+                commandVars.InitializeCallerArgumentSnapshot(sourceName, Memory);
                 if (commandVars.IsCallerArray(sourceName))
                 {
                     if (local)
@@ -5040,6 +5046,7 @@ public sealed partial class Evaluation : IFileTester
                     return DirectAssignmentResult.Failed;
                 (destination, createsGlobalArray) = target;
             }
+            destination.Owner.InitializeCallerArgumentSnapshot(destination.Name, Memory);
             if (destination.Owner.IsReadonly(destination.Name))
             {
                 await ReportAssignmentTargetFailureAsync(assignment.Target.ToValue(), "readonly variable", scope).ConfigureAwait(false);

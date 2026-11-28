@@ -426,6 +426,11 @@ preserve the marker and child evaluations isolate it. Saved frames remain
 admitted through their surrounding command scope.
 New empty frames share one immutable instance. Forked bindings and terminating
 EXIT snapshots copy the active entries and carry their cached value estimate.
+The first top-level lookup of either caller argument array admits one
+dense snapshot containing the argument count and the reversed active
+entries. Both views read that backing. The snapshot shares immutable
+argument bytes and survives later frame shifts and replacements. A
+child shell can retain the immutable backing or initialize its own.
 An unset positional scalar such as `"$1"` emits one empty field on its own in
 double quotes. An aggregate that emits zero fields suppresses empty expansions
 inside the same double quotes. Supplied empty aggregate elements and separate

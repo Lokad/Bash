@@ -81,6 +81,7 @@ public sealed partial class Variables
         private long _valueBytes;
 
         public int Count => _values.Length - _head;
+        public long ValueBytes => _valueBytes;
         public long EstimatedMemoryBytes => checked(_valueBytes + (long)PositionalEntryBytes * _values.Length);
         public ShellValue this[int index] => _values[_head + index];
 

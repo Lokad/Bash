@@ -88,7 +88,7 @@ public sealed partial class Variables
             var separators = _commandSource is { } source
                 && ReferenceEquals(CachedFieldSeparators, source.Variables.CachedFieldSeparators)
                     ? 0 : CachedFieldSeparators.EstimatedMemoryBytes;
-            return checked(_bindingBytes + inherited + separators + OwnedCallerMemoryBytes
+            return checked(_bindingBytes + inherited + separators + OwnedCallerMemoryBytes + _callerArgumentBytes
                 + (long)BindingOverheadBytes * (_bindingCapacity - _bindings.Count));
         }
     }
@@ -357,6 +357,8 @@ public sealed partial class Variables
             _callerLineBytes = VisibleCallerLineBytes,
             _callerFunctionDepth = VisibleCallerFunctionDepth,
             _keepCallerNamesVisible = KeepCallerNamesVisible,
+            _callerArguments = VisibleCallerArguments,
+            _callerArgumentBytes = VisibleCallerArgumentBytes,
             UsesBashCallerOutput = UsesBashCallerOutput
         };
         clone.CachedFieldSeparators = CachedFieldSeparators;

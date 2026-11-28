@@ -1778,6 +1778,17 @@ frame contributes `source`. Unsetting the whole binding removes the
 automatic view. A subsequently declared indexed array receives the
 names of later invocations and retains its own entries after they return.
 
+`BASH_ARGC` and `BASH_ARGV` expose the first reached top-level argument
+snapshot under default shell options. `BASH_ARGC[0]` holds the number of
+positional arguments. `BASH_ARGV` holds those arguments in reverse order.
+Argument-bearing source files can take the snapshot from their own
+positional frame. Functions see an empty pair until a top-level lookup
+initializes them. Child shells inherit an existing snapshot and can
+initialize their own snapshot if the parent has yet to take one.
+Named inspection such as `declare -p BASH_ARGC` triggers initialization.
+Operand-free listings leave it pending. Both arrays resist assignment
+and unset.
+
 Invalid loop variable and function definition names use the reader's completed
 unit line through the active stderr descriptor. A retained function uses its
 body opening line for an invalid loop name and the definition header for an

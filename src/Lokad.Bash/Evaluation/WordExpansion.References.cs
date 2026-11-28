@@ -556,10 +556,13 @@ internal static partial class WordExpansion
     {
         var variables = scope.Variables;
         if (reference.Kind == VariableReferenceKind.Name)
-            return variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
-                && TryFollowArrayNamerefProjections(ref binding, scope)
-                && binding.Reference.Kind == VariableReferenceKind.Name
-                && binding.Owner.TryReadResolvedExpansionValue(binding.Name, out _);
+        {
+            if (!variables.TryResolveBinding(reference.Name, selectOwner: null, out var binding)
+                || !TryFollowArrayNamerefProjections(ref binding, scope) || binding.Reference.Kind != VariableReferenceKind.Name)
+                return false;
+            binding.Owner.InitializeCallerArgumentSnapshot(binding.Name, scope.Effects.Memory);
+            return binding.Owner.TryReadResolvedExpansionValue(binding.Name, out _);
+        }
         if (reference.IsAggregate)
         {
             var aggregate = await ResolveReadBindingAsync(reference, ReferenceUse.Presence, scope, variables).ConfigureAwait(false);
@@ -745,9 +748,13 @@ internal static partial class WordExpansion
                 return null;
             }
             if (binding.Reference.Kind == VariableReferenceKind.Name)
+            {
+                if (use is ReferenceUse.ArithmeticRead or ReferenceUse.ArithmeticAssign)
+                    binding.Owner.InitializeCallerArgumentSnapshot(binding.Name, scope.Effects.Memory);
                 return ResolveNameReference(binding.Name, targetVariables, appendToEmpty
                     || use == ReferenceUse.DirectAssign && sourceName == binding.Name
                         && targetVariables.IsShellStateBinding(binding.Name));
+            }
             // Bash's length expansion does not select an element reached through a nameref.
             if (use == ReferenceUse.Length)
                 return null;
@@ -855,6 +862,9 @@ internal static partial class WordExpansion
                 await ReportBadSubscriptAsync().ConfigureAwait(false);
             return null;
         }
+
+        if (use != ReferenceUse.RejectedNamerefDeclaration)
+            targetVariables.InitializeCallerArgumentSnapshot(name, scope.Effects.Memory);
 
         // A declaration alone does not enable length-selector effects; even an empty assignment does.
         var scalarLength = use == ReferenceUse.Length && targetVariables.Scalars.ContainsKey(name);
@@ -1160,6 +1170,7 @@ internal static partial class WordExpansion
             await scope.Effects.ReportCircularNameReferenceAsync(reference.Name, scope).ConfigureAwait(false);
             return null;
         }
+        binding.Owner.InitializeCallerArgumentSnapshot(binding.Name, scope.Effects.Memory);
         return reference.IsAggregate && binding.IsArrayNameref ? null : binding;
     }
 

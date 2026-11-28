@@ -1,4 +1,5 @@
 using Lokad.Bash.Evaluation;
+using Lokad.Bash.Memory;
 
 namespace Lokad.Bash.Tests;
 
@@ -47,6 +48,32 @@ public sealed class PositionalParameterTests
         Assert.Equal("last", Assert.Single(clone.PositionalParameters).ToUtf8String());
         variables.PositionalParameters = [];
         Assert.Single(clone.PositionalParameters);
+    }
+
+    [Fact]
+    public void RefusedCallerArgumentSnapshotLeavesBothViewsPendingForARetry()
+    {
+        var variables = Variables.CreateEmpty();
+        variables.InitializeCallerArrays();
+        variables.PositionalParameters = [ShellValue.FromText("first"), ShellValue.FromText("retained")];
+        var counts = variables.IndexedArrays["BASH_ARGC"];
+        var arguments = variables.IndexedArrays["BASH_ARGV"];
+        var governor = new MemoryGovernor(1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        using (governor.Reserve(governor.LimitBytes))
+            Assert.Throws<MemoryBudgetExceededException>(() => variables.InitializeCallerArgumentSnapshot("BASH_ARGV", memory));
+        Assert.Empty(counts.PresentValues);
+        Assert.Empty(arguments.PresentValues);
+        Assert.Equal(0, governor.ReservedBytes);
+
+        Assert.True(variables.TryShiftPositionalParameters(1));
+        variables.InitializeCallerArgumentSnapshot("BASH_ARGC", memory);
+        Assert.Equal(ShellValue.FromByte((byte)'1'), Assert.Single(counts.PresentValues));
+        Assert.Equal(ShellValue.FromText("retained"), Assert.Single(arguments.PresentValues));
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
     }
 
     [Fact]

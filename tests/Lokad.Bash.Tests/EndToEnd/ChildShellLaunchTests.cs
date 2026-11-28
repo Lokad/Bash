@@ -72,6 +72,103 @@ public sealed class ChildShellLaunchTests
         Assert.Equal($"./fixture: line 3: unset: {name}: cannot unset\n", host.StandardError.TextContent);
     }
 
+    [Fact]
+    public async Task CallerArgumentSnapshotPreservesReversedBytesAfterPositionalReplacement()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            shift
+            printf '<%s>' "${BASH_ARGC[0]}"
+            set -- different
+            printf '<%s>' "${BASH_ARGV[@]}"
+            """);
+
+        var result = await host.RunAsync("bash ./unit discard '' $'a\\377b'", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        byte[] expected = [.. "<2><a"u8, 0xff, .. "b><>"u8];
+        Assert.Equal(expected, host.StandardOutput.Content.ToArray());
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task FirstCallerArgumentReadInAFunctionLeavesTheRootSnapshotPending()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            f() { declare -p BASH_ARGC BASH_ARGV; }
+            f one two three
+            shift
+            declare -p BASH_ARGC BASH_ARGV
+            """);
+
+        var result = await host.RunAsync("bash ./unit first second", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("declare -a BASH_ARGC=()\ndeclare -a BASH_ARGV=()\n"
+            + "declare -a BASH_ARGC=([0]=\"1\")\ndeclare -a BASH_ARGV=([0]=\"second\")\n",
+            host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+    }
+
+    [Theory]
+    [InlineData("", "capture:1:child\nroot:2:second first\n")]
+    [InlineData(": \"$BASH_ARGV\"", "capture:2:second first\nroot:2:second first\n")]
+    public async Task CallerArgumentCaptureKeepsItsOwnFirstReadState(string prime, string expected)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", prime + "\n" + """
+            observed=$(set -- child; printf '%s:%s' "$BASH_ARGC" "${BASH_ARGV[*]}")
+            printf 'capture:%s\nroot:%s:%s\n' "$observed" "$BASH_ARGC" "${BASH_ARGV[*]}"
+            """);
+
+        var result = await host.RunAsync("bash ./unit first second", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task TopLevelSourceCanInitializeCallerArgumentsFromItsOwnFrame()
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", """
+            . ./sub child-a child-b
+            printf '%s:%s:%s\n' "$1" "$BASH_ARGC" "${BASH_ARGV[*]}"
+            """);
+        host.AddFile("/sub", "[[ -v 'BASH_ARGV[0]' ]]\n");
+
+        var result = await host.RunAsync("bash ./unit root", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("root:2:child-b child-a\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("BASH_ARGV=ignored", "0:1:second\n", "")]
+    [InlineData("BASH_ARGV[0]=ignored", "0:2:second first\n", "")]
+    [InlineData("unset -n BASH_ARGV", "1:2:second first\n", "./unit: line 1: unset: BASH_ARGV: cannot unset\n")]
+    public async Task CallerArgumentWritesSelectTheirLookupBeforeShift(string operation, string expected, string diagnostic)
+    {
+        await using var host = new TestHost();
+        host.AddFile("/unit", operation + "\n" + """
+            status=$?
+            shift
+            printf '%s:%s:%s\n' "$status" "$BASH_ARGC" "${BASH_ARGV[*]}"
+            """);
+
+        var result = await host.RunAsync("bash ./unit first second", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Equal(diagnostic, host.StandardError.TextContent);
+    }
+
     [Theory]
     [InlineData("SHLVL=7 exec bash -c 'printf \"%s\\n\" \"$SHLVL\"'", "7\n")]
     [InlineData("(SHLVL=7 exec bash -c 'printf \"%s\\n\" \"$SHLVL\"')", "8\n")]

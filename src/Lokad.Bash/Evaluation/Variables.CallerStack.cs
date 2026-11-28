@@ -6,7 +6,7 @@ using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
-internal enum CallerArrayKind { Source, Line, FunctionName }
+internal enum CallerArrayKind { Source, Line, FunctionName, ArgumentCount, ArgumentValues }
 internal enum CallerFrameKind { File, Source, Function }
 
 public sealed partial class Variables
@@ -14,6 +14,8 @@ public sealed partial class Variables
     private static readonly BindingName CallerSourceName = "BASH_SOURCE";
     private static readonly BindingName CallerLineName = "BASH_LINENO";
     private static readonly BindingName CallerFunctionName = "FUNCNAME";
+    private static readonly BindingName CallerArgumentCountName = "BASH_ARGC";
+    private static readonly BindingName CallerArgumentValuesName = "BASH_ARGV";
     private static readonly ShellValue SourcedInvocation = ShellValue.FromText("source");
     private static readonly ShellValue MainInvocation = ShellValue.FromText("main");
     private List<CallerEntry>? _callerFrames;
@@ -22,6 +24,13 @@ public sealed partial class Variables
     private int _callerFunctionDepth;
     private bool _keepCallerNamesVisible;
     internal bool UsesBashCallerOutput { get; set; }
+
+    // The first cell holds the count, followed by immutable arguments in reverse order.
+    private ShellValue[]? _callerArguments;
+    private long _callerArgumentBytes;
+    private ShellValue[]? VisibleCallerArguments => _callerArguments ?? _commandSource?.Variables.VisibleCallerArguments;
+    private long VisibleCallerArgumentBytes => _callerArguments != null
+        ? _callerArgumentBytes : _commandSource?.Variables.VisibleCallerArgumentBytes ?? 0;
 
     private readonly record struct CallerEntry(ShellValue Source, ShellValue Line, ShellValue Name);
 
@@ -42,8 +51,20 @@ public sealed partial class Variables
 
     internal void RetainCallerNameVisibilityOnDiscard() => _keepCallerNamesVisible = true;
 
+    internal int GetCallerArrayCount(CallerArrayKind kind) => kind switch
+    {
+        CallerArrayKind.ArgumentCount => VisibleCallerArguments == null ? 0 : 1,
+        CallerArrayKind.ArgumentValues => (VisibleCallerArguments?.Length ?? 1) - 1,
+        _ => CallerCount
+    };
+
     internal ShellValue GetCallerEntry(int index, CallerArrayKind kind)
     {
+        if (kind is CallerArrayKind.ArgumentCount or CallerArrayKind.ArgumentValues)
+        {
+            var arguments = VisibleCallerArguments ?? throw new InvalidOperationException("Expected an argument snapshot.");
+            return arguments[kind == CallerArrayKind.ArgumentCount ? 0 : index + 1];
+        }
         var frames = VisibleCallers ?? throw new InvalidOperationException("Expected an active caller frame.");
         var frame = frames[frames.Count - 1 - index];
         return kind switch
@@ -59,14 +80,49 @@ public sealed partial class Variables
         StoreBinding(CallerSourceName, new IndexedSlot(new IndexedArray(this, CallerArrayKind.Source)));
         StoreBinding(CallerLineName, new IndexedSlot(new IndexedArray(this, CallerArrayKind.Line)));
         StoreBinding(CallerFunctionName, new IndexedSlot(new IndexedArray(this, CallerArrayKind.FunctionName)));
+        StoreBinding(CallerArgumentCountName, new IndexedSlot(new IndexedArray(this, CallerArrayKind.ArgumentCount)));
+        StoreBinding(CallerArgumentValuesName, new IndexedSlot(new IndexedArray(this, CallerArrayKind.ArgumentValues)));
     }
 
+    private static bool IsCallerArgumentName(BindingName name) => name == CallerArgumentCountName || name == CallerArgumentValuesName;
+
     internal bool IsCallerArray(BindingName name) =>
-        (name == CallerSourceName || name == CallerLineName || name == CallerFunctionName)
+        (name == CallerSourceName || name == CallerLineName || name == CallerFunctionName || IsCallerArgumentName(name))
         && TryGetBinding(name, detachBorrowed: false, out var slot)
         && slot is IndexedSlot { Value.IsCallerArray: true };
 
     internal bool IsProtectedCallerArray(BindingName name) => name != CallerFunctionName && IsCallerArray(name);
+
+    /// <summary>Captures the currently reached top-level arguments on the first named access.</summary>
+    internal void InitializeCallerArgumentSnapshot(BindingName name, EvaluationMemory memory)
+    {
+        if (!IsCallerArgumentName(name) || VisibleCallerArguments != null || HasActiveCallerFunction || !IsCallerArray(name))
+            return;
+
+        // Prefixes borrow this state. An isolated redirection can initialize its own snapshot.
+        var owner = this;
+        while (!owner._isolatedRedirections && owner._commandSource is { } borrowed)
+            owner = borrowed.Variables;
+        var arguments = _positional;
+        var count = arguments.Count;
+        Span<byte> buffer = stackalloc byte[24];
+        var digits = NumberFormatting.FormatNumber(count, buffer);
+        var entries = checked(count + 1);
+        var bytes = checked(MemoryCapacity.ArrayBackingBytes<ShellValue>(entries) + arguments.ValueBytes
+            + EstimateValueBytes(digits.Length));
+        memory.PrepareRetainedStorage(bytes);
+        memory.CancellationToken.ThrowIfCancellationRequested();
+        var snapshot = new ShellValue[entries];
+        snapshot[0] = digits.Length == 1 ? ShellValue.FromByte(digits[0]) : ShellValue.FromBytes(digits.ToArray());
+        for (var index = 0; index < count; index++)
+        {
+            memory.CancellationToken.ThrowIfCancellationRequested();
+            snapshot[index + 1] = arguments[count - index - 1];
+        }
+        memory.CancellationToken.ThrowIfCancellationRequested();
+        owner._callerArguments = snapshot;
+        owner._callerArgumentBytes = bytes;
+    }
 
     internal IndexedArray? FunctionNamesForCaller => ReadFunctionNameSlot(detachBorrowed: false, out _)?.Value;
 

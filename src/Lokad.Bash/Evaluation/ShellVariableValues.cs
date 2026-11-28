@@ -98,7 +98,7 @@ internal sealed class IndexedArray
     internal bool UsesSparseCallerNames => !IsCallerArray || _editedCallerNames;
     private bool NamesAreVisible => !IsFunctionNames || _callerOwner?.CallerNamesVisible == true;
     private int? DenseCount => DirectoryStack?.DirectoryStackCount
-        ?? (!NamesAreVisible ? 0 : _editedCallerNames ? null : _callerOwner?.CallerCount);
+        ?? (!NamesAreVisible ? 0 : _editedCallerNames ? null : _callerOwner?.GetCallerArrayCount(_callerKind));
     private long? _maximumIndex;
     private long _valueBytes;
     private int _entryCapacity;
