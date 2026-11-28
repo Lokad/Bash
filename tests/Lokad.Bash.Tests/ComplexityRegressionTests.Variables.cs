@@ -14,6 +14,56 @@ namespace Lokad.Bash.Tests;
 public sealed partial class ComplexityRegressionTests
 {
     [Fact]
+    public async Task AsciiNamePrefixMissDoesNotAdmitADecodedCopy()
+    {
+        var variables = Variables.CreateEmpty();
+        Assert.True(variables.TrySetScalar("unrelated", ShellValue.FromText("value")));
+        var shortPrefix = ShellSource.FromText("${!probe_@}");
+        var longPrefix = ShellSource.FromText("${!probe_" + new string('p', 1018) + "@}");
+
+        var shortBytes = await MeasureNamePrefixWorkspaceAsync(shortPrefix, variables, []);
+        var longBytes = await MeasureNamePrefixWorkspaceAsync(longPrefix, variables, []);
+
+        Assert.Equal(shortBytes, longBytes);
+    }
+
+    [Fact]
+    public async Task MalformedNamePrefixDoesNotEncodeAsciiMisses()
+    {
+        byte[] name = [.."map["u8, 0xff, (byte)']'];
+        byte[] source = [.."${!"u8, ..name, .."@}"u8];
+        var literal = ShellValue.FromBytes(name);
+        var prefix = ShellSource.FromBytes(source);
+        var variables = Variables.CreateEmpty();
+        variables.SetTemporaryScalar(BindingName.FromValue(literal), ShellValue.FromText("value"));
+        var narrowBytes = await MeasureNamePrefixWorkspaceAsync(prefix, variables, [literal]);
+
+        for (var index = 0; index < 256; index++)
+            Assert.True(variables.TrySetScalar("map_" + index, ShellValue.Empty));
+        var wideBytes = await MeasureNamePrefixWorkspaceAsync(prefix, variables, [literal]);
+
+        Assert.Equal(narrowBytes, wideBytes);
+    }
+
+    private static async Task<long> MeasureNamePrefixWorkspaceAsync(ShellSource source, Variables variables,
+        ShellValue[] expected)
+    {
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        var evaluation = new Eval(Parser.Parse(":"));
+        evaluation.Memory.Budget = owner;
+        var scope = new ScopedEvaluation(evaluation, variables, new Eval.EvaluationContext(0, null, Eval.ReturnTargetKind.None));
+        var word = new Word([WordPart.FromSource(WordPartKind.DoubleQuoted, source)]);
+        var fields = await WordExpansion.ExpandToWordsAsync(word, scope);
+        var bytes = evaluation.Memory.Workspace.Bytes;
+
+        Assert.Equal(expected, fields.Select(field => field.ToValue(evaluation.Memory)));
+        evaluation.Memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+        return bytes;
+    }
+
+    [Fact]
     public void WholeVariableUnsetAllocatesOnlyOneReferenceWalk()
     {
         const int repetitions = 64;

@@ -1,4 +1,3 @@
-using Lokad.Bash.Commands;
 using Lokad.Bash.Evaluation;
 
 namespace Lokad.Bash.Tests;
@@ -13,9 +12,13 @@ public sealed class BindingNameTests
         BindingName text = "é";
         var bytes = BindingName.FromValue(ShellValue.FromBytes(new byte[] { 0xc3, 0xa9, 0xff }));
         var allowance = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
+        var spelling = (textIsPrefix ? text : bytes).ToValue();
+        var prefix = BindingName.FromValue(spelling);
 
         Assert.Equal(textIsPrefix, textIsPrefix
-            ? bytes.StartsWith(text, allowance) : text.StartsWith(bytes, allowance));
+            ? bytes.StartsWith(spelling.Bytes.Span, prefix, allowance)
+            : text.StartsWith(spelling.Bytes.Span, prefix, allowance));
+        allowance.Finish(retainVariables: false);
     }
 
     [Theory]
@@ -26,10 +29,13 @@ public sealed class BindingNameTests
     public void CachedBytePrefixComparisonsNeedNoCopies(string nameHex, string prefixHex, bool matches)
     {
         var name = BindingName.FromValue(ShellValue.FromBytes(Convert.FromHexString(nameHex)));
-        var prefix = BindingName.FromValue(ShellValue.FromBytes(Convert.FromHexString(prefixHex)));
+        var spelling = ShellValue.FromBytes(Convert.FromHexString(prefixHex));
+        var prefix = BindingName.FromValue(spelling);
         var allowance = new EvaluationMemory(new global::Lokad.Bash.Memory.MemoryGovernor(TestMemoryBudget.EvaluationBytes));
 
-        Assert.Equal(matches, name.StartsWith(prefix, allowance));
+        Assert.Equal(matches, name.StartsWith(spelling.Bytes.Span, prefix, allowance));
+        Assert.Equal(0, allowance.Workspace.Bytes);
+        allowance.Finish(retainVariables: false);
     }
 
     [Fact]

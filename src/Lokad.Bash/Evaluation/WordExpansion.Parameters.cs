@@ -564,7 +564,9 @@ internal static partial class WordExpansion
             var budget = scope.Effects.Memory;
             if (parsed.Kind is BracedParameterOperatorKind.NamesAt or BracedParameterOperatorKind.NamesStar)
             {
-                var prefix = BindingNameExpansion.FromValue(parsed.Name.ToValue(), budget);
+                var prefix = parsed.Name;
+                var decodedPrefix = Ascii.IsValid(prefix.AsSpan()) ? (BindingName?)null
+                    : BindingNameExpansion.FromValue(prefix.ToValue(), budget);
                 List<ShellValue>? names = null;
                 HashSet<BindingName>? selected = null;
                 var function = scope.Context.FunctionContext;
@@ -587,7 +589,7 @@ internal static partial class WordExpansion
                     foreach (var name in assigned)
                     {
                         scope.Effects.CancellationToken.ThrowIfCancellationRequested();
-                        if (!name.StartsWith(prefix, budget) || selected?.Contains(name) == true)
+                        if (!name.StartsWith(prefix.AsSpan(), decodedPrefix, budget) || selected?.Contains(name) == true)
                             continue;
                         if (selectionMemory != null)
                         {

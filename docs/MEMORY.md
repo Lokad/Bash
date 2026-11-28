@@ -354,6 +354,9 @@ belong to the syntax and are shared across executions. Stable operands and liter
 fields borrow its bytes; runtime-expanded operands, selectors and argument
 collections retain command workspace admission. A dynamic operand with a single
 expanded segment and no prepared selectors reuses the segment's admitted bytes.
+Variable-prefix expansion compares ASCII prefixes directly from admitted syntax.
+It admits decoded non-ASCII prefixes when reached, and skips encoding ASCII names
+when the prefix contains malformed UTF-8.
 Other dynamic operands write joined fields directly into admitted backing.
 Growth accounts for replacement overlap and the operand keeps its charge through
 numeric evaluation.
