@@ -34,16 +34,13 @@ internal static class ShellOptions
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
-    internal readonly record struct Entry(ShellValue Name, ShellOption Option)
-    {
-        internal byte ShortFlag { get; init; }
-    }
+    internal readonly record struct Entry(ShellValue Name, ShellOption Option);
 
     private static readonly Entry[] SetOptions =
     [
         new(ShellValue.FromText("braceexpand"), ShellOption.BraceExpand),
-        new(ShellValue.FromText("errexit"), ShellOption.Errexit) { ShortFlag = ErrexitFlag },
-        new(ShellValue.FromText("noglob"), ShellOption.Noglob) { ShortFlag = NoglobFlag },
+        new(ShellValue.FromText("errexit"), ShellOption.Errexit),
+        new(ShellValue.FromText("noglob"), ShellOption.Noglob),
         new(ShellValue.FromText("pipefail"), ShellOption.Pipefail)
     ];
 
@@ -64,8 +61,9 @@ internal static class ShellOptions
         [ShellOption.None, ShellOption.Errexit, ShellOption.Noglob, MutableSet];
     private static readonly ShellValue[] SetValues = Array.ConvertAll(SetStates,
         static enabled => Format(SetOptions, Fixed | enabled, memory: null, out _));
+    // Keep the fixed spellings here so the general byte cache starts on its first ordinary use.
     private static readonly ShellValue[] SetFlags =
-        [ShellValue.Empty, ShellValue.FromByte(ErrexitFlag), ShellValue.FromByte(NoglobFlag), ShellValue.FromText("ef")];
+        [ShellValue.Empty, ShellValue.FromText("e"), ShellValue.FromText("f"), ShellValue.FromText("ef")];
 
     internal static ShellValue DefaultBashBinding { get; } = FormatBashBinding(SelectBashFlags(Default), memory: null, out _);
 
@@ -123,7 +121,7 @@ internal static class ShellOptions
             var commands = new StringBuilder();
             foreach (var entry in SetOptions)
             {
-                if (entry.ShortFlag == 0)
+                if ((entry.Option & MutableSet) == 0)
                     continue;
                 var active = (enabled & entry.Option) != 0;
                 var name = entry.Name.ToUtf8String();
