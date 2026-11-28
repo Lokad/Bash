@@ -87,7 +87,7 @@ public partial struct DescriptorBindings
         var present = TryGetAdditionalValue(descriptor, out var previous);
         if (present && IsUnchanged(previous, binding))
             return false;
-        var requiredSlots = _writer?.RequiredSlots(descriptor) ?? _additional?.RequiredSlots(descriptor) ?? 1;
+        var requiredSlots = _writer?.RequiredSlots(present) ?? _additional?.RequiredSlots(present) ?? 1;
         var required = DescriptorMap.EstimateMemoryBytes(requiredSlots);
         var owned = OwnedMemoryBytes;
         if (required > owned)

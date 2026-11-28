@@ -29,6 +29,76 @@ public sealed class DescriptorMemoryTests
     }
 
     [Fact]
+    public void UncapturedWriterReusesVacantSlotWithinItsAdmittedCapacity()
+    {
+        var released = new LogicalDescriptor(10);
+        var remaining = new LogicalDescriptor(11);
+        var added = new LogicalDescriptor(12);
+        var binding = new DescriptorBinding(new FileDescriptor(101));
+        var replacement = new DescriptorBinding(new FileDescriptor(102));
+        var required = DescriptorMap.EstimateMemoryBytes(2);
+        var governor = new MemoryGovernor(required);
+        using var owner = governor.CreateScope();
+        using var memory = new MemoryCapacity(owner, required);
+        memory.Resize(0);
+        var bindings = DescriptorBindings.Snapshot.Standard.Fork();
+
+        Assert.True(bindings.Set(released, binding, memory));
+        Assert.True(bindings.Set(remaining, binding, memory));
+        Assert.True(bindings.Remove(released));
+        Assert.True(bindings.Set(added, replacement, memory));
+
+        Assert.Equal(required, memory.Bytes);
+        Assert.Equal(required, bindings.OwnedMemoryBytes);
+        Assert.False(bindings.HasMapping(released));
+        var handles = new List<FileDescriptor>();
+        bindings.Capture().AddReferencedHandlesTo(handles);
+        Assert.Equal(
+            new[] { FileDescriptor.StdIn, FileDescriptor.StdOut, FileDescriptor.StdErr, replacement.Handle, binding.Handle },
+            handles);
+    }
+
+    [Theory]
+    [InlineData(false, 3)]
+    [InlineData(true, 2)]
+    public void SparseForkDistinguishesAnExplicitlyClosedSlotFromAnAbsentOne(bool replacesClosed, int expectedSlots)
+    {
+        var closed = new LogicalDescriptor(16);
+        var absent = new LogicalDescriptor(15);
+        var other = new LogicalDescriptor(17);
+        var target = replacesClosed ? closed : absent;
+        var parent = Bindings(8);
+        for (var number = 10; number < 16; number++)
+            Assert.True(parent.Remove(new LogicalDescriptor(number)));
+        parent.Set(closed, FileDescriptor.Closed);
+        var inherited = parent.Capture();
+        var child = inherited.Fork();
+        var required = DescriptorMap.EstimateMemoryBytes(expectedSlots);
+        var governor = new MemoryGovernor(required);
+        using var owner = governor.CreateScope();
+        using var memory = new MemoryCapacity(owner, 0);
+        var replacement = new DescriptorBinding(new FileDescriptor(1000), IsWriteOnly: true);
+
+        using (owner.Reserve(1))
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => child.Set(target, replacement, memory));
+            Assert.Equal(0, memory.Bytes);
+            Assert.Equal(0, child.OwnedMemoryBytes);
+            Assert.Equal(replacesClosed, child.HasMapping(target));
+            Assert.Equal(DescriptorBinding.Closed, child.ResolveBinding(target));
+        }
+
+        Assert.True(child.Set(target, replacement, memory));
+        Assert.Equal(required, memory.Bytes);
+        Assert.Equal(required, child.OwnedMemoryBytes);
+        Assert.Equal(replacement, child.ResolveBinding(target));
+        Assert.Equal(FileDescriptor.StdOut, child.Resolve(other));
+        Assert.Equal(DescriptorBinding.Closed, inherited.ResolveBinding(closed));
+        Assert.True(inherited.HasMapping(closed));
+        Assert.False(inherited.HasMapping(absent));
+    }
+
+    [Fact]
     public void AdmissionPreparationDoesNotAcquireOrPublishBorrowedBacking()
     {
         var inherited = Bindings(128).Capture();

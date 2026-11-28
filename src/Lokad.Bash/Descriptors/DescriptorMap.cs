@@ -30,8 +30,8 @@ internal sealed class DescriptorMap
     // and replacement generations. Capture consumes already admitted headroom.
     internal static long EstimateMemoryBytes(int slots) => checked(1024L + 512L * slots);
 
-    internal int RequiredSlots(LogicalDescriptor descriptor) =>
-        RequiredSlots(_positions, SlotCount, _firstFree, descriptor, captured: true);
+    internal int RequiredSlots(bool present) =>
+        RequiredSlots(SlotCount, _positions.Count, _firstFree, present, captured: true);
 
     internal bool TryGetValue(LogicalDescriptor descriptor, out DescriptorBinding binding) =>
         TryGetValue(_positions, _slots, descriptor, out binding);
@@ -40,11 +40,10 @@ internal sealed class DescriptorMap
 
     internal bool ContainsValue(FileDescriptor handle) => _references.ContainsKey(handle);
 
-    private static int RequiredSlots(IReadOnlyDictionary<LogicalDescriptor, int> positions, int slotCount,
-        int firstFree, LogicalDescriptor descriptor, bool captured)
+    private static int RequiredSlots(int slotCount, int liveCount, int firstFree, bool present, bool captured)
     {
-        var slots = captured && slotCount - positions.Count > positions.Count ? positions.Count : slotCount;
-        return positions.ContainsKey(descriptor) || (!captured && firstFree >= 0) ? slots : checked(slots + 1);
+        var slots = captured && slotCount - liveCount > liveCount ? liveCount : slotCount;
+        return present || (!captured && firstFree >= 0) ? slots : checked(slots + 1);
     }
 
     private static bool TryGetValue(IReadOnlyDictionary<LogicalDescriptor, int> positions,
@@ -89,8 +88,8 @@ internal sealed class DescriptorMap
 
         internal int SlotCount => _slots.Count;
 
-        internal int RequiredSlots(LogicalDescriptor descriptor) =>
-            DescriptorMap.RequiredSlots(_positions, SlotCount, _firstFree, descriptor, _captured);
+        internal int RequiredSlots(bool present) =>
+            DescriptorMap.RequiredSlots(SlotCount, _positions.Count, _firstFree, present, _captured);
 
         internal bool TryGetValue(LogicalDescriptor descriptor, out DescriptorBinding binding) =>
             DescriptorMap.TryGetValue(_positions, _slots, descriptor, out binding);
