@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `set -a`, `set -o allexport`, and hosted launch flags for automatic
+  export of reached shell assignments and function definitions.
 - Support `shopt -u patsub_replacement` and hosted `bash +O patsub_replacement`
   to use literal replacement text in parameter expansion.
 - Support `set -u`, including Bash's command-unit recovery for absent array

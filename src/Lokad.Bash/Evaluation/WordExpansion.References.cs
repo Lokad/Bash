@@ -151,6 +151,12 @@ internal static partial class WordExpansion
         internal bool TryPublishValue(ScopedEvaluation scope, BindingName sourceName, ShellValue value) =>
             TryPublishValue(scope, sourceName, value, DeclarationWrite.Ordinary);
 
+        internal void ExportArrayAssignment(ScopedEvaluation scope, Variables destination, VariableReferenceKind sourceKind)
+        {
+            if (sourceKind == VariableReferenceKind.Name && this is Indexed or Associative && scope.Effects.AllexportEnabled)
+                destination.ExportAssignedBinding(Name);
+        }
+
         internal bool TryPublishValue(
             ScopedEvaluation scope, BindingName sourceName, ShellValue value, DeclarationWrite declarationWrite)
         {
@@ -215,7 +221,7 @@ internal static partial class WordExpansion
                 && (declarationWrite != DeclarationWrite.Ordinary || !variables.IsReadonly(name)) && this switch
             {
                 Scalar => variables.TrySetResolvedScalar(name, value, scope.Effects.Memory,
-                    initializeReadonly: declarationWrite == DeclarationWrite.ReadonlyInitializer),
+                    initializeReadonly: declarationWrite == DeclarationWrite.ReadonlyInitializer, export: scope.Effects.AllexportEnabled),
                 Indexed indexed => variables.TrySetResolvedArrayElement(name, indexed.Index, value, scope.Effects.Memory,
                     indexed.ReplaceAssociative, InitializesArrayNameref),
                 Associative associative => variables.TrySetResolvedArrayElement(name, associative.Key, value, scope.Effects.Memory,
@@ -370,6 +376,7 @@ internal static partial class WordExpansion
         if (await target.AssignValueAsync(writeScope, destination, reference.Name, value, operation, ShellValue.Empty,
             DeclarationWrite.Ordinary, scope).ConfigureAwait(false) is not null)
         {
+            target.ExportArrayAssignment(scope, destination, reference.Kind);
             if (target.Name == FieldSeparators.Name && reference.Name == target.Name)
                 scope.Variables.RefreshIndexedFieldSeparators();
             return true;

@@ -1525,12 +1525,12 @@ internal static partial class WordExpansion
         BindingName name,
         VariableBinding? binding,
         ShellValue value,
-        ScopedEvaluation scope)
+        ScopedEvaluation scope, bool exportArray)
     {
         if (binding is { } reached
             && Variables.GetNamerefAssignmentFailure(name, reached, value, scope.Effects.Memory) != NamerefAssignmentFailure.None)
             return null;
 
-        return scope.SetExpansionValueIgnoringReadonly(name, value);
+        return scope.SetExpansionValueIgnoringReadonly(name, value, exportArray);
     }
 }

@@ -1080,7 +1080,7 @@ public sealed class PrefixScopeOwnershipTests
                 {
                     ExpansionWriteTarget = ScopedEvaluation.ExpansionBindings.ForSavedPrefixes(bindings)
                 };
-                scope.SetExpansionValueIgnoringReadonly("alias", ShellValue.FromText("indirect"));
+                scope.SetExpansionValueIgnoringReadonly("alias", ShellValue.FromText("indirect"), exportArray: false);
                 Assert.Equal(saved, bindings.SavedVariables.Scalars["prefix"]);
 
                 var owned = bindings.SavedVariables.EstimatedMemoryBytes;
@@ -1088,11 +1088,11 @@ public sealed class PrefixScopeOwnershipTests
                     Assert.True(new WordExpansion.ResolvedVariableReference.Indexed("unrelated", default)
                         .TryPublishValue(scope, "unrelated", written));
                 else
-                    scope.SetExpansionValueIgnoringReadonly("unrelated", written);
+                    scope.SetExpansionValueIgnoringReadonly("unrelated", written, exportArray: false);
 
                 Assert.Equal(owned, bindings.SavedVariables.EstimatedMemoryBytes);
                 Assert.False(bindings.SavedVariables.HasBinding("unrelated"));
-                scope.SetExpansionValueIgnoringReadonly("prefix", written);
+                scope.SetExpansionValueIgnoringReadonly("prefix", written, exportArray: false);
             }
             Assert.Equal(written, caller.Scalars["prefix"]);
             Assert.True(caller.TryGetExpansionValue("unrelated", out var unrelated));

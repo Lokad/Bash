@@ -150,7 +150,7 @@ internal readonly record struct ScopedEvaluation(
             new(bindings.SavedVariables, bindings.PrefixNames) { SavedPrefixes = bindings };
     }
 
-    public ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value)
+    internal ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, bool exportArray)
     {
         if (SelectorBindings is { } bindings && Context.FunctionContext?.IsLocal(name) == true
             && Variables.TryGetNameref(name, out _))
@@ -159,17 +159,17 @@ internal readonly record struct ScopedEvaluation(
             if (!resolved.IsEmpty && bindings.RetainSelectorBinding(resolved, Effects.Memory, Effects.CancellationToken) is { } retained)
             {
                 // Scalar writes through local namerefs reach the caller; subsequent reads still see the prefix.
-                return retained.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
+                return retained.SetResolvedValuePreservingArray(resolved, value, Effects.Memory, exportArray);
             }
         }
 
-        var stored = Variables.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
+        var stored = Variables.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory, exportArray);
         if (SelectorBindings != null)
         {
             var resolved = Variables.ResolveNamerefName(name);
-            GetSelectorWriteTarget(name, resolved)?.SetResolvedValuePreservingArray(resolved, value, Effects.Memory);
+            GetSelectorWriteTarget(name, resolved)?.SetResolvedValuePreservingArray(resolved, value, Effects.Memory, exportArray);
         }
-        GetExpansionWriteTarget(name)?.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory);
+        GetExpansionWriteTarget(name)?.SetExpansionValueIgnoringReadonly(name, value, Effects.Memory, exportArray);
         return stored;
     }
 

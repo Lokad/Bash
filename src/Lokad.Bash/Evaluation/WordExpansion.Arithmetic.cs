@@ -450,7 +450,7 @@ internal static partial class WordExpansion
                 // Element namerefs use their already selected location, without replaying the selector.
                 if (reference.Kind == VariableReferenceKind.Name
                     && sourceBinding is { Reference.Kind: VariableReferenceKind.Name, IsArrayNameref: false })
-                    return TrySetWritableVariable(reference.Name, sourceBinding, value, scope).HasValue;
+                    return TrySetWritableVariable(reference.Name, sourceBinding, value, scope, exportArray: false).HasValue;
                 return target.TryPublishValue(scope, reference.Name, value);
             }
         }

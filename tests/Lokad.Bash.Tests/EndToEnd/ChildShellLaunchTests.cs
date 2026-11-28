@@ -3,6 +3,24 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task HostedAllexportUsesTheReachedOptionAndImportsExportedSettings()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            code='probe=child; printf "<%s>" "${probe@a}"'
+            bash -ac "$code" bash
+            bash -o allexport -c "$code" bash
+            bash +a -c "$code" bash
+            set -a
+            export SHELLOPTS
+            bash +a -c "$code" bash
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<x><x><><x>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
     public async Task BashLaunchAppliesExplicitReplacementOptionAndKeepsTheFreshDefault()
     {
         var result = await EvaluationTestHelper.RunAsync("""

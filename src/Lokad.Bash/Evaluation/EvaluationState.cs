@@ -966,6 +966,8 @@ internal sealed class EvaluationState
             ? previous.Attributes : FunctionAttributes.None;
         if (attributes.HasFlag(FunctionAttributes.Readonly))
             return false;
+        if (HasOption(ShellOption.Allexport))
+            attributes |= FunctionAttributes.Exported;
         memory.Charge(FunctionPublicationBytes);
         var coordinates = context.Coordinates;
         var bodyLine = coordinates.Locations?.TryGet(functionDefinition.Body, out var body) == true

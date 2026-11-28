@@ -16,7 +16,7 @@ internal enum ShellOption
     Noglob = 2,
     Nounset = 4,
     BraceExpand = 8,
-    Failglob = 16,
+    Allexport = 16,
     Nullglob = 32,
     NoCaseGlob = 64,
     NoCaseMatch = 128,
@@ -28,7 +28,8 @@ internal enum ShellOption
     SourcePath = 8192,
     ShiftVerbose = 16384,
     LocalVariableInheritance = 32768,
-    PatsubReplacement = 65536
+    PatsubReplacement = 65536,
+    Failglob = 131072
 }
 
 internal static class ShellOptions
@@ -46,6 +47,7 @@ internal static class ShellOptions
 
     private static readonly Entry[] SetOptions =
     [
+        new(ShellValue.FromText("allexport"), ShellOption.Allexport, (byte)'a'),
         new(ShellValue.FromText("braceexpand"), ShellOption.BraceExpand, (byte)'B'),
         new(ShellValue.FromText("errexit"), ShellOption.Errexit, (byte)'e'),
         new(ShellValue.FromText("noglob"), ShellOption.Noglob, (byte)'f'),
@@ -128,7 +130,7 @@ internal static class ShellOptions
 
     private enum ProjectionKind { Binding, Flags, Listing, Commands }
     private sealed record Projection(ShellValue Value);
-    private const int ProjectionCapacity = 16;
+    private const int ProjectionCapacity = 32;
     private static Projection?[]? _setBindings, _shortFlags, _setListings, _setCommands;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -7,6 +7,71 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationEnvironmentTestsEndToEnd
 {
     [Theory]
+    [InlineData("probe=ok", "ok", "x", "ok")]
+    [InlineData("read -r probe <<< ok", "ok", "x", "ok")]
+    [InlineData("printf -v probe %s ok", "ok", "x", "ok")]
+    [InlineData("declare +x probe=ok", "ok", "x", "ok")]
+    [InlineData("export -n probe=ok", "ok", "", "unset")]
+    [InlineData("readonly probe", "unset", "rx", "unset")]
+    [InlineData("probe=ok; set +a; probe=again", "again", "x", "again")]
+    public async Task AllexportPublishesReachedScalarAssignmentsAndDeclarations(
+        string write, string value, string attributes, string child)
+    {
+        var result = await EvaluationTestHelper.RunAsync("set -a\n" + write + "\n" + """
+            printf '<%s><%s>' "${probe-unset}" "${probe@a}"
+            bash -c 'printf "<%s>" "${probe-unset}"' bash
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal($"<{value}><{attributes}><{child}>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task AllexportDistinguishesAnArrayNameFromItsAuthoredElement()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            plain=(old)
+            selected=(old)
+            delayed=()
+            declare -n ref='selected[0]'
+            set -a
+            plain[0]=element
+            ref=alias
+            : "${delayed:=default}"
+            printf '<%s><%s><%s>' "${plain@a}" "${selected@a}" "${delayed@a}"
+            bash -c 'printf "<%s>" "${selected-unset}"' bash
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<a><ax><ax><unset>", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task AllexportRestoresItsOptionAtLocalSnapshotAndExportsReachedFunctions()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            prepare() {
+                local -
+                set -a
+                local inner=local
+                payload=outer
+                print_payload() { printf '%s' "$payload"; }
+                bash -c 'printf "<%s>" "$inner"' bash
+            }
+            prepare
+            later=caller
+            printf '<%s><%s>' "${inner-unset}" "${later@a}"
+            bash -c 'print_payload' bash
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("<local><unset><>outer", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("a=(outer tail); a=temp export a=body; printf '%s:%s' \"${a[0]}\" \"${a[1]}\"", "body:tail")]
     [InlineData("a=(outer tail); a=temp readonly a=body; printf '%s:%s' \"${a[0]}\" \"${a[1]}\"", "body:tail")]
     [InlineData("a=(outer tail); a=temp export a; printf '%s:%s' \"${a[0]}\" \"${a[1]}\"", "temp:tail")]

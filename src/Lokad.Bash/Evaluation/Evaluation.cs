@@ -251,6 +251,7 @@ public sealed partial class Evaluation : IFileTester
     internal ShellValue ShellOptionFlags => ShellOptions.Flags(_state.EnabledOptions);
     internal bool BraceExpansionEnabled => _state.HasOption(ShellOption.BraceExpand);
     internal bool NounsetEnabled => _state.HasOption(ShellOption.Nounset);
+    internal bool AllexportEnabled => _state.HasOption(ShellOption.Allexport);
     internal bool IgnoreCaseInPatterns => _state.HasOption(ShellOption.NoCaseMatch);
     internal bool PatternReplacementExpandsMatch => _state.HasOption(ShellOption.PatsubReplacement);
 
@@ -2726,6 +2727,13 @@ public sealed partial class Evaluation : IFileTester
                 var arrayAttributeAssignment = setsNamedAttribute && arrayKind != ArrayAssignmentKind.Auto;
                 var assignmentExport = arrayAttributeAssignment && options.Builtin == BuiltinKind.Export
                     ? DeclarationAttributeChange.Set : options.ExportChange;
+                if (assignmentExport == DeclarationAttributeChange.Clear && AllexportEnabled && !setsNamedAttribute
+                    && operand.Value.HasValue && reference.Kind == VariableReferenceKind.Name && arrayKind == ArrayAssignmentKind.Auto
+                    && (local && functionContext?.IsLocal(reference.Name) != true || commandVars.GetArrayMetadata(reference.Name) == null))
+                {
+                    // A scalar declaration's assignment exports even when +x appears on the declaration.
+                    assignmentExport = DeclarationAttributeChange.Unchanged;
+                }
                 // Global declarations can write indexed elements through the active scope.
                 var sourceName = reference.Name;
                 commandVars.InitializeCallerArgumentSnapshot(sourceName, Memory);
@@ -3691,7 +3699,8 @@ public sealed partial class Evaluation : IFileTester
                         var target = namerefTarget ?? ShellValue.Empty;
                         Memory.Charge(checked(4L * target.Bytes.Length));
                         targetVars.SetCaseAttributes(name, options.CaseChange);
-                        if (!targetVars.TrySetNameref(name, target, Memory))
+                        if (!targetVars.TrySetNameref(name, target, Memory,
+                            export: AllexportEnabled && (operand.Value.HasValue || !targetVars.HasBinding(name))))
                         {
                             RecordOperandFailure();
                             continue;
@@ -4973,6 +4982,8 @@ public sealed partial class Evaluation : IFileTester
             void SetAttributes(BindingName name, Variables variables, DeclarationAttributeChange exportChange)
             {
                 var (set, clear) = GetAttributeChanges(exportChange);
+                if (AllexportEnabled && options.ArrayKind == ArrayAssignmentKind.Auto && !variables.HasBinding(name))
+                    set |= BindingAttributes.Exported;
                 variables.RefreshDirectoryStackListing(name);
                 variables.UpdateBindingAttributes(name, set, clear);
             }

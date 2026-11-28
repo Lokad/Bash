@@ -303,7 +303,7 @@ internal static partial class WordExpansion
                                 assigned = await EvaluateIntegerAssignmentAsync(expanded, null, scope, ShellValue.Empty).ConfigureAwait(false);
                             if (assigned is { } value && scope.CanExpand)
                                 assigned = !named.Name.IsEmpty && !scope.Variables.IsReadonlyWriteTarget(named.Name, out var writableBinding)
-                                    ? TrySetWritableVariable(named.Name, writableBinding, value, scope) : null;
+                                    ? TrySetWritableVariable(named.Name, writableBinding, value, scope, scope.Effects.AllexportEnabled) : null;
                             // Bash installs the default but expands the previously empty dynamic value.
                             if (assignsArgumentZero && assigned.HasValue)
                                 assigned = ShellValue.Empty;
@@ -314,6 +314,8 @@ internal static partial class WordExpansion
                             var destination = target.ReadOwner ?? scope.Variables;
                             assigned = await target.AssignValueAsync(scope, destination, source.Name, expanded,
                                 AssignmentOperator.Replace, ShellValue.Empty, DeclarationWrite.Ordinary).ConfigureAwait(false);
+                            if (assigned.HasValue)
+                                target.ExportArrayAssignment(scope, destination, source.Kind);
                             if (elementNameref && assigned.HasValue)
                             {
                                 destination.TryGetExpansionValue(target.Name, out var arrayScalar);

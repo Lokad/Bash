@@ -71,6 +71,7 @@ public sealed partial class Variables
     private EvaluationState? _shellState;
     private bool _suppressGlobIgnoreRefresh;
     private EvaluationState? VisibleShellState => _shellState ?? _commandSource?.Variables.VisibleShellState;
+    private bool AllexportEnabled => VisibleShellState?.HasOption(ShellOption.Allexport) == true;
 
     // Account bindings as a coarse owner. Shared values can be counted twice; no object identities
     // are registered. Callers keep saved bindings charged through restoration.
@@ -264,7 +265,7 @@ public sealed partial class Variables
     {
         if (!name.IsIdentifier)
             return false;
-        DeclareUnassigned(name);
+        DeclareUnassigned(name, AllexportEnabled ? BindingAttributes.Exported : BindingAttributes.None);
         return true;
     }
 
@@ -572,6 +573,8 @@ public sealed partial class Variables
             var destination = SelectOutputVariables(reference.Name, memory, cancellationToken, element);
             if (!destination.TryApplyArithmeticAssignment(reference, value, memory))
                 return false;
+            if (!element && _owner.AllexportEnabled && destination.GetArrayMetadata(reference.Name) == null)
+                destination.ExportAssignedBinding(reference.Name);
             if (ReferenceEquals(destination, _owner))
                 return true;
 
@@ -915,6 +918,7 @@ public sealed partial class Variables
             Evaluation.FunctionContext? enclosingFunction)
         {
             var hasAssignment = operand.Kind == VariableOperandKind.Assignment;
+            var allexport = active.AllexportEnabled;
             var reference = operand.Reference;
             if (hasAssignment && reference.IsAggregate)
                 return LocalDeclarationResult.Invalid;
@@ -1084,7 +1088,7 @@ public sealed partial class Variables
                         : variables.Scalars.GetValueOrDefault(name, ShellValue.Empty);
                     memory.Charge(checked(4L * target.Bytes.Length));
                     variables.SetCaseAttributes(name, caseChange);
-                    return variables.TrySetNameref(name, target, memory)
+                    return variables.TrySetNameref(name, target, memory, allexport && hasAssignment)
                         ? LocalDeclarationResult.Declared : LocalDeclarationResult.Invalid;
                 }
 
@@ -1120,7 +1124,7 @@ public sealed partial class Variables
                         && slot is ShellStateSlot dynamic)
                         shellStateAssignment = dynamic;
                     else
-                        variables.SetAssignedScalar(resolved, operand.Value, memory, prefixOperator: null);
+                        variables.SetAssignedScalar(resolved, operand.Value, memory, prefixOperator: null, export: allexport);
                     return LocalDeclarationResult.Declared;
                 }
                 // Without an initializer, a selector declares the array type but is not evaluated.
@@ -1260,7 +1264,10 @@ public sealed partial class Variables
 
     /// <summary>Expansion assignments update element zero without replacing an existing array.</summary>
     /// <remarks>The expansion caller checks readonly status before applying or forwarding the write.</remarks>
-    internal ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, EvaluationMemory memory)
+    internal ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, EvaluationMemory memory) =>
+        SetExpansionValueIgnoringReadonly(name, value, memory, exportArray: false);
+
+    internal ShellValue SetExpansionValueIgnoringReadonly(BindingName name, ShellValue value, EvaluationMemory memory, bool exportArray)
     {
         if (!TryResolveWholeName(name, out var resolved))
             return value;
@@ -1270,25 +1277,29 @@ public sealed partial class Variables
             _ = TrySetScalar(name, value, memory);
             return value;
         }
-        return SetResolvedValuePreservingArray(resolved, value, memory);
+        return SetResolvedValuePreservingArray(resolved, value, memory, exportArray);
     }
 
     /// <summary>Writes a resolved scalar or array element zero; callers own readonly checks.</summary>
-    internal ShellValue SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory)
+    internal ShellValue SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory) =>
+        SetResolvedValuePreservingArray(resolved, value, memory, exportArray: false);
+
+    internal ShellValue SetResolvedValuePreservingArray(BindingName resolved, ShellValue value, EvaluationMemory? memory, bool exportArray)
     {
         TryGetBinding(resolved, detachBorrowed: false, out var slot);
-        return SetResolvedValuePreservingArray(resolved, value, memory, slot);
+        return SetResolvedValuePreservingArray(resolved, value, memory, slot, exportArray);
     }
 
     private ShellValue SetResolvedValuePreservingArray(
-        BindingName resolved, ShellValue value, EvaluationMemory? memory, VariableSlot? slot)
+        BindingName resolved, ShellValue value, EvaluationMemory? memory, VariableSlot? slot, bool exportArray)
     {
-        if (slot is IndexedSlot)
-            _ = TrySetResolvedArrayElement(resolved, default(IndexedArrayIndex), value, memory);
-        else if (slot is AssociativeSlot)
-            _ = TrySetResolvedArrayElement(resolved, AssociativeArrayKey.Zero, value, memory);
-        else
+        if (slot is not (IndexedSlot or AssociativeSlot))
             return SetAssignedScalar(resolved, value, memory, prefixOperator: null);
+        var written = slot is IndexedSlot
+            ? TrySetResolvedArrayElement(resolved, default(IndexedArrayIndex), value, memory)
+            : TrySetResolvedArrayElement(resolved, AssociativeArrayKey.Zero, value, memory);
+        if (written && exportArray)
+            ExportAssignedBinding(resolved);
         return HasAttribute(resolved, BindingAttributes.Case) && TryGetExpansionValue(resolved, out var stored)
             ? stored : value;
     }
@@ -1307,17 +1318,17 @@ public sealed partial class Variables
             return false;
 
         if (resolved.IsEmpty)
-            return IsUnsetNameref(name) && TryInitializeUnsetNameref(name, value, memory);
+            return IsUnsetNameref(name) && TryInitializeUnsetNameref(name, value, memory, memory != null && AllexportEnabled);
         SetAssignedScalar(resolved, value, memory, prefixOperator);
         return true;
     }
 
-    private bool TryInitializeUnsetNameref(BindingName name, ShellValue value, EvaluationMemory? memory)
+    private bool TryInitializeUnsetNameref(BindingName name, ShellValue value, EvaluationMemory? memory, bool export)
     {
         if (value.IsEmpty)
             return false;
         memory?.Charge(checked(4L * value.Bytes.Length));
-        return TrySetNameref(name, value, memory);
+        return TrySetNameref(name, value, memory, export);
     }
 
     /// <summary>
@@ -1337,7 +1348,11 @@ public sealed partial class Variables
     internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory) =>
         TrySetResolvedScalar(name, value, memory, initializeReadonly: false);
 
-    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory, bool initializeReadonly)
+    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory, bool initializeReadonly) =>
+        TrySetResolvedScalar(name, value, memory, initializeReadonly, AllexportEnabled);
+
+    internal bool TrySetResolvedScalar(BindingName name, ShellValue value, EvaluationMemory memory, bool initializeReadonly,
+        bool export)
     {
         if (name.IsEmpty || !initializeReadonly && IsReadonly(name))
             return false;
@@ -1346,9 +1361,9 @@ public sealed partial class Variables
             if (target.IsInvalid)
                 return false;
             if (target.IsUnset)
-                return TrySetScalar(name, value, memory);
+                return TryInitializeUnsetNameref(name, value, memory, export);
         }
-        SetAssignedScalar(name, value, memory, prefixOperator: null);
+        SetAssignedScalar(name, value, memory, prefixOperator: null, export);
         return true;
     }
 
@@ -1395,11 +1410,15 @@ public sealed partial class Variables
     private void SetResolvedScalar(BindingName resolved, ShellValue value)
     {
         TryGetBinding(resolved, out var slot);
-        SetResolvedScalar(resolved, slot, value);
+        SetResolvedScalar(resolved, slot, value, export: false);
     }
 
     private ShellValue SetAssignedScalar(BindingName resolved, ShellValue value, EvaluationMemory? memory,
-        AssignmentOperator? prefixOperator)
+        AssignmentOperator? prefixOperator) =>
+        SetAssignedScalar(resolved, value, memory, prefixOperator, memory != null && AllexportEnabled);
+
+    private ShellValue SetAssignedScalar(BindingName resolved, ShellValue value, EvaluationMemory? memory,
+        AssignmentOperator? prefixOperator, bool export)
     {
         TryGetBinding(resolved, out var slot);
         if (prefixOperator.HasValue && slot is LineNumberSlot or ShellStateSlot)
@@ -1415,16 +1434,18 @@ public sealed partial class Variables
         if (prefixOperator.HasValue && slot is IndexedSlot { Value.IsRecoveryPipelineStatus: true })
             StoreBinding(resolved, new ScalarSlot(value), slot.Attributes & ~BindingAttributes.ArrayNameref);
         else
-            SetResolvedScalar(resolved, slot, value);
+            SetResolvedScalar(resolved, slot, value, export);
         return value;
     }
 
-    private void SetResolvedScalar(BindingName resolved, VariableSlot? slot, ShellValue value)
+    private void SetResolvedScalar(BindingName resolved, VariableSlot? slot, ShellValue value, bool export)
     {
         if (slot?.IsArrayNameref == true)
             return;
         if (slot is ScalarSlot scalar)
         {
+            if (export && (scalar.Attributes & BindingAttributes.Exported) == 0)
+                StoreBinding(resolved, scalar, scalar.Attributes | BindingAttributes.Exported);
             using (TrackBindingMemory(resolved))
                 scalar.Value = value;
             ResetGetoptsPosition(resolved);
@@ -1432,7 +1453,7 @@ public sealed partial class Variables
             RefreshGlobIgnore(resolved);
         }
         else
-            ReplaceValue(resolved, new ScalarSlot(value));
+            ReplaceValue(resolved, new ScalarSlot(value) { Attributes = export ? BindingAttributes.Exported : BindingAttributes.None });
     }
 
     /// <summary>
@@ -1752,7 +1773,7 @@ public sealed partial class Variables
             return false;
         if (binding.IsUnsetNameref)
             return binding.Name == reference.Name && reference.Name.IsIdentifier
-                && TryInitializeUnsetNameref(reference.Name, value, memory);
+                && TryInitializeUnsetNameref(reference.Name, value, memory, memory != null && AllexportEnabled);
         binding.Owner.SetResolvedValuePreservingArray(binding.Name, value, memory);
         return true;
     }
@@ -2110,7 +2131,10 @@ public sealed partial class Variables
     /// </summary>
     public bool TrySetNameref(BindingName name, ShellValue target) => TrySetNameref(name, target, memory: null);
 
-    internal bool TrySetNameref(BindingName name, ShellValue target, EvaluationMemory? memory)
+    internal bool TrySetNameref(BindingName name, ShellValue target, EvaluationMemory? memory) =>
+        TrySetNameref(name, target, memory, memory != null && AllexportEnabled);
+
+    internal bool TrySetNameref(BindingName name, ShellValue target, EvaluationMemory? memory, bool export)
     {
         if (!name.IsIdentifier)
             return false;
@@ -2128,7 +2152,7 @@ public sealed partial class Variables
             reference = parsed;
         }
 
-        SetNamerefTarget(name, target.IsEmpty ? null : target, reference, memory);
+        SetNamerefTarget(name, target.IsEmpty ? null : target, reference, memory, export);
         return true;
     }
 
@@ -2139,7 +2163,7 @@ public sealed partial class Variables
         value = ConvertAssignmentCase(name, value, memory);
         var reference = VariableReference.TryParseNamerefTarget(value, memory, out var parsed)
             ? parsed : (VariableReference?)null;
-        SetNamerefTarget(name, value, reference, memory);
+        SetNamerefTarget(name, value, reference, memory, AllexportEnabled);
     }
 
     internal ForAssignmentResult AssignForIteration(
@@ -2158,7 +2182,7 @@ public sealed partial class Variables
                 return ForAssignmentResult.Readonly;
             if ((attributes & BindingAttributes.Integer) != 0)
                 return ForAssignmentResult.IncompatibleAttributes;
-            SetNamerefTarget(name, item, target, memory);
+            SetNamerefTarget(name, item, target, memory, AllexportEnabled);
         }
         else
         {
@@ -2166,13 +2190,14 @@ public sealed partial class Variables
                 return ForAssignmentResult.Readonly;
             if (!integerEvaluated && (attributes & BindingAttributes.Integer) != 0 && slot is not ShellStateSlot)
                 return ForAssignmentResult.NeedsIntegerEvaluation;
-            SetResolvedValuePreservingArray(name, item, memory, slot);
+            SetResolvedValuePreservingArray(name, item, memory, slot, exportArray: AllexportEnabled);
         }
 
         return ForAssignmentResult.Assigned;
     }
 
-    private void SetNamerefTarget(BindingName name, ShellValue? target, VariableReference? reference, EvaluationMemory? memory)
+    private void SetNamerefTarget(BindingName name, ShellValue? target, VariableReference? reference, EvaluationMemory? memory,
+        bool export)
     {
         BindingName? literalName = null;
         if (target is { } spelling && reference is { Kind: not VariableReferenceKind.Name })
@@ -2182,7 +2207,8 @@ public sealed partial class Variables
             literalName = BindingName.FromValue(spelling);
         }
 
-        ReplaceValue(name, new NamerefSlot(new NamerefTarget(target, reference, literalName)));
+        ReplaceValue(name, new NamerefSlot(new NamerefTarget(target, reference, literalName))
+            { Attributes = export ? BindingAttributes.Exported : BindingAttributes.None });
         if (IsIntegerBinding(name))
             SetIntegerBinding(name, false);
         // The cursor selects the referent at declaration. Later writes to the target name
@@ -2600,6 +2626,9 @@ public sealed partial class Variables
 
         SetAttribute(name, BindingAttributes.Exported, exported);
     }
+
+    internal void ExportAssignedBinding(BindingName name) =>
+        UpdateBindingAttributes(name, BindingAttributes.Exported, BindingAttributes.None);
 
     /// <summary>
     /// Resolves whole bindings, leaving element selection to the scoped evaluator.
