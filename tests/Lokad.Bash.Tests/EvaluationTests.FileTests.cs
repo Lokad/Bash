@@ -331,6 +331,54 @@ public partial class EvaluationTests
     }
 
     [Fact]
+    public async Task FileTests_DeduplicateAbsoluteAndRelativeSpellingsWithoutChangingTraversal()
+    {
+        var state = new Eval(Parser.Parse("test -e item -a -e /work/item -a -L /work/item -a -L item"
+            + " -a -e /work//item -a -e /item -a -e ./item -a -e dir/../item -a -e item/ -a -e Item"),
+            options: EvaluationOptions.Default with { CurrentDirectory = new ShellPath("/work") });
+
+        var operation = await NextPathKindsAsync(state);
+        Assert.Equal(new[]
+        {
+            ("/work/item", FileLinkFollowing.Follow),
+            ("/work/item", FileLinkFollowing.NoFollow),
+            ("/work//item", FileLinkFollowing.Follow),
+            ("/item", FileLinkFollowing.Follow),
+            ("/work/./item", FileLinkFollowing.Follow),
+            ("/work/dir/../item", FileLinkFollowing.Follow),
+            ("/work/item/", FileLinkFollowing.Follow),
+            ("/work/Item", FileLinkFollowing.Follow)
+        }, operation.Paths.Select(path => (path.Path, path.LinkFollowing)));
+        operation.SetResult(operation.Paths.Select(path => PathKindResult(
+            path.LinkFollowing == FileLinkFollowing.NoFollow ? FilePathKind.SymbolicLink : FilePathKind.File)).ToArray());
+
+        Assert.Null(await NextStepAsync(state));
+        Assert.Equal(0, state.LastExitCode);
+    }
+
+    [Fact]
+    public async Task FileTests_ReuseAdmittedPathWhenOperandsRepeat()
+    {
+        var directory = "/" + string.Join('/', Enumerable.Repeat(new string('d', 128), 8));
+        var terms = string.Join(" -a ", Enumerable.Repeat("-f record", 16));
+        var state = new Eval(Parser.Parse("test " + terms),
+            options: EvaluationOptions.Default with { CurrentDirectory = new ShellPath(directory) });
+        var budget = new MemoryGovernor(16 * 1024);
+        using var owner = budget.CreateScope();
+        var host = new TestOperationVisitor([]) { MemoryBudget = owner, RecordAppends = true };
+        host.EnqueuePathInfo(FilePathInfo.FromKind(FilePathKind.File));
+        host.EnqueueAppendResult(DescriptorWriteResult.Open);
+
+        await new Engine().RunAsync(state, host, CancellationToken.None);
+
+        Assert.Equal(directory + "/record", Assert.Single(host.PathInfoRequests).Path);
+        Assert.Empty(host.Appends);
+        Assert.Equal(0, state.LastExitCode);
+        owner.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
     public async Task FileTests_SeparateRequestKindsWhenComparisonsShareMetadata()
     {
         var state = new Eval(Parser.Parse("test ! -t 2147483648 -a -t 0 -a -s file -a file -ef alias"

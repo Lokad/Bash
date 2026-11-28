@@ -6684,6 +6684,7 @@ public sealed partial class Evaluation : IFileTester
         var currentDirectory = _state.CurrentDirectory;
         List<FileDescriptor>? terminalDescriptors = null;
         List<int>? terminalResultIndices = null;
+        FilePathLookup.BatchComparer? pathComparer = null;
         PathLookupBatch<FilePathLookup>? kindPaths = null;
         PathLookupBatch<FilePathLookup>? metadataPaths = null;
         PathLookupBatch<FilePathLookup>? sizePaths = null;
@@ -6709,7 +6710,7 @@ public sealed partial class Evaluation : IFileTester
                     && TryReadFileOperand(secondary, currentDirectory, out var right) && right is not null)
                 {
                     lookupMemory.PrepareListCapacity(identityTests ??= [], 1);
-                    metadataPaths ??= new();
+                    metadataPaths ??= CreatePathBatch();
                     identityTests.Add((index, AddPath(metadataPaths, left, FileLinkFollowing.Follow),
                         AddPath(metadataPaths, right, FileLinkFollowing.Follow)));
                 }
@@ -6722,8 +6723,8 @@ public sealed partial class Evaluation : IFileTester
                 {
                     lookupMemory.PrepareListCapacity(comparisons ??= [], 1);
                     comparisons.Add((index, comparison,
-                        left is null ? -1 : AddPath(metadataPaths ??= new(), left, FileLinkFollowing.Follow),
-                        right is null ? -1 : AddPath(metadataPaths ??= new(), right, FileLinkFollowing.Follow)));
+                        left is null ? -1 : AddPath(metadataPaths ??= CreatePathBatch(), left, FileLinkFollowing.Follow),
+                        right is null ? -1 : AddPath(metadataPaths ??= CreatePathBatch(), right, FileLinkFollowing.Follow)));
                 }
             }
             else
@@ -6732,8 +6733,8 @@ public sealed partial class Evaluation : IFileTester
                     ? FileLinkFollowing.NoFollow : FileLinkFollowing.Follow;
                 if (!TryReadFileOperand(test.Operand, currentDirectory, out var path) || path is null)
                     continue;
-                var batch = test.Kind.MetadataPredicate is not null ? (metadataPaths ??= new())
-                    : test.Kind.IsNonEmpty ? (sizePaths ??= new()) : (kindPaths ??= new());
+                var batch = test.Kind.MetadataPredicate is not null ? (metadataPaths ??= CreatePathBatch())
+                    : test.Kind.IsNonEmpty ? (sizePaths ??= CreatePathBatch()) : (kindPaths ??= CreatePathBatch());
                 // Zero denotes a predicate without a unary path response.
                 unaryPathIndices[index] = AddPath(batch, path, following) + 1;
             }
@@ -6837,8 +6838,14 @@ public sealed partial class Evaluation : IFileTester
             return false;
         }
 
+        PathLookupBatch<FilePathLookup> CreatePathBatch() =>
+            new(pathComparer ??= new FilePathLookup.BatchComparer(currentDirectory));
+
         int AddPath(PathLookupBatch<FilePathLookup> batch, RawShellPath operand, FileLinkFollowing following)
         {
+            if (batch.TryGetIndex((operand, following), out var index))
+                return index;
+
             var bytes = 40L;
             if (operand.Raw[0] != '/')
             {
@@ -6847,11 +6854,7 @@ public sealed partial class Evaluation : IFileTester
             }
 
             lookupMemory.Grow(bytes);
-            var count = batch.Paths.Count;
-            var index = batch.Add(new FilePathLookup(operand, currentDirectory, following), lookupMemory);
-            if (batch.Paths.Count == count)
-                lookupMemory.Resize(lookupMemory.Bytes - bytes);
-            return index;
+            return batch.AddDistinct(new FilePathLookup(operand, currentDirectory, following), lookupMemory);
         }
 
         async Task<IReadOnlyList<FilePathResolutionResult>> ReadPathsAsync(

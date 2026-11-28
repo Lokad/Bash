@@ -8,7 +8,11 @@ namespace Lokad.Bash.Files;
 public sealed class PathLookupBatch<TPath> where TPath : notnull
 {
     private readonly List<TPath> _paths = [];
-    private readonly Dictionary<TPath, int> _indices = [];
+    private readonly Dictionary<TPath, int> _indices;
+
+    public PathLookupBatch() : this(EqualityComparer<TPath>.Default) { }
+
+    internal PathLookupBatch(IEqualityComparer<TPath> comparer) => _indices = new(comparer);
 
     public IReadOnlyList<TPath> Paths => _paths;
 
@@ -20,7 +24,16 @@ public sealed class PathLookupBatch<TPath> where TPath : notnull
     {
         if (_indices.TryGetValue(path, out var index))
             return index;
-        index = _paths.Count;
+        return AddDistinct(path, memory);
+    }
+
+    internal bool TryGetIndex<TAlternate>(TAlternate key, out int index) where TAlternate : notnull =>
+        _indices.GetAlternateLookup<TAlternate>().TryGetValue(key, out index);
+
+    /// <summary>Adds a path whose absence has already been checked.</summary>
+    internal int AddDistinct(TPath path, MemoryCapacity? memory)
+    {
+        var index = _paths.Count;
         if (memory is not null)
         {
             memory.PrepareDictionaryCapacity(_indices, Unsafe.SizeOf<TPath>() + 24L);
