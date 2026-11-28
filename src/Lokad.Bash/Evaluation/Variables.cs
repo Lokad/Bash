@@ -1554,17 +1554,24 @@ public sealed partial class Variables
     /// <summary>Applies admitted records to the selected sparse array after input has settled.</summary>
     internal bool TryUpdateResolvedIndexedArray(
         BindingName resolved, uint origin, IReadOnlyList<ShellValue> values,
-        ShellValue? namerefValue, EvaluationMemory memory, CancellationToken cancellationToken)
+        ShellValue? namerefValue, EvaluationMemory memory, CancellationToken cancellationToken, long prepaidEntryBytes)
     {
         if (resolved.IsEmpty || IsReadonlyBinding(resolved) || AssociativeArrays.ContainsKey(resolved))
             return false;
         if (IndexedArrays.TryGetValue(resolved, out var array))
         {
             using var bindingMemory = TrackBindingMemory(resolved);
-            array.SetSequential(origin, values, memory, cancellationToken);
+            array.SetSequential(origin, values, memory, cancellationToken, prepaidEntryBytes);
         }
         else
         {
+            var entries = (long)values.Count + (namerefValue.HasValue || Scalars.ContainsKey(resolved) ? 1 : 0);
+            var required = entries * IndexedArray.ElementMemoryBytes;
+            if (required > prepaidEntryBytes)
+            {
+                memory.Charge(required - prepaidEntryBytes);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
             var promoted = CreatePromotedIndexedArray(resolved, memory: null);
             if (namerefValue is { } raw)
                 promoted.Set(default, raw);

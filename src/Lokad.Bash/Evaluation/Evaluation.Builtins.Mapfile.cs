@@ -181,19 +181,25 @@ public sealed partial class Evaluation
                 return await FinishAsync(converted ? 0 : 1).ConfigureAwait(false);
             }
 
-            // The staged values already have admission. The list and array coexist during publication.
-            var retainedBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
-            if (!target.RecreatesBinding && origin.HasValue && (target.NamerefValue.HasValue || variables.Scalars.ContainsKey(resolved)))
-                retainedBytes += IndexedArray.ElementMemoryBytes;
-            Memory.Charge(retainedBytes);
-            stagedBytes += retainedBytes;
+            // Admit fresh storage before preparing a replacement binding. An ordinary origin
+            // update admits its entries at the destination, where occupied positions are known.
+            long prepaidEntryBytes = 0;
+            if (origin == null || target.Kind != IndexedInputTargetKind.ExistingOrNew)
+            {
+                prepaidEntryBytes = (long)values.Count * IndexedArray.ElementMemoryBytes;
+                if (!target.RecreatesBinding && origin.HasValue && (target.NamerefValue.HasValue || variables.Scalars.ContainsKey(resolved)))
+                    prepaidEntryBytes += IndexedArray.ElementMemoryBytes;
+                Memory.Charge(prepaidEntryBytes);
+                stagedBytes += prepaidEntryBytes;
+            }
 
             _cancellationToken.ThrowIfCancellationRequested();
             // Publish only after the requested records have been read and admitted.
             if (origin is { } first && !target.RecreatesBinding)
             {
                 target.PrepareForPublication();
-                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, target.NamerefValue, Memory, _cancellationToken);
+                assigned = variables.TryUpdateResolvedIndexedArray(resolved, first, values, target.NamerefValue,
+                    Memory, _cancellationToken, prepaidEntryBytes);
             }
             else if (origin is { } recreatedOrigin)
             {

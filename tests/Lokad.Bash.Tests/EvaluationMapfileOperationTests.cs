@@ -632,6 +632,59 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MapfileOriginAdmitsNewEntriesWithoutRechargingOverwrittenPositions(bool append)
+    {
+        const int records = 1024;
+        const int batchSize = 128;
+        var origin = append ? records : 0;
+        var state = new Eval(Parser.Parse($"mapfile -tn{records} -O{origin} arr"));
+        var variables = Assert.IsType<Variables>(typeof(Eval)
+            .GetField("_vars", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(state));
+        var old = ShellValue.FromText("old");
+        Assert.True(variables.TryAssignArray("arr", Enumerable.Repeat(old, records).ToArray(), ArrayKind.Indexed));
+        var array = variables.IndexedArrays["arr"];
+        var backing = CollectionBacking.ArrayPayloadBytes(Elements(array));
+        var budget = new MemoryGovernor(8 * 1024 * 1024);
+        using var owner = budget.CreateScope();
+        state.Memory.Budget = owner;
+        var lines = Utf8Bytes(string.Concat(Enumerable.Repeat("new\n", batchSize)));
+        var offsets = Enumerable.Range(1, batchSize - 1).Select(index => 4 * index).ToArray();
+
+        var read = await NextReadAsync(state);
+        for (var offset = batchSize; offset < records; offset += batchSize)
+        {
+            Assert.Equal(batchSize, read.Limit);
+            read.SetResult(ReadResult.Success(lines, offsets, reachedEoF: false));
+            read = await NextReadAsync(state);
+        }
+
+        state.Memory.ReleaseUnusedCapacity();
+        using var held = budget.Reserve(budget.LimitBytes - budget.ReservedBytes - 72 * 1024);
+        read.SetResult(ReadResult.Success(lines, offsets, reachedEoF: false));
+        var operation = await NextStepAsync(state);
+        if (append)
+        {
+            var diagnostic = Assert.IsType<WriteOperation>(operation);
+            Assert.Equal(FileDescriptor.StdErr, diagnostic.FileDescriptor);
+            Assert.Equal("mapfile: shared memory budget exhausted\n", Text(diagnostic.Content));
+            diagnostic.SetResult(DescriptorWriteResult.Open);
+            operation = await NextStepAsync(state);
+        }
+
+        Assert.Null(operation);
+        Assert.Equal(append ? 2 : 0, state.LastExitCode);
+        Assert.Same(array, variables.IndexedArrays["arr"]);
+        Assert.Equal(records, array.Count);
+        Assert.Equal(backing, CollectionBacking.ArrayPayloadBytes(Elements(array)));
+        Assert.All(array.PresentValues, value => Assert.Equal(append ? old : ShellValue.FromText("new"), value));
+        owner.Dispose();
+        held.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData(false, true, true)]
     [InlineData(false, false, true)]
     [InlineData(false, true, false)]
@@ -712,11 +765,11 @@ public partial class EvaluationTests
             Assert.Equal(0, state.LastExitCode);
             Assert.Null(diagnostic);
         }
-
-        static Dictionary<long, ShellValue?> Elements(IndexedArray array) =>
-            Assert.IsType<Dictionary<long, ShellValue?>>(typeof(IndexedArray)
-                .GetField("_elements", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(array));
     }
+
+    private static Dictionary<long, ShellValue?> Elements(IndexedArray array) =>
+        Assert.IsType<Dictionary<long, ShellValue?>>(typeof(IndexedArray)
+            .GetField("_elements", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(array));
 
     [Fact]
     public async Task Evaluation_MapfileBuiltin_PreservesArrayWhenOpaqueInputReportsBadDescriptor()

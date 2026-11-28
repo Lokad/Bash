@@ -67,6 +67,26 @@ public sealed class IndexedArrayRangeTests
     }
 
     [Fact]
+    public void WrappedBatchChargesOnlyItsNewPositions()
+    {
+        var array = new IndexedArray(isInitialized: true, capacity: 7);
+        array.Set(IndexedArrayIndex.FromUnsigned(uint.MaxValue), null);
+        array.Set(IndexedArrayIndex.FromUnsigned(1), ShellValue.FromText("old"));
+        ShellValue[] values = [ShellValue.FromText("a"), ShellValue.FromText("b"),
+            ShellValue.FromText("c"), ShellValue.FromText("d")];
+        var required = 2 * IndexedArray.ElementMemoryBytes;
+        var budget = new MemoryGovernor(required);
+        using var scope = budget.CreateScope();
+        var memory = new EvaluationMemory(scope);
+
+        array.SetSequential(uint.MaxValue - 1, values, memory, CancellationToken.None, prepaidEntryBytes: 0);
+
+        Assert.Equal(required, memory.Workspace.Bytes);
+        Assert.Equal(4, array.Count);
+        Assert.Equal(new[] { values[2], values[3], values[0], values[1] }, array.PresentValues);
+    }
+
+    [Fact]
     public void SequentialBatchRefusalLeavesOverlappingEntriesUnchanged()
     {
         var array = new IndexedArray(isInitialized: true, capacity: 7);
