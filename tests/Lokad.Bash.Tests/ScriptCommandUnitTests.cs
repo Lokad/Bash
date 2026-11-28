@@ -269,6 +269,57 @@ public sealed class ScriptCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("set -v\n# note\n   printf first ; printf second\n# tail\n", "firstsecond\n",
+        "# note\n   printf first ; printf second\n# tail\n")]
+    [InlineData("set -v\ncat <<-'END'\n\tbody\n\tEND\n", "body\n", "cat <<-'END'\n\tbody\n\tEND\n")]
+    [InlineData("set -v\nfalse && printf '%s' \"$(cat <<END\nbody\nEND\n)\"\n  printf tail\n", "tail\n",
+        "false && printf '%s' \"$(cat <<END\nbody\nEND\n  printf tail\n")]
+    [InlineData("set -vn\n   printf skipped\n# tail\n", "\n", "   printf skipped\n# tail\n")]
+    public async Task ModernCaptureInHereDocumentEchoesAuthoredInput(string body, string output, string echo)
+    {
+        var script = $"cat <<OUTER\n$({body})\nOUTER\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(echo, host.StandardError.TextContent);
+        }
+    }
+
+    [Fact]
+    public async Task HereDocumentCaptureRetainsItsOwnBoundariesThroughDescriptorReplacement()
+    {
+        const string script = "cat <<OUTER\n$(set -v\nexec 2>trace\n  printf first) $(set -v\n   printf second)\nOUTER\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            var memory = new MemoryGovernor(256 * 1024);
+            await using var host = new TestHost { MemoryBudget = memory };
+            int status;
+            if (prepared)
+            {
+                using var owner = memory.CreateScope();
+                var evaluation = new global::Lokad.Bash.Evaluation.Evaluation(Parser.Parse(script));
+                status = (await new Engine().RunAsync(evaluation, host, owner, CancellationToken.None)).ExitCode;
+            }
+            else
+            {
+                status = (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+            }
+
+            Assert.Equal(0, status);
+            Assert.Equal("first second\n", host.StandardOutput.TextContent);
+            Assert.Equal("exec 2>trace\n   printf second\n", host.StandardError.TextContent);
+            Assert.Equal("  printf first\n", host.ReadFile("/trace"));
+            Assert.Equal(0, host.OpenFileCount);
+            Assert.Equal(0, memory.ReservedBytes);
+        }
+    }
+
     [Fact]
     public async Task VerboseReadsTheFullOffendingLineBeforeReportingSyntax()
     {

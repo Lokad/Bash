@@ -30,12 +30,12 @@ public sealed class ParsedScript
     internal CommandLocations? Locations { get; init; }
     internal AuthoredReader? Reader { get; set; }
 
-    internal sealed record AuthoredReader(ShellSource Source, IReadOnlyList<int> UnitEnds,
+    internal sealed record AuthoredReader(ShellSource Source, Range Content, IReadOnlyList<int> UnitEnds,
         int EmptyFirstUnitEnd, ReaderSpelling Spelling)
     {
-        internal Range Unit(int index) => (index == 0 ? 0 : UnitEnds[index - 1])..UnitEnds[index];
+        internal Range Unit(int index) => (index == 0 ? Content.Start.Value : UnitEnds[index - 1])..UnitEnds[index];
 
-        internal Range TrailingInput => (UnitEnds.Count == 0 ? 0 : UnitEnds[^1])..Source.Length;
+        internal Range TrailingInput => (UnitEnds.Count == 0 ? Content.Start.Value : UnitEnds[^1])..Content.End.Value;
     }
     internal int? RenderedLineBreaks { get; set; }
     internal int RenderedFunctionBraceLine { get; set; }

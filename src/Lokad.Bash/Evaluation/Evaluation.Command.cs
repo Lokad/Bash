@@ -305,7 +305,7 @@ public sealed partial class Evaluation
                                 break;
                             recoveredUnit = false;
                         }
-                        var unitReader = index == 0 || step.StartsCommandUnit ? authoredReader : null;
+                        var unitReader = index == 0 || step.StartsCommandUnit || step.StartsReaderUnit ? authoredReader : null;
                         if (step.StartsCommandUnit || unitScope.Context.Coordinates.FunctionBraceBeforeUnit == null)
                             unitScope = BeginPreparedCommandUnit(listScope, step.Command, beginsExecutionUnit: true);
                         else if (step.StartsReaderUnit)

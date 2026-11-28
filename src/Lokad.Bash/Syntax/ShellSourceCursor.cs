@@ -830,11 +830,14 @@ internal sealed class ShellScanContext
     internal bool RetainAuthoredReader { get; init; }
     internal bool TrackReaderSpelling { get; set; }
     internal int ReaderEnd { get; set; }
+    // Detached captures record physical echo bytes without becoming script input for grammar lookahead.
+    internal ShellSource DetachedReaderInput { get; set; }
     private List<Range>? _readerSilences;
     private List<Range>? _readerDocuments;
     private List<Range>? _readerSplices;
     private bool _readerEscapedEof;
-    private bool RecordsReaderSpelling => TrackReaderSpelling || RetainAuthoredReader;
+    private bool RecordsReaderSpelling => TrackReaderSpelling || RetainAuthoredReader || !DetachedReaderInput.IsEmpty;
+    private ShellSource ReaderInput => DetachedReaderInput.IsEmpty ? ScriptInput : DetachedReaderInput;
     internal LegacySubstitutionOrigin LegacyOrigin { get; set; }
     internal bool PreserveDelimiterLookahead { get; set; }
     internal bool RetainCaptureLookahead { get; set; }
@@ -864,6 +867,17 @@ internal sealed class ShellScanContext
     {
         _commandSubstitutions = null;
         HereDocumentReadAhead = null;
+        ClearReaderSpelling();
+    }
+
+    internal void ClearDetachedReaderSpelling()
+    {
+        DetachedReaderInput = default;
+        ClearReaderSpelling();
+    }
+
+    private void ClearReaderSpelling()
+    {
         _readerSilences = null;
         _readerDocuments = null;
         _readerSplices = null;
@@ -874,7 +888,7 @@ internal sealed class ShellScanContext
     {
         if (!RecordsReaderSpelling
             || consumedEnd <= payloadStart || consumedEnd > source.Length
-            || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
+            || !ReaderInput.TryGetViewOffset(source, out var sourceOffset))
             return;
 
         // The enclosing reader has already echoed the opener's line. The
@@ -886,7 +900,7 @@ internal sealed class ShellScanContext
         var end = sourceOffset + consumedEnd;
         if (end <= start)
             return;
-        end = HereDocumentReadAhead.FindNextLineStart(ScriptInput, end);
+        end = HereDocumentReadAhead.FindNextLineStart(ReaderInput, end);
 
         _readerSilences ??= [];
         SyntaxMemory?.PrepareListCapacity(_readerSilences, 1);
@@ -896,7 +910,7 @@ internal sealed class ShellScanContext
     internal void RecordEchoedCaptureDocument(ShellSource source, int start, int end)
     {
         if (!RecordsReaderSpelling || start == end
-            || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
+            || !ReaderInput.TryGetViewOffset(source, out var sourceOffset))
             return;
         _readerDocuments ??= [];
         SyntaxMemory?.PrepareListCapacity(_readerDocuments, 1);
@@ -905,7 +919,7 @@ internal sealed class ShellScanContext
 
     internal void RecordHereDocumentSplice(ShellSource source, int position)
     {
-        if (!RecordsReaderSpelling || !ScriptInput.TryGetViewOffset(source, out var sourceOffset))
+        if (!RecordsReaderSpelling || !ReaderInput.TryGetViewOffset(source, out var sourceOffset))
             return;
         var start = sourceOffset + position;
         _readerSplices ??= [];
@@ -915,8 +929,8 @@ internal sealed class ShellScanContext
 
     internal void RecordHereDocumentEscapedEof(ShellSource source)
     {
-        if (RecordsReaderSpelling && ScriptInput.TryGetViewOffset(source, out var offset)
-            && offset + source.Length == ScriptInput.Length)
+        if (RecordsReaderSpelling && ReaderInput.TryGetViewOffset(source, out var offset)
+            && offset + source.Length == ReaderInput.Length)
             _readerEscapedEof = true;
     }
 
@@ -926,10 +940,7 @@ internal sealed class ShellScanContext
         var documents = _readerDocuments;
         var splices = _readerSplices;
         var escapedEof = _readerEscapedEof;
-        _readerSilences = null;
-        _readerDocuments = null;
-        _readerSplices = null;
-        _readerEscapedEof = false;
+        ClearReaderSpelling();
         if (ranges != null && documents != null)
             ranges = ExcludeDocuments(ranges, documents);
         else if (ranges != null && splices == null)

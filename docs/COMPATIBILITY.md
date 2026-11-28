@@ -957,7 +957,8 @@ unterminated line. A bare `set -` clears verbose. The option also works with
 Command substitution children start with verbose cleared. A reached `set -v`
 in a child enables echo for its subsequent source and eval readers. A
 backtick child also echoes the subsequent units of its own command text.
-Modern substitution children echo their subsequent normalized command units.
+Modern substitutions in shell words echo their subsequent normalized command
+units. Those reached in an expanded here-document echo their authored input.
 Continuation lines of modern command substitutions are quiet except for
 here-document collection. A compact capture's pending-document warning
 precedes its body's echoed lines, and an EOF warning follows the available

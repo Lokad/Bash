@@ -806,9 +806,11 @@ Verbose readers borrow authored bytes through the ordinary stderr operation.
 Caller-prepared source trees retain the authored text and physical unit bounds.
 Multiline backtick captures keep these bounds in their retained parse. The
 reached streaming parser supplies the bounds when a malformed body is executed.
-Modern captures prepare their normalized text and reader-unit index when a
-reached child enables visible echo. The formatter uses retained syntax, and
-the child reads its current stderr mapping before writing each unit.
+Modern captures in shell words prepare their normalized text and reader-unit
+index when a reached child enables visible echo. The formatter uses retained
+syntax, and the child reads its current stderr mapping before writing each
+unit. Modern captures reached in here-document text retain physical unit
+bounds and borrow the original input through the child reader.
 At execution the reader consults the current option state at each reached
 boundary, including the final trivia after the last unit. Trees constructed from
 commands alone have no authored input to echo. Runtime readers keep their

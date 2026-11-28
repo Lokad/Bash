@@ -190,11 +190,11 @@ public static class Parser
             TrackUnexpectedTokens = context.RetainCaptureEofDelimiter,
             AllowEofHereDocuments = true
         };
-        var unitEnds = context.RetainAuthoredReader ? new List<int>() : null;
-        var emptyFirstUnitEnd = unitEnds != null && tokenizer.PeekTokenCore().Kind == TokenKind.Newline
+        var emptyFirstUnitEnd = context.RetainAuthoredReader && tokenizer.PeekTokenCore().Kind == TokenKind.Newline
             ? tokenizer.Position : 0;
         SkipNewlines(tokenizer);
-        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All, unitEnds, out var finalUnit);
+        var (command, _) = ParseListWithTerminatorInfo(tokenizer, null, [], null, CommandUnitMetadata.All,
+            context.RetainAuthoredReader, out var finalUnit);
         SkipNewlines(tokenizer);
         var trailing = tokenizer.PeekTokenCore();
         if (trailing.Kind != TokenKind.EndOfInput)
@@ -206,8 +206,8 @@ public static class Parser
         script = CompleteScript(tokenizer, command);
         script.LastCommandEnd = finalUnit.CommandEnd;
         script.FinalUnitReachesInputEnd = finalUnit.ReaderEnd == input.Length;
-        if (unitEnds != null)
-            script.Reader = new ParsedScript.AuthoredReader(context.ScriptInput, unitEnds, emptyFirstUnitEnd,
+        if (context.RetainAuthoredReader)
+            script.Reader = new ParsedScript.AuthoredReader(context.ScriptInput, 0..input.Length, finalUnit.UnitEnds ?? [], emptyFirstUnitEnd,
                 context.TakeReaderSpelling());
         return true;
     }
@@ -351,10 +351,13 @@ public static class Parser
 
         var retainLookahead = context.RetainCaptureLookahead;
         var rawHereDocument = !retainLookahead && context.LegacyOrigin == LegacySubstitutionOrigin.HereDocument;
+        List<int>? authoredUnitEnds = null;
         try
         {
             // The delimiter parse can replay a changed list while borrowing its original words and captures.
             context.RetainCaptureLookahead = true;
+            if (rawHereDocument)
+                context.DetachedReaderInput = input;
             var readAheadBefore = context.HereDocumentReadAhead?.CaptureCount ?? 0;
             var tokenizer = new Tokenizer(input, payloadStart, context)
             {
@@ -410,6 +413,12 @@ public static class Parser
 
             parsed = CompleteScript(tokenizer, command);
             parsed.HasReadAheadHereDocuments = (context.HereDocumentReadAhead?.CaptureCount ?? 0) != readAheadBefore;
+            if (authoredUnitEnds != null)
+            {
+                authoredUnitEnds[^1] = Math.Min(authoredUnitEnds[^1], closingParenthesisIndex);
+                parsed.Reader = new ParsedScript.AuthoredReader(input, payloadStart..closingParenthesisIndex,
+                    authoredUnitEnds, EmptyFirstUnitEnd: 0, context.TakeReaderSpelling());
+            }
             if (failure != SubstitutionSyntaxFailure.None || preserveAdjacentOpening || rawHereDocument)
             {
                 if (preserveAdjacentOpening && !rawHereDocument && !parsed.HasReadAheadHereDocuments
@@ -515,7 +524,12 @@ public static class Parser
                 failure = SubstitutionSyntaxFailure.HereDocumentSeparator;
             return ShellScanStatus.Complete;
         }
-        finally { context.RetainCaptureLookahead = retainLookahead; }
+        finally
+        {
+            context.RetainCaptureLookahead = retainLookahead;
+            if (rawHereDocument)
+                context.ClearDetachedReaderSpelling();
+        }
 
         IReadOnlyList<SourceLineAdjustment>? InstallProjectedCaptures(ShellSource source,
             IReadOnlyList<SpellingCapture>? captures, MemoryCapacity? workspace)
@@ -550,7 +564,9 @@ public static class Parser
             end = start;
             error = null;
             (command, _) = ParseListWithTerminatorInfo(tokenizer, TokenKind.CloseParen, [], null,
-                rawHereDocument ? CommandUnitMetadata.HereDocumentCapture : CommandUnitMetadata.Capture);
+                rawHereDocument ? CommandUnitMetadata.HereDocumentCapture : CommandUnitMetadata.Capture,
+                rawHereDocument, out var units);
+            authoredUnitEnds = units.UnitEnds;
             SkipNewlines(tokenizer);
             var closing = tokenizer.PeekTokenCore();
             var bodyFailure = tokenizer.Failure;
@@ -2054,7 +2070,7 @@ public static class Parser
         ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata) =>
-        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, unitMetadata, null, out _);
+        ParseListWithTerminatorInfo(tokenizer, closingKind, endKeywords, endTokenKind, unitMetadata, retainReaderUnits: false, out _);
 
     private static (ICommand? Command, bool TrailingTerminator) ParseListWithTerminatorInfo(
         Tokenizer tokenizer,
@@ -2062,8 +2078,8 @@ public static class Parser
         ReadOnlySpan<string> endKeywords,
         TokenKind? endTokenKind,
         CommandUnitMetadata unitMetadata,
-        List<int>? unitEnds,
-        out (int CommandEnd, int ReaderEnd) finalUnit)
+        bool retainReaderUnits,
+        out (int CommandEnd, int ReaderEnd, List<int>? UnitEnds) finalUnit)
     {
         finalUnit = default;
         SkipNewlines(tokenizer);
@@ -2079,6 +2095,7 @@ public static class Parser
         ICommand current = left;
         var unitStart = left;
         var trailingTerminator = false;
+        List<int>? unitEnds = null;
         while (true)
         {
             var token = tokenizer.PeekTokenCore();
@@ -2134,14 +2151,16 @@ public static class Parser
 
         if (unitMetadata != CommandUnitMetadata.None)
             RecordUnitRead(unitStart);
-        finalUnit = (lastCommandEnd, lastReaderEnd ?? tokenizer.Position);
+        finalUnit = (lastCommandEnd, lastReaderEnd ?? tokenizer.Position, unitEnds);
         return (current, trailingTerminator);
 
         void RecordUnitRead(ICommand anchor)
         {
             tokenizer.RecordUnitReadLine(anchor);
-            if (unitEnds != null)
+            // A capture starts quiet. Its reader index only matters after reading a physical unit terminator.
+            if (retainReaderUnits && (unitMetadata == CommandUnitMetadata.All || lastReaderEnd.HasValue || unitEnds != null))
             {
+                unitEnds ??= [];
                 var end = lastReaderEnd ?? tokenizer.Position;
                 if (unitEnds.Count == 0 || unitEnds[^1] != end)
                 {
