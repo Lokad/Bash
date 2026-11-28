@@ -11,6 +11,40 @@ namespace Lokad.Bash.Tests;
 public sealed class PrefixScopeOwnershipTests
 {
     [Fact]
+    public void CapturePrefixAdmissionRefusalPreservesSavedAndVisibleBindings()
+    {
+        BindingName a = "first", b = "second";
+        var callerValue = ShellValue.FromText("caller");
+        var temporary = ShellValue.FromText("temporary");
+        var caller = Variables.CreateInitial(new Dictionary<BindingName, ShellValue> { [a] = callerValue, [b] = callerValue }, []);
+        var child = Variables.CreateInitial(new Dictionary<BindingName, ShellValue> { [a] = temporary, [b] = temporary }, []);
+        var governor = new MemoryGovernor(64 * 1024);
+        var memory = new EvaluationMemory(governor);
+        try
+        {
+            using var bindings = new Variables.CommandBindings(child, caller, new HashSet<BindingName> { a },
+                memory, CancellationToken.None);
+            var additions = new HashSet<BindingName> { b };
+            memory.ReleaseUnusedCapacity();
+            using (governor.Reserve(governor.LimitBytes - governor.ReservedBytes))
+            {
+                Assert.Throws<MemoryBudgetExceededException>(() =>
+                    bindings.AddCapturedBindings(caller, additions, memory, CancellationToken.None));
+                Assert.True(bindings.Contains(a));
+                Assert.False(bindings.Contains(b));
+                Assert.Equal(temporary, child.Scalars[b]);
+            }
+            bindings.AddCapturedBindings(caller, additions, memory, CancellationToken.None);
+        }
+        finally { memory.Finish(retainVariables: false); }
+
+        Assert.Equal(callerValue, child.Scalars[a]);
+        Assert.Equal(callerValue, child.Scalars[b]);
+        Assert.Equal(callerValue, caller.Scalars[b]);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public async Task RefusedWidePrefixPreparationLeavesTheRedirectionUnopened()
     {
         var prefixes = string.Join(' ', Enumerable.Range(0, 256).Select(index => $"v{index:D4}=value"));
@@ -640,7 +674,7 @@ public sealed class PrefixScopeOwnershipTests
             Assert.True(command.TrySetScalar("prepared", ShellValue.FromText("prefix")));
             Assert.True(command.TryUnset("hidden"));
             var context = default(Eval.EvaluationContext);
-            var (child, _) = context.Fork(command, directoryStack: null, memory, CancellationToken.None);
+            var (child, _) = context.Fork(command, directoryStack: null, memory, CancellationToken.None, insideLoadedReader: false);
             Assert.False(child.HasBinding("hidden"));
             Assert.True(child.TryGetScalar("prepared", out var prepared));
             Assert.Equal("prefix", prepared.ToUtf8String());
@@ -689,7 +723,8 @@ public sealed class PrefixScopeOwnershipTests
 
             // A real child snapshot owns its whole store and must still be admitted.
             var context = default(Eval.EvaluationContext);
-            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(command, directoryStack: null, memory, CancellationToken.None));
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                context.Fork(command, directoryStack: null, memory, CancellationToken.None, insideLoadedReader: false));
             Assert.Equal(4096, caller.IndexedArrays["unrelated_array"].Count);
         }
         finally { memory.Finish(retainVariables: false); }
@@ -730,7 +765,7 @@ public sealed class PrefixScopeOwnershipTests
             { PrefixBindings = bindings };
         var context = owner == "script-prefix" && bindings != null
             ? new Eval.EvaluationContext(0, null, Eval.ReturnTargetKind.Source)
-                { GlobalPrefixes = new Eval.GlobalPrefixBindings(bindings, 0, null) }
+                { GlobalPrefixes = new Eval.GlobalPrefixBindings(bindings, 0, null, RetiresAfterCommand: false) }
             : new Eval.EvaluationContext(0, function, Eval.ReturnTargetKind.Function);
 
         var saved = context.GetGlobalBindingOwner("x", caller);
@@ -743,7 +778,8 @@ public sealed class PrefixScopeOwnershipTests
         var tightMemory = new EvaluationMemory(tightBudget);
         try
         {
-            Assert.Throws<MemoryBudgetExceededException>(() => context.Fork(caller, directoryStack: null, tightMemory, CancellationToken.None));
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                context.Fork(caller, directoryStack: null, tightMemory, CancellationToken.None, insideLoadedReader: false));
             Assert.Same(savedArray, context.GetGlobalBindingOwner("x", caller).IndexedArrays["x"]);
             Assert.Equal(0, tightBudget.ReservedBytes);
         }
@@ -753,7 +789,7 @@ public sealed class PrefixScopeOwnershipTests
         var memory = new EvaluationMemory(budget);
         try
         {
-            var (child, childContext) = context.Fork(caller, directoryStack: null, memory, CancellationToken.None);
+            var (child, childContext) = context.Fork(caller, directoryStack: null, memory, CancellationToken.None, insideLoadedReader: false);
             var childSaved = childContext.GetGlobalBindingOwner("x", child);
             Assert.NotSame(savedArray, childSaved.IndexedArrays["x"]);
             Assert.True(budget.ReservedBytes >= child.EstimatedMemoryBytes + childSaved.EstimatedMemoryBytes);

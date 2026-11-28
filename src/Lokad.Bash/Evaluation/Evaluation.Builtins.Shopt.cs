@@ -88,7 +88,12 @@ public sealed partial class Evaluation
                 await WriteRowAsync(name, state).ConfigureAwait(false);
             }
             else if (!fixedOption)
+            {
                 _state.SetOption(option, enabled);
+                // Publishing shopt options can precede disposal of a capture's temporary filter.
+                _state.SnapshotCaptureDotglob(context.CaptureEnvironment?.Names.Contains(
+                    global::Lokad.Bash.Evaluation.Variables.GlobIgnoreName) == true);
+            }
         }
         return await FinishAsync(status).ConfigureAwait(false);
 

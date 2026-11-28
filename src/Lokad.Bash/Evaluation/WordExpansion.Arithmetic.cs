@@ -262,6 +262,9 @@ internal static partial class WordExpansion
             async ValueTask<ArithmeticError?> WriteAsync(ArithmeticReference selected, ArithmeticTarget binding, long value)
             {
                 var reference = selected.Syntax;
+                if (scope.AssignsCaptureArithmetic && reference.Kind == VariableReferenceKind.Name
+                    && scope.ExposeCaptureAssignment(reference.Name))
+                    binding = await SelectAsync(selected, ArithmeticReferenceUse.Assign, savedProjection: null).ConfigureAwait(false);
                 // A reached read can require a new write selection after the RHS runs.
                 if (binding.Fallback == null && binding.Use == ArithmeticReferenceUse.Read)
                 {

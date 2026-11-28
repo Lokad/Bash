@@ -360,6 +360,7 @@ internal static partial class WordExpansion
         if (!VariableReference.TryParse(source, scope.Effects.Memory, out var reference))
             return false;
 
+        scope.ExposeCaptureAssignment(reference.Name);
         if (reference.Kind == VariableReferenceKind.Name)
         {
             var action = await PrepareNamerefAssignmentAsync(reference.Name, value, operation, scope, ExpansionFailureKind.AssignmentTarget).ConfigureAwait(false);

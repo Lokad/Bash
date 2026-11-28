@@ -474,18 +474,7 @@ public sealed partial class Variables
             if (deferFieldSeparators)
                 _ = FieldSeparators.FromVisibleBinding(owner);
             foreach (var name in prefixes)
-            {
-                var savedCursor = owner._getoptsCursor;
-                var preparedCursor = prepared._getoptsCursor;
-                _saved.TransferBindingFrom(owner, name);
-                owner.TransferBindingFrom(prepared, name);
-                if (name.CachedText == "OPTIND")
-                {
-                    _saved._getoptsCursor = savedCursor;
-                    owner._getoptsCursor = preparedCursor;
-                }
-                owner.SetAttribute(name, BindingAttributes.Temporary, true);
-            }
+                InstallPreparedBinding(prepared, name, saveOriginal: true);
             if (deferFieldSeparators)
             {
                 owner._deferFieldSeparators = true;
@@ -503,6 +492,71 @@ public sealed partial class Variables
             // Child contexts never restore the caller's pending output assignments.
             _retained = new Variables();
             _retainedNames = new HashSet<BindingName>();
+        }
+
+        /// <summary>Saves the caller slots behind the cloned assignment-prefix view.</summary>
+        internal CommandBindings(Variables owner, Variables caller, IReadOnlySet<BindingName> names,
+            EvaluationMemory memory, CancellationToken cancellationToken)
+        {
+            memory.Charge(384);
+            _owner = owner;
+            _prefixes = [];
+            _ownsPrefixNames = true;
+            _saved = new Variables();
+            _retained = new Variables();
+            _retainedNames = new HashSet<BindingName>();
+            AddCapturedBindings(caller, names, memory, cancellationToken);
+        }
+
+        /// <summary>Combines inherited and newly prepared prefixes in one child environment.</summary>
+        internal void AddCapturedBindings(Variables caller, IReadOnlySet<BindingName> names,
+            EvaluationMemory memory, CancellationToken cancellationToken)
+        {
+            foreach (var name in names)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (AdmitCaptureBinding(caller, name, memory))
+                    _saved.CopyBindingFrom(caller, name, borrowedCopyAdmitted: true, shellOwner: _owner);
+                _owner.SetAttribute(name, BindingAttributes.Temporary, true);
+            }
+        }
+
+        internal void InstallCaptureCommandBindings(Variables prepared, IReadOnlySet<BindingName> names,
+            EvaluationMemory memory, CancellationToken cancellationToken)
+        {
+            foreach (var name in names)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_prefixes.Contains(name))
+                    _owner.RefreshDirectoryStackListing(name);
+                var saveOriginal = AdmitCaptureBinding(_owner, name, memory);
+                InstallPreparedBinding(prepared, name, saveOriginal);
+            }
+        }
+
+        private bool AdmitCaptureBinding(Variables source, BindingName name, EvaluationMemory memory)
+        {
+            if (_prefixes.Contains(name))
+                return false;
+            memory.Charge(checked(BindingOverheadBytes + source.EstimateBindingBytes(name)));
+            memory.Workspace.PrepareSetCapacity(_prefixes, name, BindingNameSetEntryBytes);
+            _prefixes.Add(name);
+            return true;
+        }
+
+        private void InstallPreparedBinding(Variables prepared, BindingName name, bool saveOriginal)
+        {
+            var savedCursor = _owner._getoptsCursor;
+            if (saveOriginal)
+                _saved.TransferBindingFrom(_owner, name);
+            _owner.TransferBindingFrom(prepared, name);
+            if (name.CachedText == "OPTIND")
+            {
+                if (saveOriginal)
+                    _saved._getoptsCursor = savedCursor;
+                _owner._getoptsCursor = prepared._getoptsCursor;
+            }
+            _owner.SetAttribute(name, BindingAttributes.Temporary, true);
         }
 
         public bool Contains(BindingName name) => _prefixes.Contains(name);
@@ -716,6 +770,7 @@ public sealed partial class Variables
 
         public void Dispose()
         {
+            var refreshGlobIgnore = Contains(GlobIgnoreName);
             foreach (var name in _prefixes)
             {
                 var retained = _retainedNames.Contains(name);
@@ -725,7 +780,6 @@ public sealed partial class Variables
                 // Pending users have settled. The selected store can give its slot back to the caller.
                 _owner.TransferBindingFrom(retained ? _retained : _saved, name);
                 (retained ? _saved : _retained).ClearBinding(name);
-                _owner.RefreshGlobIgnore(name);
                 // Functions restore their entry cursor. Simple commands keep the reached bundle
                 // and reselect its index from the restored binding.
                 if (_functionGetoptsPrefix is { } getopts && name == getopts.Name)
@@ -735,6 +789,8 @@ public sealed partial class Variables
             }
             _prefixes = EmptyPrefixes;
             _retainedNames.Clear();
+            if (refreshGlobIgnore)
+                _owner.RefreshGlobIgnore(GlobIgnoreName);
         }
     }
 

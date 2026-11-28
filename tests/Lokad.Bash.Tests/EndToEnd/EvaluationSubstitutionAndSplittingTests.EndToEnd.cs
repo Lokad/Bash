@@ -9,6 +9,60 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
     private const string ReportForegroundStatus = "printf '<%s|%s>' \"$?\" \"${PIPESTATUS[*]-unset}\"";
 
     [Theory]
+    [InlineData("printf '[%s]' \"$value\"", "[temporary][caller]")]
+    [InlineData("f", "[temporary][temporary][caller]")]
+    [InlineData("printf '[%s]' \"$value\" | cat", "[temporary][caller]")]
+    [InlineData("(printf '[%s]' \"$value\"; printf '[%s]' \"$value\")", "[temporary][caller][temporary]")]
+    [InlineData("printf '[%s]' \"$value\" >missing/file", "[caller]")]
+    public async Task AssignmentCaptureRetiresPrefixesAtTheReachedCommandBoundary(string command, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            value=caller
+            f() { printf '[%s]' "$value"; printf '[%s]' "$value"; }
+            value=temporary recorded=$({{command}}; printf '[%s]' "$value") eval 'printf "%s" "$recorded"'
+            printf ':%s' "$value"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected + ":caller", result.StdOut);
+    }
+
+    [Theory]
+    [InlineData("value+=tail", "callertail")]
+    [InlineData("export value", "temporary")]
+    [InlineData("declare value=changed", "caller")]
+    [InlineData("other=arg printf -v value %s changed", "changed")]
+    [InlineData("value=inner printf -v value %s changed", "changed")]
+    public async Task AssignmentCapturePublishesOnlyWritesThatSurvivePrefixRetirement(string command, string expected)
+    {
+        var result = await EvaluationTestHelper.RunAsync($$"""
+            value=caller
+            value=temporary recorded=$({{command}}; printf '%s' "$value") eval 'printf "%s" "$recorded"'
+            printf ':%s' "$value"
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected + ":caller", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Fact]
+    public async Task NestedAssignmentCapturesRestoreTheOriginalSlotsOfOverlappingPrefixes()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            value=caller
+            value=outer observed=$(
+                value=inner written=$(printf '[%s]' "$value"; printf '[%s]' "$value") eval 'printf "%s" "$written"'
+                printf '[%s]' "$value"
+            ) eval 'printf "%s" "$observed"'
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("[inner][caller][caller]", result.StdOut);
+        Assert.Empty(result.StdErr);
+    }
+
+    [Theory]
     [InlineData("", "<1|unset>")]
     [InlineData("! (exit 7) | :\n", "<1|1>")]
     [InlineData("(exit 7) | (exit 3)\n", "<3|7 3>")]

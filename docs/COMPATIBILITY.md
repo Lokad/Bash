@@ -1021,6 +1021,14 @@ inactive. An assignment in that child activates the filter. `mapfile` and
 `read -a` can update array cells while the active filter retains the last
 assignment value.
 
+A command substitution in a later prefix assignment inherits the prepared
+bindings for its first simple command or pipeline. The first function or
+loaded reader retains them through its invocation. The capture then restores
+its own caller bindings and keeps writes that publish to those bindings.
+Parenthesized commands can retire an independent copy. Command substitutions
+inside redirections continue to use the caller's lookup scope and the filter
+selected during redirection expansion.
+
 `nocaseglob` folds ASCII letters in wildcard pathname components. Fixed
 path components keep exact spelling and each returned wildcard match keeps
 the entry's spelling. `nocasematch` folds ASCII letters in `case`,

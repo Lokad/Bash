@@ -46,12 +46,22 @@ public sealed partial class Evaluation
         }
         using var activeLine = lineScope;
 
+        var captureEnvironment = command is SimpleCommand or PipelineCommand
+            && scope.Context.CaptureEnvironment is { CommandActive: false } environment ? environment : null;
         EvaluationResult result;
         try
         {
             using var memory = Memory.BeginCommand(scope);
             await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
-            result = await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false);
+            if (captureEnvironment != null)
+                captureEnvironment.CommandActive = true;
+            try { result = await EvaluateCommandCoreAsync(command, scope, negated).ConfigureAwait(false); }
+            finally
+            {
+                if (captureEnvironment != null)
+                    captureEnvironment.CommandActive = false;
+            }
+            captureEnvironment?.Bindings.Dispose();
             await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
             if (HasFatalGlobIgnoreSyntax)
                 result = EvaluationResult.Exit(2);
@@ -64,6 +74,11 @@ public sealed partial class Evaluation
         catch (MemoryBudgetExceededException)
         {
             Memory.ReleaseUnusedCapacity();
+            if (captureEnvironment is { Names.Count: > 0 })
+            {
+                try { captureEnvironment.Bindings.Dispose(); }
+                catch (MemoryBudgetExceededException) { Memory.ReleaseUnusedCapacity(); }
+            }
             await ReportMemoryRefusalAsync("shell").ConfigureAwait(false);
             result = await FinalizeResultAsync(EvaluationResult.FromExitCode(1),
                 negated ^ command is PipelineCommand { Negated: true }).ConfigureAwait(false);
@@ -192,7 +207,8 @@ public sealed partial class Evaluation
                 case ArithmeticCommand arithmeticCommand:
                     _state.PreparationDiagnosticName = ArithmeticDiagnosticName;
                     PreparePipelineStatusStorage(1);
-                    var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Syntax, scope)
+                    var arithmeticScope = scope with { AssignsCaptureArithmetic = true };
+                    var arithmeticResult = await EvaluateArithmeticCommandOperandAsync(arithmeticCommand.Syntax, arithmeticScope)
                         .ConfigureAwait(false);
                     var arithmeticStatus = arithmeticResult is null or 0 ? 1 : 0;
                     return await FinalizeResultAsync(

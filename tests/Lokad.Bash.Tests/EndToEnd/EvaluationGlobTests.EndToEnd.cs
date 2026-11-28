@@ -359,15 +359,15 @@ public sealed class EvaluationGlobTestsEndToEnd
     {
         var tree = EndToEndHarness.BuildTree([("/final", ""), ("/first", ""), ("/.hidden", "")]);
         var result = await EvaluationTestHelper.RunAsync("""
-            GLOBIGNORE=first observation=$(
-                printf '<%s>' *
-                if shopt -q dotglob; then printf ':on'; fi
-                case :$BASHOPTS: in *:dotglob:*) printf ':listed';; esac
-            ) eval 'printf "%s\n" "$observation"'
+            GLOBIGNORE=first \
+                matches=$(printf '<%s>' *) \
+                dot=$(if shopt -q dotglob; then printf on; fi) \
+                listed=$(case :$BASHOPTS: in *:dotglob:*) printf listed;; esac) \
+                eval 'printf "%s:%s:%s\n" "$matches" "$dot" "$listed"'
             printf '<%s>' *
             """, tree: tree);
 
-        Assert.Equal("<.hidden><final>:on\n<final><first>", result.StdOut);
+        Assert.Equal("<.hidden><final>:on:\n<final><first>", result.StdOut);
         Assert.Empty(result.StdErr);
         Assert.Equal(0, result.ExitCode);
     }
@@ -384,6 +384,23 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Empty(host.StandardError.TextContent);
         Assert.Equal("chosen", host.ReadFile("/caller-final"));
         Assert.False(await EndToEndHarness.FileExistsAsync(host, "/caller-finalfirst"));
+    }
+
+    [Fact]
+    public async Task GlobIgnoreAssignmentCaptureRetiresTheFilterAfterShoptPublishesItsOptions()
+    {
+        var tree = EndToEndHarness.BuildTree([("/final", ""), ("/first", ""), ("/.hidden", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            GLOBIGNORE=first observed=$(
+                shopt -s globstar
+                case :$BASHOPTS: in *:dotglob:*) printf 'listed:';; esac
+                printf '<%s>' *
+            ) eval 'printf "%s" "$observed"'
+            """, tree: tree);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("listed:<final><first>", result.StdOut);
+        Assert.Empty(result.StdErr);
     }
 
     [Fact]

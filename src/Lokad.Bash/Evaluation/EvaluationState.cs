@@ -425,11 +425,24 @@ internal sealed class EvaluationState
 
     private readonly record struct BashOptionProjection(ShellOption Flags, ShellValue Value, long OwnedBytes);
     private BashOptionProjection _bashOptionProjection;
+    private bool? _captureOptionDotglob;
+
+    internal void SnapshotCaptureDotglob(bool hasGlobIgnorePrefix)
+    {
+        if (hasGlobIgnorePrefix || _captureOptionDotglob.HasValue)
+            _captureOptionDotglob = HasOption(ShellOption.Dotglob);
+    }
 
     /// <summary>Reads the current shopt values and formats the projection only when its flags change.</summary>
     internal ShellValue ReadBashOptions()
     {
-        var flags = ShellOptions.SelectBashFlags(EnabledOptions);
+        var options = _captureOptionDotglob switch
+        {
+            true => EnabledOptions | ShellOption.Dotglob,
+            false => EnabledOptions & ~ShellOption.Dotglob,
+            null => EnabledOptions
+        };
+        var flags = ShellOptions.SelectBashFlags(options);
         if (_bashOptionProjection.Flags != flags)
         {
             var value = ShellOptions.FormatBashBinding(flags, _shellMemory, out var ownedBytes);
@@ -941,6 +954,7 @@ internal sealed class EvaluationState
                 ? EnabledOptions & ~ShellOption.Errexit : EnabledOptions,
             // The enclosing evaluation retains the immutable value through this fork.
             _bashOptionProjection = _bashOptionProjection with { OwnedBytes = 0 },
+            _captureOptionDotglob = _captureOptionDotglob,
             _globIgnore = GlobIgnore,
             _globIgnoreRanges = SelectedGlobIgnoreRanges,
             // The inherited filter can enable dotglob without updating the BASHOPTS binding.

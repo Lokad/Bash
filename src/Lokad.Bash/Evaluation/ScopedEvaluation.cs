@@ -62,6 +62,7 @@ internal readonly record struct ScopedEvaluation(
 {
     /// <summary>Bounds nested numeric evaluation and shares its stack-safe work pump.</summary>
     internal ArithmeticContext? Arithmetic { get; init; }
+    internal bool AssignsCaptureArithmetic { get; init; }
 
     /// <summary>
     /// Receives prefix-RHS writes in the caller, or caller redirection writes in temporary command bindings.
@@ -131,9 +132,19 @@ internal readonly record struct ScopedEvaluation(
     /// <summary>A builtin's closed diagnostic output stops its expansion without making later commands fatal.</summary>
     internal bool CanExpand => !Effects.HasPendingExpansionError && Effects.BuiltinDiagnosticsOpen;
 
+    /// <summary>A direct write reaches the caller slot after its operand expanded against the prefix.</summary>
+    internal bool ExposeCaptureAssignment(BindingName name)
+    {
+        if (Context.CaptureEnvironment is not { } environment || !environment.Names.Contains(name)
+            || InNestedCommandUnits || (Context.FunctionContext?.Depth ?? 0) > environment.FunctionDepth)
+            return false;
+        environment.Bindings.ExposeBinding(name, environment.Saved);
+        return true;
+    }
+
     /// <summary>Copies visible and hidden bindings under the surrounding command's admission.</summary>
     internal (Variables Variables, Evaluation.EvaluationContext Context) ForkBindings(EvaluationState directoryStack) =>
-        Context.Fork(Variables, directoryStack, Effects.Memory, Effects.CancellationToken);
+        Context.Fork(Variables, directoryStack, Effects.Memory, Effects.CancellationToken, InNestedCommandUnits);
 
     /// <summary>The current simple command owns the prefix-name set, adding names as their bindings are prepared.</summary>
     internal readonly record struct ExpansionBindings(Variables Variables, IReadOnlySet<BindingName> PreparedPrefixNames)
@@ -141,6 +152,7 @@ internal readonly record struct ScopedEvaluation(
         private Variables.CommandBindings? SavedPrefixes { get; init; }
         internal IReadOnlySet<BindingName> PrefixNames => SavedPrefixes?.PrefixNames ?? PreparedPrefixNames;
         internal bool PreparingPrefixes { get; init; }
+        internal bool CapturesPreparedPrefixes { get; init; }
         /// <summary>The receiving store contains saved prefix bindings.</summary>
         internal bool OnlyPrefixNames => SavedPrefixes != null;
         /// <summary>Element writes in a declaration selector reach an existing caller binding or remain temporary.</summary>

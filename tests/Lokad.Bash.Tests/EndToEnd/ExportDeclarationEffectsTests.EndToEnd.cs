@@ -246,7 +246,7 @@ public sealed class ExportDeclarationEffectsTestsEndToEnd
                 var prefix = new Variables.CommandBindings(active, temporary, names,
                     suppressTemporaryLookup: false, prefixMemory, CancellationToken.None);
                 installed.Add(prefix);
-                chain = new ShellEvaluation.GlobalPrefixBindings(prefix, 0, chain);
+                chain = new ShellEvaluation.GlobalPrefixBindings(prefix, 0, chain, RetiresAfterCommand: false);
                 Assert.True(active.TryUnset("x"));
             }
 

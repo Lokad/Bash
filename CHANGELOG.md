@@ -4,6 +4,8 @@
 
 - Apply temporary `GLOBIGNORE` filters to later prefix values and in-process
   redirections after expanding command arguments.
+- Restore inherited temporary bindings after the first command in an
+  assignment capture and retain the writes Bash publishes within the capture.
 - Report assignment-time command syntax diagnostics from `GLOBIGNORE` and
   match Bash's terminating status with errexit enabled.
 - Use the command reader to find nested command delimiters in double-quoted

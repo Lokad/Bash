@@ -10,6 +10,29 @@ namespace Lokad.Bash.Tests;
 
 public sealed class CommandSubstitutionCaptureTests
 {
+    [Fact]
+    public async Task CancelingAnAssignmentCaptureSettlesTheTemporaryCommandAndRefundsItsStorage()
+    {
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var host = new TestHost { MemoryBudget = governor };
+        var writes = 0;
+        host.BeforeAppend = (_, _, _) =>
+        {
+            writes++;
+            cancellation.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => host.RunAsync("""
+            value=caller
+            value=temporary result=$(printf '%s' "$value" >selected; printf second) eval 'printf "%s" "$result"'
+            """, cancellation.Token));
+
+        Assert.Equal(1, writes);
+        Assert.Equal(0, host.OpenFileCount);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

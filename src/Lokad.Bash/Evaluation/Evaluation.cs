@@ -189,6 +189,24 @@ public sealed partial class Evaluation : IFileTester
         var outer = scope.Effects;
         var descriptors = outer.CreateCommandSubstitutionDescriptorSetup(output);
         var (variables, context) = scope.ForkBindings(outer._state);
+        if (scope.ExpansionWriteTarget is { CapturesPreparedPrefixes: true, PrefixNames.Count: > 0 } prefixes)
+        {
+            if (context.GlobalPrefixes is { RetiresAfterCommand: true } inherited)
+            {
+                inherited.Bindings.AddCapturedBindings(prefixes.Variables, prefixes.PrefixNames,
+                    outer.Memory, outer._cancellationToken);
+            }
+            else
+            {
+                var bindings = new Variables.CommandBindings(variables, prefixes.Variables, prefixes.PrefixNames,
+                    outer.Memory, outer._cancellationToken);
+                context = context with
+                {
+                    GlobalPrefixes = new GlobalPrefixBindings(bindings, context.FunctionContext?.Depth ?? 0,
+                        context.GlobalPrefixes, RetiresAfterCommand: true)
+                };
+            }
+        }
         variables.EnterSubshell();
         var line = Math.Max(scope.Context.FirstReaderLine, scope.Context.Coordinates.Line);
         context = context.WithCoordinates(new CommandCoordinates(script.Locations, line - 1, line, line)
@@ -1790,17 +1808,27 @@ public sealed partial class Evaluation : IFileTester
                         commandVars.UseVisibleFieldSeparators();
                 }
 
+                var captureBindings = builtinScope.Context.CaptureEnvironment is { CommandActive: true } inherited
+                    && !builtinScope.InNestedCommandUnits
+                    && (builtinScope.Context.FunctionContext?.Depth ?? 0) == inherited.FunctionDepth
+                    && (evaluatorBuiltin.Kind is BuiltinKind.Printf or BuiltinKind.Export or BuiltinKind.Readonly
+                        || declaration is { Options.PromotesTemporaryBindings: true }) ? inherited.Bindings : null;
                 // local/declare already publish declarations through the owning function's LocalBindings.
-                using var bindings = prefixNames == null
-                    || useCallerBindings
-                    || (builtinScope.Context.FunctionContext != null
-                        && evaluatorBuiltin.Kind is BuiltinKind.Local or BuiltinKind.Declare)
-                    ? null
-                    : new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames,
-                        _state.SuppressTemporaryLookup, Memory, _cancellationToken);
+                var installPrefixes = !useCallerBindings && !(builtinScope.Context.FunctionContext != null
+                    && evaluatorBuiltin.Kind is BuiltinKind.Local or BuiltinKind.Declare);
+                using var installed = installPrefixes && prefixNames != null && captureBindings == null
+                    ? new Variables.CommandBindings(builtinScope.Variables, commandVars, prefixNames,
+                        _state.SuppressTemporaryLookup, Memory, _cancellationToken) : null;
+                var bindings = installed;
+                if (installPrefixes && prefixNames != null && captureBindings != null)
+                {
+                    captureBindings.InstallCaptureCommandBindings(commandVars, prefixNames, Memory, _cancellationToken);
+                    bindings = captureBindings;
+                }
                 if (bindings != null)
                 {
-                    bindings.ActivateGlobIgnorePrefix();
+                    if (prefixNames?.Contains(global::Lokad.Bash.Evaluation.Variables.GlobIgnoreName) == true)
+                        bindings.ActivateGlobIgnorePrefix();
                     await FlushGlobIgnoreDiagnosticsAsync().ConfigureAwait(false);
                     if (HasFatalGlobIgnoreSyntax)
                         return EvaluationResult.Exit(2);
@@ -1840,7 +1868,8 @@ public sealed partial class Evaluation : IFileTester
                             CallerSource = builtinScope.Context.CallerSource,
                             Coordinates = builtinScope.Context.Coordinates,
                             GlobalPrefixes = new GlobalPrefixBindings(bindings,
-                                builtinScope.Context.FunctionContext?.Depth ?? 0, builtinScope.Context.GlobalPrefixes)
+                                builtinScope.Context.FunctionContext?.Depth ?? 0, builtinScope.Context.GlobalPrefixes,
+                                RetiresAfterCommand: false)
                         }
                     };
                 }
@@ -1863,7 +1892,7 @@ public sealed partial class Evaluation : IFileTester
                     BuiltinKind.Type => await EvaluateBuiltinTypeAsync(byteOperands, commandVars, builtinScope.Context, false).ConfigureAwait(false),
                     BuiltinKind.Help => await AwaitWordExpansionAsync(EvaluateBuiltinHelpAsync(byteOperands, builtinScope.Context, false)).ConfigureAwait(false),
                     BuiltinKind.Printf => await AwaitWordExpansionAsync(EvaluateBuiltinPrintfAsync(
-                        byteOperands, commandVars, bindings, builtinScope.Context, false)).ConfigureAwait(false),
+                        byteOperands, commandVars, bindings ?? captureBindings, builtinScope.Context, false)).ConfigureAwait(false),
                     BuiltinKind.Read => await AwaitWordExpansionAsync(EvaluateBuiltinReadAsync(
                         byteOperands, new ScopedEvaluation(this, commandVars, builtinScope.Context), bindings, false)).ConfigureAwait(false),
                     BuiltinKind.Mapfile => await AwaitWordExpansionAsync(EvaluateBuiltinMapfileAsync(
@@ -1871,7 +1900,8 @@ public sealed partial class Evaluation : IFileTester
                         .ConfigureAwait(false),
                     BuiltinKind.Export or BuiltinKind.Readonly or BuiltinKind.Declare or BuiltinKind.Local =>
                         await AwaitWordExpansionAsync(declaration is { } prepared
-                            ? EvaluateBuiltinDeclarationAsync(prepared.Options, prepared.Operands, commandVars, bindings, builtinScope, false)
+                            ? EvaluateBuiltinDeclarationAsync(prepared.Options, prepared.Operands, commandVars,
+                                bindings ?? captureBindings, builtinScope, false)
                             : throw new InvalidOperationException("Declaration was not prepared.")).ConfigureAwait(false),
                     BuiltinKind.Set when byteOperands.Count == 1 => await AwaitWordExpansionAsync(EvaluateBuiltinDeclarationAsync(
                         new DeclarationOptions(BuiltinKind.Set), [], commandVars, bindings, builtinScope, false)).ConfigureAwait(false),
@@ -2085,7 +2115,7 @@ public sealed partial class Evaluation : IFileTester
             {
                 Variables = commandVars,
                 ExpansionWriteTarget = new ScopedEvaluation.ExpansionBindings(scope.Variables, prefixNames)
-                    { PreparingPrefixes = true }
+                    { PreparingPrefixes = true, CapturesPreparedPrefixes = true }
             };
             foreach (var assignment in simpleCommand.Assignments)
             {
@@ -5086,6 +5116,7 @@ public sealed partial class Evaluation : IFileTester
             if (!VariableReference.TryParse(assignment.Target, Memory, out var compoundTarget))
                 return DirectAssignmentResult.Failed;
             var variables = scope.Variables;
+            scope.ExposeCaptureAssignment(compoundTarget.Name);
             var name = variables.ResolveNamerefName(compoundTarget.Name);
             if (compoundTarget.Kind != VariableReferenceKind.Name || !name.IsIdentifier)
             {
@@ -7938,10 +7969,14 @@ public sealed partial class Evaluation : IFileTester
 
     /// <summary>Bindings hidden by eval/source prefixes, independently of function-local declaration rules.</summary>
     internal sealed record GlobalPrefixBindings(
-        Variables.CommandBindings Bindings, int FunctionDepth, GlobalPrefixBindings? Enclosing)
+        Variables.CommandBindings Bindings, int FunctionDepth, GlobalPrefixBindings? Enclosing, bool RetiresAfterCommand)
     {
+        private readonly GlobalPrefixBindings? _enclosingCapture = Enclosing?.CaptureEnvironment;
         public Variables Saved => Bindings.SavedVariables;
         public IReadOnlySet<BindingName> Names => Bindings.PrefixNames;
+        internal bool CommandActive { get; set; }
+        internal GlobalPrefixBindings? CaptureEnvironment => RetiresAfterCommand && Names.Count != 0
+            ? this : _enclosingCapture?.CaptureEnvironment;
     }
 
     internal abstract record LocalNamerefAssignment
@@ -7982,18 +8017,20 @@ public sealed partial class Evaluation : IFileTester
 
         internal EvaluationContext WithCoordinates(CommandCoordinates coordinates) => this with { Coordinates = coordinates };
 
+        internal GlobalPrefixBindings? CaptureEnvironment => GlobalPrefixes?.CaptureEnvironment;
+
         /// <summary>Preserves local declaration identity while isolating child bindings and restoration.</summary>
         internal (Variables, EvaluationContext) Fork(Variables source, EvaluationState? directoryStack, EvaluationMemory memory,
-            CancellationToken cancellationToken) =>
-            ForkCore(source, directoryStack, memory, cancellationToken, borrowVisible: false);
+            CancellationToken cancellationToken, bool insideLoadedReader) =>
+            ForkCore(source, directoryStack, memory, cancellationToken, borrowVisible: false, insideLoadedReader);
 
         /// <summary>Isolates redirection writes while borrowing visible bindings until selected.</summary>
         internal (Variables, EvaluationContext) ForkForRedirections(Variables source, EvaluationMemory memory,
             CancellationToken cancellationToken) =>
-            ForkCore(source, directoryStack: null, memory, cancellationToken, borrowVisible: true);
+            ForkCore(source, directoryStack: null, memory, cancellationToken, borrowVisible: true, insideLoadedReader: false);
 
         private (Variables, EvaluationContext) ForkCore(Variables source, EvaluationState? directoryStack, EvaluationMemory memory,
-            CancellationToken cancellationToken, bool borrowVisible)
+            CancellationToken cancellationToken, bool borrowVisible, bool insideLoadedReader)
         {
             var bytes = borrowVisible ? 0 : source.EstimatedMemoryBytes;
             var functionDepth = FunctionContext?.Depth ?? 0;
@@ -8001,6 +8038,8 @@ public sealed partial class Evaluation : IFileTester
             for (var prefix = GlobalPrefixes; prefix != null; prefix = prefix.Enclosing)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (prefix is { RetiresAfterCommand: true, Names.Count: 0 })
+                    continue;
                 prefixCount++;
                 bytes = checked(bytes + prefix.Bindings.ForkMemoryBytes + 48);
             }
@@ -8025,7 +8064,8 @@ public sealed partial class Evaluation : IFileTester
             var scriptPrefixes = prefixCount == 0 ? [] : new GlobalPrefixBindings[prefixCount];
             var index = 0;
             for (var prefix = GlobalPrefixes; prefix != null; prefix = prefix.Enclosing)
-                scriptPrefixes[index++] = prefix;
+                if (prefix is not { RetiresAfterCommand: true, Names.Count: 0 })
+                    scriptPrefixes[index++] = prefix;
 
             // Each eval/source prefix is pushed at the active function depth. Rebuild both chains
             // outermost-first, selecting the innermost script prefix at each matching depth.
@@ -8038,7 +8078,9 @@ public sealed partial class Evaluation : IFileTester
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var prefix = scriptPrefixes[--index];
-                    prefixes = new GlobalPrefixBindings(prefix.Bindings.Fork(variables), depth, prefixes);
+                    var holdsInvocation = prefix.CommandActive && (insideLoadedReader || functionDepth > prefix.FunctionDepth);
+                    prefixes = new GlobalPrefixBindings(prefix.Bindings.Fork(variables), depth, prefixes,
+                        prefix.RetiresAfterCommand && !holdsInvocation);
                 }
                 if (depth != 0)
                     function = frames[depth - 1].ForkFrame(variables, function,
