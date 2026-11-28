@@ -35,6 +35,32 @@ public sealed class GlobPatternTests
     }
 
     [Theory]
+    [InlineData(false, false, false, true)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, false, false)]
+    public void PathnameBracketsRespectQuotedSegmentsAndComponentBoundaries(
+        bool openingQuoted, bool separatesComponents, bool closingQuoted, bool expands)
+    {
+        var ordinary = new string('x', 4096);
+        var gap = separatesComponents ? ordinary + "/" + ordinary : ordinary;
+        var word = new ExpandedWord([
+            new ExpandedSegment(ShellValue.FromText(ordinary + "["), openingQuoted),
+            new ExpandedSegment(ShellValue.FromText(gap), isGlobQuoted: true),
+            new ExpandedSegment(ShellValue.FromText("]" + ordinary), closingQuoted)]);
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        Assert.Equal(expands, GlobPattern.RequiresExpansion(word));
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        var mask = pattern.GetMask(0..pattern.Pattern.Length);
+        Assert.Equal(expands, GlobPattern.RequiresExpansion(pattern.Pattern.AsSpan(), in mask));
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Theory]
     [InlineData("p", false)]
     [InlineData("p", true)]
     [InlineData("🙂", false)]

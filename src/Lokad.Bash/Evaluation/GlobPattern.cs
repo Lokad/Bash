@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Lokad.Bash.Commands;
@@ -11,6 +12,9 @@ namespace Lokad.Bash.Evaluation;
 /// </summary>
 internal sealed class GlobPattern
 {
+    private static readonly SearchValues<byte> PathnameMarkersUtf8 = SearchValues.Create("*?[]/"u8);
+    private static readonly SearchValues<char> PathnameMarkers = SearchValues.Create("*?[]/");
+
     private GlobPattern(
         string pattern,
         GlobMask metaMask)
@@ -43,9 +47,22 @@ internal sealed class GlobPattern
             var segment = word.Segments[segmentIndex];
             // Glob operators are ASCII; inspect bytes without decoding individual segments.
             var bytes = segment.Content.Bytes.Span;
-            for (var index = bytes.Length - 1; index >= 0; index--)
-                if (ScanMetacharacter(bytes[index], !segment.IsGlobQuoted, ref hasClosingBracket))
+            if (segment.IsGlobQuoted)
+            {
+                // A quoted slash still separates pathname components.
+                if (hasClosingBracket && bytes.Contains((byte)'/'))
+                    hasClosingBracket = false;
+                continue;
+            }
+            while (true)
+            {
+                var index = bytes.LastIndexOfAny(PathnameMarkersUtf8);
+                if (index < 0)
+                    break;
+                if (ScanMetacharacter(bytes[index], active: true, ref hasClosingBracket))
                     return true;
+                bytes = bytes[..index];
+            }
         }
         return false;
     }
@@ -53,10 +70,15 @@ internal sealed class GlobPattern
     internal static bool RequiresExpansion(ReadOnlySpan<char> pattern, in GlobMaskSpan mask)
     {
         var hasClosingBracket = false;
-        for (var index = pattern.Length - 1; index >= 0; index--)
+        while (true)
+        {
+            var index = pattern.LastIndexOfAny(PathnameMarkers);
+            if (index < 0)
+                return false;
             if (ScanMetacharacter(pattern[index], mask[index] == GlobMask.Active, ref hasClosingBracket))
                 return true;
-        return false;
+            pattern = pattern[..index];
+        }
     }
 
     private static bool ScanMetacharacter(int character, bool active, ref bool hasClosingBracket)
