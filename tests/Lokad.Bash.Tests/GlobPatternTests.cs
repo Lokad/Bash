@@ -504,6 +504,40 @@ public sealed class GlobPatternTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public void GlobIgnoreKeepsTheSelectedBindingWhenRangePreparationIsRefused()
+    {
+        var spelling = ShellValue.FromText("\"$( : )\":keep");
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        var state = new EvaluationState(Syntax.Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        state.SetShellMemory(memory);
+        var variables = Variables.CreateEmpty();
+        variables.RebindShellState(state);
+
+        Assert.True(variables.TrySetScalar(Variables.GlobIgnoreName, ShellValue.FromText("drop")));
+        state.SetOption(ShellOption.Dotglob, false);
+        using (governor.Reserve(governor.LimitBytes - governor.ReservedBytes - 1024))
+            Assert.Throws<MemoryBudgetExceededException>(() => variables.TrySetScalar(Variables.GlobIgnoreName, spelling));
+
+        Assert.True(variables.TryGetExpansionValue(Variables.GlobIgnoreName, out var selected));
+        Assert.Equal(spelling, selected);
+        Assert.Equal(spelling, state.GlobIgnore);
+        Assert.Null(state.GlobIgnoreRanges);
+        Assert.True(state.HasOption(ShellOption.Dotglob));
+
+        Assert.True(variables.TrySetScalar(Variables.GlobIgnoreName, spelling));
+        Assert.NotNull(state.GlobIgnoreRanges);
+        using (var filter = new GlobIgnorePatterns(state.GlobIgnore, false, memory) { PreparedRanges = state.GlobIgnoreRanges })
+        {
+            Assert.True(filter.Excludes("keep", CancellationToken.None));
+            Assert.False(filter.Excludes("drop", CancellationToken.None));
+        }
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

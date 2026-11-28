@@ -451,12 +451,14 @@ internal sealed class EvaluationState
                     value = ShellValue.FromBytes(value.Bytes.ToArray());
                 }
             }
-            var ranges = _shellMemory is { } memory ? GlobIgnorePatterns.PrepareQuotedCommandRanges(value, memory) : null;
+            // The binding has already been changed. Publish its spelling before preparing derived ranges.
             GlobIgnore = value;
-            _globIgnoreRanges = ranges;
+            _globIgnoreRanges = null;
         }
         if (!selected.HasValue || !value.IsEmpty)
             SetOption(ShellOption.Dotglob, !value.IsEmpty);
+        if (_globIgnoreRanges == null && _shellMemory is { } memory)
+            _globIgnoreRanges = GlobIgnorePatterns.PrepareQuotedCommandRanges(GlobIgnore, memory);
     }
 
     internal bool UsesCommandStringExpansionExit { get; set; }
