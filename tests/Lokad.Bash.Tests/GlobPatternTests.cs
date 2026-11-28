@@ -481,6 +481,29 @@ public sealed class GlobPatternTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public void GlobIgnoreReusesBoundariesOnEqualByteAssignments()
+    {
+        const string Spelling = "\"left:$(case a in a) printf \"left:middle:right\";; esac):right\":drop";
+        var governor = new MemoryGovernor(TestMemoryBudget.EvaluationBytes);
+        using var scope = governor.CreateScope();
+        var memory = new EvaluationMemory(scope);
+        var state = new EvaluationState(Syntax.Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        state.SetShellMemory(memory);
+
+        state.RefreshGlobIgnore(ShellValue.FromText(Spelling));
+        var ranges = Assert.IsAssignableFrom<IReadOnlyList<Range>>(state.GlobIgnoreRanges);
+        var separator = Spelling.LastIndexOf(':');
+        Assert.Equal(new[] { 0..separator, (separator + 1)..Spelling.Length }, ranges);
+        state.RefreshGlobIgnore(ShellValue.FromText(Spelling));
+        Assert.Same(ranges, state.GlobIgnoreRanges);
+
+        state.RefreshGlobIgnore(ShellValue.FromText("drop"));
+        Assert.Null(state.GlobIgnoreRanges);
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

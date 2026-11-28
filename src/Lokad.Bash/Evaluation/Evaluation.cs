@@ -5757,7 +5757,7 @@ public sealed partial class Evaluation : IFileTester
         var rejectUnmatched = _state.HasOption(ShellOption.Failglob);
         var ignored = noglob ? ShellValue.Empty : _state.GlobIgnore;
         using var ignorePatterns = ignored.IsEmpty ? null : new GlobIgnorePatterns(ignored,
-            _state.HasOption(ShellOption.NoCaseGlob), Memory);
+            _state.HasOption(ShellOption.NoCaseGlob), Memory) { PreparedRanges = _state.GlobIgnoreRanges };
         var count = expanded.Count;
         if (count > 1 && (noglob || !skipUnmatched && !rejectUnmatched))
             Memory.PrepareListCapacity(backingOwner, results, count);

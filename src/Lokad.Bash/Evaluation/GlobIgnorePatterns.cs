@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using Lokad.Bash.Helpers;
 using Lokad.Bash.Memory;
+using Lokad.Bash.Syntax;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -14,6 +15,26 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
     private MemoryCapacity? _owner;
     private List<TextGlobMatcher.Utf8PathMatcher>? _patterns;
     private ByteMemoryBuilder? _longPath;
+    internal IReadOnlyList<Range>? PreparedRanges { get; init; }
+
+    internal static List<Range>? PrepareQuotedCommandRanges(ShellValue value, EvaluationMemory memory)
+    {
+        var bytes = value.Bytes.Span;
+        if (!bytes.Contains((byte)'"') || bytes.IndexOf("$("u8) < 0)
+            return null;
+
+        // Retain only the pattern boundaries. The command reader's scratch ends at each delimiter.
+        memory.Charge(32);
+        List<Range> ranges = [];
+        using var groups = new PatternListGroups(stackalloc byte[32], value.Bytes, memory.Budget);
+        var cursor = 0;
+        while (groups.TryReadPattern(ref cursor, memory.CancellationToken, out var range))
+        {
+            memory.PrepareListCapacity(ranges, 1);
+            ranges.Add(range);
+        }
+        return ranges;
+    }
 
     internal bool Excludes(string path, CancellationToken cancellationToken)
     {
@@ -46,27 +67,34 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
         var owner = _owner ??= new MemoryCapacity(memory.Budget, 0);
         memory.Charge(owner, 128);
         List<TextGlobMatcher.Utf8PathMatcher> patterns = [];
-        var bytes = value.Bytes.Span;
-        var start = 0;
-        using var groups = new PatternListGroups(stackalloc byte[32], memory.Budget);
-        for (var index = 0; index <= bytes.Length; index++)
+        if (PreparedRanges is { } ranges)
+        {
+            foreach (var range in ranges)
+                AddPattern(range);
+        }
+        else
+        {
+            using var groups = new PatternListGroups(stackalloc byte[32], value.Bytes, memory.Budget);
+            var cursor = 0;
+            while (groups.TryReadPattern(ref cursor, cancellationToken, out var range))
+                AddPattern(range);
+        }
+        return patterns;
+
+        void AddPattern(Range range)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (index < bytes.Length && groups.Consumes(bytes, ref index, cancellationToken))
-                continue;
-            if (index > start && AllActive.TryUnescape(ShellValue.FromBytes(value.Bytes[start..index]), memory, owner,
+            if (AllActive.TryUnescape(ShellValue.FromBytes(value.Bytes[range]), memory, owner,
                     cancellationToken, out var pattern, out var mask))
             {
                 memory.PrepareListCapacity(owner, patterns, 1);
                 patterns.Add(new TextGlobMatcher.Utf8PathMatcher(pattern.Bytes, mask, owner, ignoreAsciiCase));
             }
-            start = index + 1;
         }
-        return patterns;
     }
 
     /// <summary>Locates list separators in the stored pattern spelling without interpreting the groups.</summary>
-    private ref struct PatternListGroups(Span<byte> inline, IMemoryBudget budget)
+    private ref struct PatternListGroups(Span<byte> inline, ReadOnlyMemory<byte> spelling, IMemoryBudget budget)
     {
         private readonly Span<byte> _inline = inline;
         private ByteMemoryBuilder? _overflow;
@@ -80,8 +108,31 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
             ParameterWord = 1, NestedCommand = 2
         }
 
-        public bool Consumes(ReadOnlySpan<byte> bytes, ref int index, CancellationToken cancellationToken)
+        public bool TryReadPattern(ref int cursor, CancellationToken cancellationToken, out Range range)
         {
+            var start = cursor;
+            var end = spelling.Length;
+            for (var index = start; index < end; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (Consumes(ref index, cancellationToken))
+                    continue;
+                cursor = index + 1;
+                if (index > start)
+                {
+                    range = start..index;
+                    return true;
+                }
+                start = cursor;
+            }
+            cursor = end;
+            range = start..end;
+            return start < end;
+        }
+
+        private bool Consumes(ref int index, CancellationToken cancellationToken)
+        {
+            var bytes = spelling.Span;
             var value = bytes[index];
             var group = _group;
             if (group == Group.SingleQuote)
@@ -118,6 +169,10 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
                     break;
                 case (byte)'(' when group is Group.Parentheses or Group.NestedCommand:
                     Push(group);
+                    break;
+                case (byte)'$' when group == Group.DoubleQuote && following == (byte)'(':
+                    // In this position Bash uses the command reader to locate the closing delimiter.
+                    index = ReadQuotedCommand(index, cancellationToken) - 1;
                     break;
                 case (byte)'$' when group != Group.Bracket && following == (byte)'(':
                     Push(group == Group.None ? Group.Parentheses : Group.NestedCommand);
@@ -156,6 +211,16 @@ internal sealed class GlobIgnorePatterns(ShellValue value, bool ignoreAsciiCase,
                 Group.NestedCommand => value == (byte)')',
                 _ => value == (byte)group
             };
+        }
+
+        private int ReadQuotedCommand(int start, CancellationToken cancellationToken)
+        {
+            using var scratch = new MemoryCapacity(budget, 0);
+            var source = ShellSource.FromBytes(spelling);
+            var cursor = new ShellSourceCursor(source, start, new ShellScanContext { ScriptInput = source, SyntaxMemory = scratch });
+            var scan = cursor.SkipNestedExpansion(BracedParameterRecognition.All);
+            cancellationToken.ThrowIfCancellationRequested();
+            return scan is ShellNestedExpansionScan.Complete ? cursor.Position : source.Length;
         }
 
         private void Push(Group delimiter)

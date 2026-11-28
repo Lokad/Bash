@@ -223,6 +223,28 @@ public sealed class EvaluationGlobTestsEndToEnd
         Assert.Equal(0, result.ExitCode);
     }
 
+    [Theory]
+    [InlineData("$(case a in a) printf \"left:middle:right\";; esac)", "<middle>", true)]
+    [InlineData("$(cat <<'BODY'\n) \"left:middle:right\"\nBODY\n)", "<middle>", true)]
+    [InlineData("$(printf a;# ) \"left:middle:right\"\n)", "<middle>", true)]
+    [InlineData("$(case a in a) printf \"left:middle:right\"", "<drop><middle>", false)]
+    public async Task GlobIgnoreUsesTheCommandReaderForDoubleQuotedBoundaries(string nested, string expected, bool complete)
+    {
+        var value = ShellArgumentEscaping.EscapeArgument($"\"left:{nested}:right\":drop");
+        var host = EndToEndHarness.BuildTree([("/drop", ""), ("/middle", "")]);
+        var result = await EvaluationTestHelper.RunAsync($"""
+            GLOBIGNORE={value}
+            printf '<%s>' *
+            ( GLOBIGNORE=middle; printf 'child:<%s>' * )
+            printf '<%s>' *
+            """, tree: host);
+
+        Assert.Equal(expected + "child:<drop>" + expected, result.StdOut);
+        if (complete)
+            Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
     [Fact]
     public async Task ShellWordPatternsCanMatchSlashWithGlobIgnoreSet()
     {

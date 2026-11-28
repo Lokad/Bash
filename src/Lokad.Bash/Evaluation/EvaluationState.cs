@@ -428,26 +428,32 @@ internal sealed class EvaluationState
     }
 
     internal ShellValue GlobIgnore { get; private set; }
+    // Frozen when published. A fork can borrow the ranges with their source value.
+    private List<Range>? _globIgnoreRanges;
+    internal IReadOnlyList<Range>? GlobIgnoreRanges => _globIgnoreRanges;
 
-    private long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore);
+    private long RetainedGlobIgnoreBytes => Variables.EstimateValueBytes(GlobIgnore)
+        + (_globIgnoreRanges == null ? 0 : 32 + MemoryCapacity.ArrayBackingBytes<Range>(_globIgnoreRanges.Capacity));
 
     internal void RefreshGlobIgnore(ShellValue? selected)
     {
         var value = selected.GetValueOrDefault();
-        if (!GlobIgnore.Bytes.Equals(value.Bytes))
+        if (!GlobIgnore.Bytes.Equals(value.Bytes) && !GlobIgnore.Bytes.Span.SequenceEqual(value.Bytes.Span))
         {
             if (!value.IsEmpty)
             {
                 var bytes = Variables.EstimateValueBytes(value);
                 if (value.TryGetCompactArrayCapacity(out _))
-                    _shellMemory?.PrepareRetainedStorage(Math.Max(0, bytes - RetainedGlobIgnoreBytes));
+                    _shellMemory?.PrepareRetainedStorage(Math.Max(0, bytes - Variables.EstimateValueBytes(GlobIgnore)));
                 else
                 {
                     _shellMemory?.PrepareRetainedStorage(bytes);
                     value = ShellValue.FromBytes(value.Bytes.ToArray());
                 }
             }
+            var ranges = _shellMemory is { } memory ? GlobIgnorePatterns.PrepareQuotedCommandRanges(value, memory) : null;
             GlobIgnore = value;
+            _globIgnoreRanges = ranges;
         }
         if (!selected.HasValue || !value.IsEmpty)
             SetOption(ShellOption.Dotglob, !value.IsEmpty);
@@ -870,6 +876,7 @@ internal sealed class EvaluationState
             // The enclosing evaluation retains the immutable value through this fork.
             _bashOptionProjection = _bashOptionProjection with { OwnedBytes = 0 },
             GlobIgnore = GlobIgnore,
+            _globIgnoreRanges = _globIgnoreRanges,
             UsesCommandStringExpansionExit = kind == ShellForkKind.PipelineSimpleCommand && UsesCommandStringExpansionExit,
             SuppressTemporaryLookup = kind != ShellForkKind.CommandSubstitution && SuppressTemporaryLookup,
             ForkKind = kind,

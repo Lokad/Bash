@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use the command reader to find nested command delimiters in double-quoted
+  `GLOBIGNORE` patterns.
 - Keep grouped colons and their original spelling in `GLOBIGNORE` patterns.
 - Match `GLOBIGNORE` patterns using Bash's pathname separator rules and
   retain colons inside bracket expressions.
