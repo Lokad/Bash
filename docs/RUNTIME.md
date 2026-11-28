@@ -284,6 +284,9 @@ operator classifications and raw references are immutable; execution retains the
 existing grammar driver, structural guards and numeric work pump. Bindings, selector
 expansions and writes use the current scope. Dynamic shell splicing still prepares
 fresh operands, and syntax failures remain at their reached execution point.
+A dynamic operand with a single numeric token uses the shared number decoder
+directly. When other syntax follows a leading number, the grammar reuses the
+already scanned token boundary.
 
 Literal-only single-part words retain their expanded fields and quote flags on
 the immutable word, borrowing its byte storage. A prepared literal command field

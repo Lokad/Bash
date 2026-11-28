@@ -47,6 +47,27 @@ public sealed class ArithmeticSyntaxReuseTests
     }
 
     [Theory]
+    [InlineData("42", 42L)]
+    [InlineData(" \t64#@ \n", 62L)]
+    [InlineData("024", 20L)]
+    [InlineData("0x", 0L)]
+    [InlineData("18446744073709551616", 0L)]
+    public async Task DynamicSingleNumberDoesNotAdmitGrammarContinuations(string expression, long expected)
+    {
+        var governor = new MemoryGovernor(0);
+        using var memory = new MemoryCapacity(governor, 0);
+        var operand = ArithmeticOperand.FromValue(ShellValue.FromText(expression));
+
+        var result = await ArithmeticEvaluation.EvaluateAsync<string>(operand,
+            static (_, _) => throw new InvalidOperationException("Unexpected binding."),
+            static (_, _, _) => throw new InvalidOperationException("Unexpected write."),
+            memory, CancellationToken.None);
+
+        Assert.Equal(new ArithmeticResult(expected, null), result);
+        Assert.Equal(0, governor.PeakBytes);
+    }
+
+    [Theory]
     [InlineData("value + 1", true, true)]
     [InlineData("array[0]", true, false)]
     [InlineData("array[", true, false)]
@@ -73,6 +94,9 @@ public sealed class ArithmeticSyntaxReuseTests
     [InlineData("")]
     [InlineData("  64#_ \n")]
     [InlineData(" \t1 + 2\n ")]
+    [InlineData(" \t1 + (a = 9), a")]
+    [InlineData("1--a")]
+    [InlineData("2#10 + a[0]")]
     [InlineData(" \t09\n ")]
     [InlineData("7\r")]
     [InlineData("09")]

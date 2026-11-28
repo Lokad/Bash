@@ -258,6 +258,7 @@ public static partial class ArithmeticEvaluation
         private readonly MemoryCapacity? _memory;
         private int _index;
         private int _lastTokenStart;
+        private int _leadingNumberLength;
         private int _suppressedEvaluation;
         private int _nestedParseDepth;
         private ((int Index, int LastTokenStart) Cursor, ArithmeticReference Reference)? _referenceLookahead;
@@ -293,6 +294,24 @@ public static partial class ArithmeticEvaluation
             SkipWhitespace();
             if (IsAtEnd)
                 return new ArithmeticResult(0, null);
+            if (_operand.Syntax == null && Span[_index] is >= (byte)'0' and <= (byte)'9')
+            {
+                var length = ReadTokenShape(Span[_index..], _cancellationToken).Length;
+                var tail = _index + length;
+                while (tail < Span.Length && IsArithmeticBlank(Span[tail]))
+                {
+                    _cancellationToken.ThrowIfCancellationRequested();
+                    tail++;
+                }
+                if (tail == Span.Length)
+                {
+                    var valid = TryReadNumberToken(Span.Slice(_index, length), out var value);
+                    return new ArithmeticResult(valid ? value : 0, Error);
+                }
+
+                // The grammar can reuse the first token if this operand has more syntax.
+                _leadingNumberLength = length;
+            }
 
             // Grammar calls suspend here instead of growing the CLR stack at each precedence level.
             // Only binding and publication await effects; completed adapters stay synchronous.
@@ -720,7 +739,18 @@ public static partial class ArithmeticEvaluation
             if (_referenceLookahead.HasValue)
                 return Parse(this);
 
-            var token = PeekToken(out var kind);
+            ReadOnlySpan<byte> token;
+            ArithmeticTokenKind kind;
+            if (_leadingNumberLength != 0)
+            {
+                // Assignment lookahead cannot consume a number. The first unary production
+                // still starts at the token we checked before entering the grammar.
+                token = Span.Slice(_index, _leadingNumberLength);
+                _leadingNumberLength = 0;
+                kind = ArithmeticTokenKind.Number;
+            }
+            else
+                token = PeekToken(out kind);
             if (kind == ArithmeticTokenKind.Number)
             {
                 var valid = TryReadNumberToken(token, out var number);
