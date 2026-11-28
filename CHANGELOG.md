@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `globskipdots` and leading `+O globskipdots` in hosted launches.
+
 - Support `nocaseglob` for wildcard pathname components and `nocasematch`
   for shell pattern comparisons, regex comparisons, and pattern replacement.
 

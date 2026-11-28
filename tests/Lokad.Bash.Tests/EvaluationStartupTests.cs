@@ -28,7 +28,7 @@ public sealed class EvaluationStartupTests
         var result = await new Engine().RunAsync(evaluation, host, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("set:chosen:first:localvar_inherit\n", host.StandardOutput.TextContent);
+        Assert.Equal("set:chosen:first:globskipdots:localvar_inherit\n", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Contains("BASHOPTS", evaluation.ExportedVariables);
         Assert.Contains("BASHOPTS", evaluation.ReadonlyVariables);
@@ -496,7 +496,7 @@ public sealed class EvaluationStartupTests
             DescriptorTable.Snapshot.Standard.WithStandardStreams(FileDescriptor.StdIn, output, FileDescriptor.StdErr),
             [output]);
         var evaluation = new ShellEvaluation(Parser.Parse("inspect \"$0\" \"$1\" \"$#\" \"$PWD\" \"$VALUE\""),
-            new EvaluationOptions(0, directory), descriptors, "bash", environment, argumentZero, arguments, ShellOption.None);
+            new EvaluationOptions(0, directory), descriptors, "bash", environment, argumentZero, arguments, ShellOptions.Default);
 
         arguments.Clear();
         environment.Clear();

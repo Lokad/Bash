@@ -389,7 +389,7 @@ internal sealed class EvaluationState
     internal int FunctionBraceLine { get; set; }
 
     /// <summary>The shell's errexit option; tested execution contexts suppress its effect without changing it.</summary>
-    internal ShellOption EnabledOptions { get; set; } = ShellOptions.Fixed;
+    internal ShellOption EnabledOptions { get; set; } = ShellOptions.Default;
     public bool ErrexitEnabled
     {
         get => HasOption(ShellOption.Errexit);

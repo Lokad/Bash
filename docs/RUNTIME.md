@@ -312,6 +312,9 @@ and other dynamic syntax stay late-bound. Pathname expansion scans components in
 the existing pattern and quote mask. It prepares the literal prefix once and
 keeps separate spellings for output and lookup. Lookup preserves dot and dot-dot
 components for host traversal.
+An explicit leading dot can select virtual dot entries when `globskipdots`
+is disabled and the directory listing succeeds. A failed listing still
+contributes no candidates.
 The pathname matcher returns only matched paths. On a miss the expansion
 publisher uses the original byte value for literal fallback, drops the field
 under `nullglob`, or publishes a command-unit error under `failglob`.

@@ -16,15 +16,18 @@ internal enum ShellOption
     Nullglob = 32,
     NoCaseGlob = 64,
     NoCaseMatch = 128,
-    BraceExpand = 256,
-    Pipefail = 512
+    GlobSkipDots = 256,
+    BraceExpand = 512,
+    Pipefail = 1024
 }
 
 internal static class ShellOptions
 {
     internal const ShellOption Fixed = ShellOption.BraceExpand | ShellOption.Pipefail;
+    internal const ShellOption Default = Fixed | ShellOption.GlobSkipDots;
     private const ShellOption BashMask = ShellOption.InheritErrexit | ShellOption.LocalVariableInheritance
-        | ShellOption.Dotglob | ShellOption.Failglob | ShellOption.Nullglob | ShellOption.NoCaseGlob | ShellOption.NoCaseMatch;
+        | ShellOption.Dotglob | ShellOption.Failglob | ShellOption.Nullglob | ShellOption.NoCaseGlob | ShellOption.NoCaseMatch
+        | ShellOption.GlobSkipDots;
     internal static readonly BindingName BashOptionsName = "BASHOPTS";
     internal static readonly BindingName SetOptionsName = "SHELLOPTS";
 
@@ -41,6 +44,7 @@ internal static class ShellOptions
     [
         new(ShellValue.FromText("dotglob"), ShellOption.Dotglob),
         new(ShellValue.FromText("failglob"), ShellOption.Failglob),
+        new(ShellValue.FromText("globskipdots"), ShellOption.GlobSkipDots),
         new(ShellValue.FromText("inherit_errexit"), ShellOption.InheritErrexit),
         new(ShellValue.FromText("localvar_inherit"), ShellOption.LocalVariableInheritance),
         new(ShellValue.FromText("nocaseglob"), ShellOption.NoCaseGlob),

@@ -1,8 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
-
-using Lokad.Bash.Files;
 
 namespace Lokad.Bash.Evaluation;
 
@@ -12,9 +9,9 @@ namespace Lokad.Bash.Evaluation;
 internal interface IFileTester
 {
     /// <summary>
-    /// Lists the entries in the specified directory.
+    /// Lists the entries in the specified directory, preserving expected lookup failures.
     /// </summary>
-    Task<IReadOnlyList<DirectoryEntry>> ListDirectoryAsync(string path);
+    Task<DirectoryListingResult> ListDirectoryAsync(string path);
 
     /// <summary>Tests whether a path resolves to a directory, following its final symbolic link.</summary>
     Task<bool> IsDirectoryAsync(string path);

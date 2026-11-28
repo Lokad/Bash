@@ -13,7 +13,7 @@ internal readonly record struct ShellLaunchArguments(
     {
         var index = 0;
         var commandString = false;
-        var enabledOptions = ShellOption.None;
+        var enabledOptions = ShellOptions.Default;
         while (index < arguments.Count)
         {
             var group = arguments[index].Bytes.Span;
@@ -58,7 +58,7 @@ internal readonly record struct ShellLaunchArguments(
         return new ShellLaunchArguments(index, commandString, enabledOptions, ShellLaunchError.None, ShellValue.Empty);
 
         static ShellLaunchArguments Failure(ShellLaunchError error, ShellValue operand) =>
-            new(0, false, ShellOption.None, error, operand);
+            new(0, false, ShellOptions.Default, error, operand);
     }
 }
 

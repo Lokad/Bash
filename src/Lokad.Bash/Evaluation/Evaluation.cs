@@ -291,9 +291,6 @@ public sealed partial class Evaluation : IFileTester
     internal void ReplacePositionalParameters(IReadOnlyList<ShellValue> positionalParameters) =>
         _vars.ReplacePositionalParameters(positionalParameters);
 
-    Task<IReadOnlyList<DirectoryEntry>> IFileTester.ListDirectoryAsync(string path) =>
-        ExecuteListDirectoryAsync(path);
-
     async Task<bool> IFileTester.IsDirectoryAsync(string path)
     {
         CheckCancellation();
@@ -5574,7 +5571,8 @@ public sealed partial class Evaluation : IFileTester
         if (!standardError.IsClosed)
         {
             var detail = ShellValue.FromText("ambiguous redirect");
-            var prefix = emptyNullglob ? GetBuiltinDiagnosticPrefix(scope.Context) : default;
+            var prefix = emptyNullglob || scope.Context.DiagnosticName.HasValue
+                ? GetBuiltinDiagnosticPrefix(scope.Context) : default;
             if (diagnosticField is { } value)
                 await WriteDiagnosticAsync(standardError, [value], [detail], scope: null, prefix).ConfigureAwait(false);
             else
@@ -7307,18 +7305,18 @@ public sealed partial class Evaluation : IFileTester
     }
 
     /// <summary>
-    /// Emits a list-directory operation and applies glob expansion's error policy.
+    /// Emits a list-directory operation and retains its outcome until glob expansion consumes it.
     /// </summary>
-    private async Task<IReadOnlyList<DirectoryEntry>> ExecuteListDirectoryAsync(string path)
+    async Task<DirectoryListingResult> IFileTester.ListDirectoryAsync(string path)
     {
         CheckCancellation();
-        if (!RawShellPath.TryParse(path, out var raw)) return [];
+        if (!RawShellPath.TryParse(path, out var raw))
+            return DirectoryListingResult.Failure(new OperationError("Invalid file path\n"));
         // Keep the candidate generation admitted until the host settles its borrowed path.
         var result = await ListDirectoryOperation.AsTask(PublishOperation,
             new FilePathLookup(raw, _state.CurrentDirectory, FileLinkFollowing.Follow)).ConfigureAwait(false);
         CheckCancellation();
-        // Globs treat expected listing failures as no matches. Other failures still propagate.
-        return result.Error is null ? result.Entries : [];
+        return result;
     }
 
     private static bool TryReadFileOperand(string operand, ShellPath currentDirectory, out RawShellPath? path)

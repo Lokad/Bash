@@ -7,6 +7,44 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class EvaluationGlobTestsEndToEnd
 {
     [Fact]
+    public async Task ExplicitDotWildcardsUseSuccessfulListingsAndKeepLookupSpelling()
+    {
+        var host = EndToEndHarness.BuildTree(["/dir", "/dir/.hidden", "/empty"],
+            [("/visible", ""), ("/dir/visible", ""), ("/dir/.hidden/visible", "")]);
+        var result = await EvaluationTestHelper.RunAsync("""
+            printf 'default:<%s>\n' dir/.*
+            shopt -u globskipdots
+            printf 'nested:<%s>\n' dir/"."*/visible
+            printf 'found:<%s>\n' empty/.* missing/.*
+            shopt -s dotglob
+            printf 'bracket:<%s>\n' dir/[.]*
+            """, tree: host);
+
+        Assert.Equal("default:<dir/.hidden>\n"
+            + "nested:<dir/../visible>\nnested:<dir/./visible>\nnested:<dir/.hidden/visible>\n"
+            + "found:<empty/.>\nfound:<empty/..>\nfound:<missing/.*>\nbracket:<dir/.hidden>\n", result.StdOut);
+        Assert.Empty(result.StdErr);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task DotEntryCanMakeANamedRedirectionAmbiguousWithoutOpeningAFile()
+    {
+        await using var host = EndToEndHarness.BuildTree(["/empty"], [
+            ("/empty/.visible", "original"),
+            ("/unit", "shopt -u globskipdots\nprintf wrong >empty/.*\nprintf 'status:%s\\n' \"$?\"\n")
+        ]);
+
+        var result = await host.RunAsync("bash ./unit", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("status:1\n", host.StandardOutput.TextContent);
+        Assert.Equal("./unit: line 2: empty/.*: ambiguous redirect\n", host.StandardError.TextContent);
+        Assert.Equal("original", host.ReadFile("/empty/.visible"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task NocaseglobFoldsWildcardComponentsAndKeepsOriginalDirectorySpellings()
     {
         var host = EndToEndHarness.BuildTree(["/Dir"], [("/Dir/UPPER.TXT", ""), ("/Dir/lower.txt", "")]);

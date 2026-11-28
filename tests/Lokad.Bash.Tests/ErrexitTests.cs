@@ -117,16 +117,16 @@ public sealed class ErrexitTests
             """, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("capture:localvar_inherit/braceexpand:pipefail\n"
-            + "capture:inherit_errexit/braceexpand:errexit:pipefail\n"
-            + "parent:inherit_errexit:localvar_inherit/braceexpand:errexit:pipefail\n", host.StandardOutput.TextContent);
+        Assert.Equal("capture:globskipdots:localvar_inherit/braceexpand:pipefail\n"
+            + "capture:globskipdots:inherit_errexit/braceexpand:errexit:pipefail\n"
+            + "parent:globskipdots:inherit_errexit:localvar_inherit/braceexpand:errexit:pipefail\n", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
-    [InlineData("set", "BASHOPTS=dotglob", "SHELLOPTS=braceexpand:pipefail")]
-    [InlineData("declare -p", "declare -r BASHOPTS=\"dotglob\"", "declare -r SHELLOPTS=\"braceexpand:pipefail\"")]
+    [InlineData("set", "BASHOPTS=dotglob:globskipdots", "SHELLOPTS=braceexpand:pipefail")]
+    [InlineData("declare -p", "declare -r BASHOPTS=\"dotglob:globskipdots\"", "declare -r SHELLOPTS=\"braceexpand:pipefail\"")]
     public async Task OperandFreeVariableListingsIncludeTheLiveOptions(string command, string bashOptions, string setOptions)
     {
         var result = await EvaluationTestHelper.RunAsync("shopt -s dotglob\n" + command);

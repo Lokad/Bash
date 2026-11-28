@@ -62,10 +62,24 @@ public sealed class ChildShellLaunchTests
             """, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("child:localvar_inherit/braceexpand:errexit:pipefail\ncleared:/braceexpand:pipefail\n",
+        Assert.Equal("child:globskipdots:localvar_inherit/braceexpand:errexit:pipefail\ncleared:globskipdots/braceexpand:pipefail\n",
             host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public async Task LeadingPlusOCanDisableAnEnabledDefaultBeforeImport()
+    {
+        var result = await EvaluationTestHelper.RunAsync("""
+            bash +O globskipdots -c 'shopt -p globskipdots'
+            export BASHOPTS
+            bash +O globskipdots -c 'shopt -p globskipdots'
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("shopt -u globskipdots\nshopt -s globskipdots\n", result.StdOut);
+        Assert.Empty(result.StdErr);
     }
 
     [Theory]

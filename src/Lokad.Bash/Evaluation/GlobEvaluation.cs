@@ -57,7 +57,7 @@ internal sealed class GlobEvaluation
 
     public GlobEvaluation(GlobPattern pattern, ShellPath directory, MemoryCapacity memory,
         CancellationToken cancellationToken)
-        : this(pattern, directory, memory, cancellationToken, ShellOption.None) { }
+        : this(pattern, directory, memory, cancellationToken, ShellOptions.Default) { }
 
     internal GlobEvaluation(GlobPattern pattern, ShellPath directory, MemoryCapacity memory,
         CancellationToken cancellationToken, ShellOption options)
@@ -120,19 +120,33 @@ internal sealed class GlobEvaluation
             else
             {
                 var requireDirectory = hasNext || markDirectory;
-                var matchDot = (_options & ShellOption.Dotglob) != 0 || name.Span[0] == '.';
+                var startsWithDot = name.Span[0] == '.';
+                var matchDot = startsWithDot || (_options & ShellOption.Dotglob) != 0;
                 var hasWildcard = component.Start.Value == firstWildcardStart
                     || GlobPattern.RequiresExpansion(name.Span, _pattern.GetMask(component));
+                var matchSpecialEntries = startsWithDot && hasWildcard && (_options & ShellOption.GlobSkipDots) == 0;
                 long matchPathBytes = 0;
                 using (var matcher = new TextGlobMatcher.PathComponentMatcher(name, _pattern.GetMaskMemory(component),
                     _memory, ignoreAsciiCase: (_options & ShellOption.NoCaseGlob) != 0))
                 {
+                    var matchCurrent = matchSpecialEntries && matcher.Matches(".", _cancellationToken);
+                    var matchParent = matchSpecialEntries && matcher.Matches("..", _cancellationToken);
                     foreach (var parent in candidates)
                     {
                         _cancellationToken.ThrowIfCancellationRequested();
-                        var entries = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
+                        var listing = await tester.ListDirectoryAsync(parent.ListPath).ConfigureAwait(false);
                         _cancellationToken.ThrowIfCancellationRequested();
-                        foreach (var entry in entries)
+                        if (listing.Error != null)
+                            continue;
+
+                        // A successful listing establishes the directory even when the host omits dot entries.
+                        if (matchCurrent)
+                            matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, ".",
+                                hasNext ? AppendPath(parent.ListPath, ".", markDirectory: false) : string.Empty, markDirectory));
+                        if (matchParent)
+                            matchPathBytes = checked(matchPathBytes + AddMatch(matches, parent.OutputPath, "..",
+                                hasNext ? AppendPath(parent.ListPath, "..", markDirectory: false) : string.Empty, markDirectory));
+                        foreach (var entry in listing.Entries)
                         {
                             _cancellationToken.ThrowIfCancellationRequested();
                             var entryName = entry.Name.AsSpan();
@@ -158,10 +172,8 @@ internal sealed class GlobEvaluation
                                 if (!isDirectory)
                                     continue;
                             }
-                            var match = new Candidate(lookupPath, AppendPath(parent.OutputPath, entry.Name, markDirectory));
-                            _memory.PrepareListCapacity(matches, 1);
-                            matches.Add(match);
-                            matchPathBytes = checked(matchPathBytes + match.PathBytes);
+                            matchPathBytes = checked(matchPathBytes
+                                + AddMatch(matches, parent.OutputPath, entry.Name, lookupPath, markDirectory));
                         }
                     }
                 }
@@ -210,6 +222,14 @@ internal sealed class GlobEvaluation
             candidates.Capacity = 0;
             matches.Capacity = 0;
         }
+    }
+
+    private long AddMatch(List<Candidate> matches, string outputPrefix, string name, string lookupPath, bool markDirectory)
+    {
+        var match = new Candidate(lookupPath, AppendPath(outputPrefix, name, markDirectory));
+        _memory.PrepareListCapacity(matches, 1);
+        matches.Add(match);
+        return match.PathBytes;
     }
 
     /// <summary>Builds the literal prefix once per spelling, before any directory lookup.</summary>

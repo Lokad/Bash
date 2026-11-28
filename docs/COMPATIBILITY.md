@@ -866,7 +866,8 @@ After an ambiguous redirection, the evaluator expands the operand again to name
 it in the diagnostic. Direct command substitutions remain text in that pass.
 Arithmetic and braced parameter operands keep their own expansion behavior. If
 the pass produces zero or multiple fields, the diagnostic uses the operand's
-spelling. An unmatched literal pattern removed by `nullglob` uses its authored
+spelling. Named readers report the reached filename and line. An unmatched
+literal pattern removed by `nullglob` uses its authored
 spelling directly. A descriptor move closes the destination when the operand produces
 zero or multiple fields. A single quoted empty field reports a bad descriptor.
 An empty or closed descriptor reports the reached source filename and line.
@@ -915,8 +916,8 @@ followed by usage. It returns status 2 during validation or status 1
 during application, preserving any changes already applied. After `-`,
 `--`, or the first positional operand, `--help` is a positional argument.
 
-`shopt` inspects and changes `dotglob`, `failglob`, `inherit_errexit`,
-`localvar_inherit`, `nocaseglob`, `nocasematch`, and `nullglob`.
+`shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`,
+`inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, and `nullglob`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -925,8 +926,10 @@ they list enabled and disabled options respectively. `-o` selects the
 setting and the fixed `braceexpand` and `pipefail` settings.
 
 `dotglob` allows pathname wildcards to match names that start with a dot.
-Wildcard matching still skips the directory entries `.` and `..`. An
-unmatched pathname pattern normally produces its literal spelling.
+`globskipdots` is enabled by default. When it is disabled, a wildcard
+component starting with a literal or quoted dot can match `.` and `..`
+in a directory that was successfully listed. An unmatched pathname pattern
+normally produces its literal spelling.
 `nullglob` removes that field and can leave a redirection with an ambiguous
 target. `failglob` takes precedence, reports the unmatched pattern, and ends
 the reached command unit. With errexit off, the surrounding script reader

@@ -36,7 +36,7 @@ public sealed partial class Evaluation
         : this(script, descriptors, publishNextStep: null, onComplete: null,
             options, new MemoryGovernor(long.MaxValue), sourceMemory: null)
     {
-        _state.EnabledOptions |= launchOptions;
+        _state.EnabledOptions = launchOptions;
         var inheritedLevel = ShellValue.Empty;
         ShellValue? bashOptions = null;
         ShellValue? setOptions = null;

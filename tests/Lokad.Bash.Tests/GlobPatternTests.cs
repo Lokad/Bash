@@ -109,6 +109,26 @@ public sealed class GlobPatternTests
     }
 
     [Fact]
+    public async Task ExplicitDotGlobDoesNotDuplicateHostSuppliedDotEntries()
+    {
+        var governor = new MemoryGovernor(64 * 1024);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+        using var matches = new MemoryCapacity(owner, 0);
+        var word = new ExpandedWord([new ExpandedSegment(ShellValue.FromText(".*"), false)]);
+        Assert.True(GlobPattern.TryFromExpandedWord(word, memory, out var pattern));
+        var listing = new GlobListing(_ =>
+            [new(".", FilePathKind.Directory), new("..", FilePathKind.Directory), new(".hidden", FilePathKind.File)]);
+        var glob = new GlobEvaluation(pattern, ShellPath.Root, matches, CancellationToken.None, ShellOption.None);
+
+        Assert.Equal([".", "..", ".hidden"], await glob.EvaluateAsync(listing));
+
+        matches.Dispose();
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+    }
+
+    [Fact]
     public void CaseFoldedCachedBracketsPreserveCaseSensitiveNamedClasses()
     {
         var governor = new MemoryGovernor(64 * 1024);
@@ -192,14 +212,14 @@ public sealed class GlobPatternTests
         public List<string> Requests { get; } = [];
         public TaskCompletionSource<bool> Link { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<IReadOnlyList<DirectoryEntry>> ListDirectoryAsync(string path)
+        public Task<DirectoryListingResult> ListDirectoryAsync(string path)
         {
             Requests.Add(path);
             IReadOnlyList<DirectoryEntry> entries = path == "/"
                 ? [new("a-real", FilePathKind.Directory), new("a-link", FilePathKind.SymbolicLink),
                     new("a-file", FilePathKind.File), new(".a-hidden", FilePathKind.Directory)]
                 : [new("a", FilePathKind.File), new("b", FilePathKind.File)];
-            return Task.FromResult(entries);
+            return Task.FromResult(DirectoryListingResult.Success(entries));
         }
 
         public Task<bool> IsDirectoryAsync(string path)
@@ -370,7 +390,7 @@ public sealed class GlobPatternTests
 
     private sealed class GlobListing(Func<string, IReadOnlyList<DirectoryEntry>> list) : IFileTester
     {
-        public Task<IReadOnlyList<DirectoryEntry>> ListDirectoryAsync(string path) => Task.FromResult(list(path));
+        public Task<DirectoryListingResult> ListDirectoryAsync(string path) => Task.FromResult(DirectoryListingResult.Success(list(path)));
 
         public Task<bool> IsDirectoryAsync(string path) => throw new InvalidOperationException("No link targets expected.");
     }
