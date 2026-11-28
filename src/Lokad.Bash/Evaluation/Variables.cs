@@ -1565,16 +1565,20 @@ public sealed partial class Variables
         }
         else
         {
-            var entries = (long)values.Count + (namerefValue.HasValue || Scalars.ContainsKey(resolved) ? 1 : 0);
-            var required = entries * IndexedArray.ElementMemoryBytes;
+            var count = values.Count;
+            var preservesZero = count == 0 || (origin != 0 && count <= (long)uint.MaxValue + 1 - origin);
+            ShellValue? initial = null;
+            if (preservesZero)
+                initial = namerefValue ?? (Scalars.TryGetValue(resolved, out var scalar) ? (ShellValue?)scalar : null);
+
+            var entries = checked(count + (initial.HasValue ? 1 : 0));
+            var required = (long)entries * IndexedArray.ElementMemoryBytes;
             if (required > prepaidEntryBytes)
-            {
                 memory.Charge(required - prepaidEntryBytes);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            var promoted = CreatePromotedIndexedArray(resolved, memory: null);
-            if (namerefValue is { } raw)
-                promoted.Set(default, raw);
+            cancellationToken.ThrowIfCancellationRequested();
+            var promoted = new IndexedArray(isInitialized: false, capacity: entries);
+            if (initial is { } zero)
+                promoted.Set(default, zero);
             promoted.SetSequential(origin, values, memory: null, CancellationToken.None);
             ReplaceIndexedPreservingFieldJoin(resolved, promoted);
         }

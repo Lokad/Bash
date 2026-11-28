@@ -632,6 +632,48 @@ public partial class EvaluationTests
     }
 
     [Theory]
+    [InlineData(0U, 0, "saved", 1)]
+    [InlineData(0U, 1024, "0", 1024)]
+    [InlineData(3U, 1024, "saved", 1025)]
+    [InlineData(uint.MaxValue - 2, 3, "saved", 4)]
+    [InlineData(uint.MaxValue - 1, 3, "2", 3)]
+    public void MapfileOriginPresizesScalarPromotionForItsFinalPositions(
+        uint origin, int count, string zero, int expectedCount)
+    {
+        var variables = Variables.CreateEmpty();
+        var saved = ShellValue.FromText("saved");
+        Assert.True(variables.TrySetScalar("arr", saved));
+        var values = Enumerable.Range(0, count).Select(index => ShellValue.FromInteger(index)).ToArray();
+        var required = (long)expectedCount * IndexedArray.ElementMemoryBytes;
+        var governor = new MemoryGovernor(required);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        using (owner.Reserve(1))
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() => variables.TryUpdateResolvedIndexedArray(
+                "arr", origin, values, namerefValue: null, memory, CancellationToken.None, prepaidEntryBytes: 0));
+            Assert.Equal(saved, variables.Scalars["arr"]);
+            Assert.Equal(0, memory.Workspace.Bytes);
+        }
+        Assert.True(variables.TryUpdateResolvedIndexedArray(
+            "arr", origin, values, namerefValue: null, memory, CancellationToken.None, prepaidEntryBytes: 0));
+
+        var array = variables.IndexedArrays["arr"];
+        Assert.Equal(expectedCount, array.Count);
+        Assert.Equal(required, memory.Workspace.Bytes);
+        Assert.Equal(new Dictionary<long, ShellValue?>(expectedCount).EnsureCapacity(0), Elements(array).EnsureCapacity(0));
+        Assert.True(array.TryGet(default, out var actualZero));
+        Assert.Equal(ShellValue.FromText(zero), actualZero);
+        for (var index = 0; index < count; index++)
+        {
+            var position = IndexedArrayIndex.FromUnsigned(unchecked(origin + (uint)index));
+            Assert.True(array.TryGet(position, out var value));
+            Assert.Equal(values[index], value);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task MapfileOriginAdmitsNewEntriesWithoutRechargingOverwrittenPositions(bool append)
