@@ -20,7 +20,7 @@ public sealed class ByteSourceTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("2", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
-        byte[] expected = [0xff, .. ": ambiguous redirect\n"u8];
+        byte[] expected = [.. "line 1: "u8, 0xff, .. ": ambiguous redirect\n"u8];
         Assert.Equal(expected, host.ReadFileBytes("/error"));
         Assert.Equal(0, host.OpenFileCount);
     }

@@ -420,21 +420,22 @@ internal sealed class RedirectionEvaluation
             .ConfigureAwait(false);
         if (scope.Effects.HasPendingExpansionError) return RedirectionOutcome.Failure;
         if (reference == null || !reference.TryRead(scope.Variables, out var value) || value.IsEmpty)
-        {
-            await ReportFailureAsync(scope, new OperationError($"{variableName}: ambiguous redirect\n")).ConfigureAwait(false);
-            return RedirectionOutcome.Failure;
-        }
+            return await RejectVariableAsync().ConfigureAwait(false);
         // Bash converts a stored, nonempty value to signed decimal and then Int32.
         // A failed numeric conversion supplies zero; a negative Int32 is rejected.
         _ = Integers.TryParseNumber(value.Bytes.Span.Trim(" \t\r\n\v\f"u8), out var parsed);
         var number = unchecked((int)parsed);
         if (number < 0)
-        {
-            await ReportFailureAsync(scope, new OperationError($"{variableName}: ambiguous redirect\n")).ConfigureAwait(false);
-            return RedirectionOutcome.Failure;
-        }
+            return await RejectVariableAsync().ConfigureAwait(false);
         SetDescriptor(scope, new LogicalDescriptor(number), DescriptorBinding.Closed);
         return RedirectionOutcome.Success;
+
+        async Task<RedirectionOutcome> RejectVariableAsync()
+        {
+            await scope.Effects.ReportAmbiguousRedirectAsync(_descriptorTable, ShellValue.FromText(variableName), scope)
+                .ConfigureAwait(false);
+            return RedirectionOutcome.Failure;
+        }
     }
 
     private Task ReportOpenFailureAsync(ScopedEvaluation scope, string path, FileOpenMode mode, OperationError? error)

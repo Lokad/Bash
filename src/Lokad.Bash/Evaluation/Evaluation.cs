@@ -5651,14 +5651,24 @@ public sealed partial class Evaluation : IFileTester
             if (count == 1)
                 diagnosticField = field;
         }
+        await CompleteAmbiguousRedirectionAsync(descriptors, scope, diagnosticField.GetValueOrDefault(),
+            diagnosticField.HasValue ? null : target).ConfigureAwait(false);
+    }
+
+    internal Task ReportAmbiguousRedirectAsync(DescriptorTable descriptors, ShellValue name, ScopedEvaluation scope) =>
+        CompleteAmbiguousRedirectionAsync(descriptors, scope, name, target: null);
+
+    private async Task CompleteAmbiguousRedirectionAsync(
+        DescriptorTable descriptors, ScopedEvaluation scope, ShellValue name, Word? target)
+    {
         var standardError = descriptors.Resolve(LogicalDescriptor.StdErr);
         if (!standardError.IsClosed)
         {
             var detail = ShellValue.FromText("ambiguous redirect");
-            var prefix = emptyNullglob || scope.Context.DiagnosticName.HasValue
-                ? GetBuiltinDiagnosticPrefix(scope.Context) : default;
-            if (diagnosticField is { } value)
-                await WriteDiagnosticAsync(standardError, [value], [detail], scope: null, prefix).ConfigureAwait(false);
+            var coordinates = scope.Context.Coordinates;
+            var prefix = GetBuiltinDiagnosticPrefix(scope.Context, coordinates.RedirectionOpenLine ?? coordinates.Line);
+            if (target == null)
+                await WriteDiagnosticAsync(standardError, [name], [detail], scope: null, prefix).ConfigureAwait(false);
             else
                 await WriteRedirectionSpellingDiagnosticAsync(standardError, target, detail, prefix).ConfigureAwait(false);
         }
@@ -6397,10 +6407,13 @@ public sealed partial class Evaluation : IFileTester
     private static SyntaxDiagnosticPrefix GetCommandDiagnosticPrefix(ScopedEvaluation scope) =>
         GetCommandDiagnosticPrefix(scope.Context, scope.Context.Coordinates.Line);
 
-    private static SyntaxDiagnosticPrefix GetBuiltinDiagnosticPrefix(EvaluationContext context)
+    private static SyntaxDiagnosticPrefix GetBuiltinDiagnosticPrefix(EvaluationContext context) =>
+        GetBuiltinDiagnosticPrefix(context, context.Coordinates.Line);
+
+    private static SyntaxDiagnosticPrefix GetBuiltinDiagnosticPrefix(EvaluationContext context, int fallbackLine)
     {
-        var coordinates = context.Coordinates;
-        var line = coordinates.RedirectionDiagnosticLine is not 0 ? coordinates.RedirectionDiagnosticLine : coordinates.Line;
+        var originLine = context.Coordinates.RedirectionDiagnosticLine;
+        var line = originLine != 0 ? originLine : fallbackLine;
         return context.SourceMemory?.Kind == SourceMemory.ReaderKind.ImportedFunction
             ? new SyntaxDiagnosticPrefix(context.DiagnosticName, SyntaxDiagnosticOrigin.ScriptLine, line)
             : GetCommandDiagnosticPrefix(context, line);

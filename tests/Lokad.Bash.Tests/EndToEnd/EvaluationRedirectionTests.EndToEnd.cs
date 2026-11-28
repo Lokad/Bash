@@ -127,9 +127,9 @@ public sealed class EvaluationRedirectionTestsEndToEnd
     }
 
     [Theory]
-    [InlineData("", "<1>", "$(f): ambiguous redirect\n", null)]
-    [InlineData("2>error", "<1>", "", "$(f): ambiguous redirect\n")]
-    [InlineData("2>&1", "$(f): ambiguous redirect\n<1>", "", null)]
+    [InlineData("", "<1>", "line 1: $(f): ambiguous redirect\n", null)]
+    [InlineData("2>error", "<1>", "", "line 1: $(f): ambiguous redirect\n")]
+    [InlineData("2>&1", "line 1: $(f): ambiguous redirect\n<1>", "", null)]
     [InlineData("2>&-", "<1>", "", null)]
     public async Task AmbiguousRedirectionUsesReachedErrorMapping(
         string redirect, string output, string stderr, string? errorFile)
@@ -161,14 +161,14 @@ public sealed class EvaluationRedirectionTestsEndToEnd
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(output, host.StandardOutput.TextContent);
-        Assert.Equal(operand + ": ambiguous redirect\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: " + operand + ": ambiguous redirect\n", host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
     }
 
     [Theory]
-    [InlineData(": >${a[i++]}", "2", "second: ambiguous redirect\n")]
+    [InlineData(": >${a[i++]}", "2", "line 1: second: ambiguous redirect\n")]
     [InlineData(": 2>&- >${a[i++]}", "2", "")]
-    [InlineData("printf '<%s>' \"$(<${a[i++]})\"", "<>2", "second: ambiguous redirect\n")]
+    [InlineData("printf '<%s>' \"$(<${a[i++]})\"", "<>2", "line 1: second: ambiguous redirect\n")]
     public async Task AmbiguousRedirectionReevaluatesTheDiagnosticOperand(string command, string output, string stderr)
     {
         await using var host = new TestHost();
@@ -179,6 +179,29 @@ public sealed class EvaluationRedirectionTestsEndToEnd
         Assert.Equal(output, host.StandardOutput.TextContent);
         Assert.Equal(stderr, host.StandardError.TextContent);
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData("\n\nprintf '%s' \\\nargument \\\n>f*\n", 3)]
+    [InlineData("\n{\n  printf unreachable\n} \\\n>f*\n", 5)]
+    [InlineData("{\n  printf unreachable\n} >f* <<'END'\nbody\nEND\n", 5)]
+    [InlineData("f() {\n  printf unreachable\n} >f*\n\nf\n", 1)]
+    public async Task AmbiguousRedirectionUsesTheReachedReaderLine(string script, int expected)
+    {
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = EndToEndHarness.BuildTree([("/final", ""), ("/first", "")]);
+            var status = prepared
+                ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(1, status);
+            Assert.Empty(host.StandardOutput.Content.ToArray());
+            Assert.Equal($"line {expected}: f*: ambiguous redirect\n", host.StandardError.TextContent);
+            Assert.Empty(host.ReadFile("/final"));
+            Assert.Empty(host.ReadFile("/first"));
+            Assert.Equal(0, host.OpenFileCount);
+        }
     }
 
     [Theory]

@@ -168,7 +168,7 @@ public sealed class DescriptorAllocationTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("1:" + value, host.StandardOutput.TextContent);
-        Assert.Equal("fd: ambiguous redirect\n", host.StandardError.TextContent);
+        Assert.Equal("line 1: fd: ambiguous redirect\n", host.StandardError.TextContent);
     }
 
     [Theory]

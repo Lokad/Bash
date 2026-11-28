@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Include the reached line in ambiguous redirection diagnostics from
+  anonymous readers and failed descriptor-variable closes.
 - Apply temporary `GLOBIGNORE` filters to later prefix values and in-process
   redirections after expanding command arguments.
 - Restore inherited temporary bindings after the first command in an

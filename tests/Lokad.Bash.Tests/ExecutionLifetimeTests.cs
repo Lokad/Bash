@@ -32,7 +32,7 @@ public sealed class ExecutionLifetimeTests
         var operand = new byte[4096];
         operand.AsSpan().Fill((byte)'x');
         operand[^1] = 0xff;
-        byte[] expected = [.. operand, .. ": ambiguous redirect\n"u8];
+        byte[] expected = [.. "line 1: "u8, .. operand, .. ": ambiguous redirect\n"u8];
         var state = new Eval(Parser.Parse("a=('two fields' \"$1\"); i=0; : 2>out >${a[i++]} >later"));
         state.ReplacePositionalParameters([ShellValue.FromBytes(operand)]);
         var governor = new MemoryGovernor(128 * 1024);

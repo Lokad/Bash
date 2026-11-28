@@ -880,7 +880,7 @@ public class EngineTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(["recover"], visitor.CommandNames);
-        Assert.Equal("word: ambiguous redirect\n"u8.ToArray(), Assert.Single(visitor.Appends).Content);
+        Assert.Equal("line 1: word: ambiguous redirect\n"u8.ToArray(), Assert.Single(visitor.Appends).Content);
         Assert.Equal([new FileDescriptor(10)], visitor.ClosedDescriptors);
         Assert.Empty(state.GetDescriptorsForCleanup());
     }

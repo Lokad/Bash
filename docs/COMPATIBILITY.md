@@ -866,14 +866,16 @@ After an ambiguous redirection, the evaluator expands the operand again to name
 it in the diagnostic. Direct command substitutions remain text in that pass.
 Arithmetic and braced parameter operands keep their own expansion behavior. If
 the pass produces zero or multiple fields, the diagnostic uses the operand's
-spelling. Named readers report the reached filename and line. An unmatched
-literal pattern removed by `nullglob` uses its authored
-spelling directly. A descriptor move closes the destination when the operand produces
+spelling. The diagnostic reports the reached line, with a filename when the
+reader has one. An unmatched literal pattern removed by `nullglob` uses its
+authored spelling directly. A descriptor move closes the destination when the operand produces
 zero or multiple fields. A single quoted empty field reports a bad descriptor.
 An empty or closed descriptor reports the reached source filename and line.
 A closed literal source uses its descriptor number. An expanded duplication
 reports the word spelling for the default descriptor and the destination
 number for a non-default descriptor. An expanded move reports the destination.
+When closing through an allocated descriptor variable, an absent, empty, or
+negative value reports an ambiguous redirect naming the variable.
 A failed move to an open destination during restorable setup first reports
 the failed duplication. A failed allocation also reports the duplication.
 When the allocation operand supplies no valid descriptor number, the

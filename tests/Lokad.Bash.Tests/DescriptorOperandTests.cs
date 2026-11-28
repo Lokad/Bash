@@ -74,7 +74,7 @@ public sealed class DescriptorOperandTests
         Assert.Equal($"<1><{counter}>", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(calls, host.ReadFile("/calls"));
-        Assert.Equal(reported + ": ambiguous redirect\n", host.ReadFile("/error"));
+        Assert.Equal("line 1: " + reported + ": ambiguous redirect\n", host.ReadFile("/error"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
@@ -88,7 +88,7 @@ public sealed class DescriptorOperandTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(host.StandardError.Content.ToArray());
-        Assert.Equal("$x: ambiguous redirect\n", host.ReadFile("/error"));
+        Assert.Equal("line 1: $x: ambiguous redirect\n", host.ReadFile("/error"));
         Assert.Equal(0, host.OpenFileCount);
     }
 
