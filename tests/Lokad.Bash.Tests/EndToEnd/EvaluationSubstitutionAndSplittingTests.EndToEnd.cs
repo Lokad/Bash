@@ -540,6 +540,65 @@ public sealed class EvaluationSubstitutionAndSplittingTestsEndToEnd
         }
     }
 
+    private const string IncompleteArithmeticBody = "X$((1+2)Y";
+
+    [Theory]
+    [InlineData(IncompleteArithmeticBody, ')', IncompleteArithmeticBody)]
+    [InlineData("$((1+2", ')', "$((1+2")]
+    [InlineData("X$(\\\n(1+2)Y", ')', IncompleteArithmeticBody)]
+    [InlineData("X${value:-$((1+2)Y}Z", ')', "X${value:-$((1+2)Y}Z")]
+    [InlineData("X$[1+2Y", ']', "X$[1+2Y")]
+    public async Task IncompleteHereDocumentArithmeticDiscardsTheUnitAndReportsItsBytes(
+        string body, char delimiter, string spelling)
+    {
+        var script = "value=seed\nread -r value <<DOC; printf skipped\n"
+            + body + "\nDOC\n" + InspectDocumentStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal("<1|1>", host.StandardOutput.TextContent);
+            Assert.Equal($"line 2: bad substitution: no closing `{delimiter}' in {spelling}\n\n", host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("X$((printf inner);)Y", "<XinnerY>", "")]
+    [InlineData("X${value:-$[1+2Y}Z", "<XseedZ>", "")]
+    [InlineData("X${absent:-$[1+2Y}Z", "<seed>", "line 2: bad substitution: no closing `]' in $[1+2Y\n")]
+    public async Task HereDocumentArithmeticDelimitersRespectCommandAndOperandSelection(
+        string body, string output, string error)
+    {
+        var script = "value=seed\nIFS= read -r value <<DOC\n" + body + "\nDOC\nprintf '<%s>' \"$value\"\n";
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(0, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal(error, host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("set -e\nif read -r value <<DOC\n", "then printf yes; else printf no; fi\n", 2, 1, "")]
+    [InlineData("f(){\nread -r value <<DOC\n", "printf skipped; }\nf; printf skipped\n", 2, 0, "<1|1>")]
+    public async Task IncompleteHereDocumentArithmeticPropagatesPastTestedAndFunctionCommands(
+        string prefix, string suffix, int line, int status, string output)
+    {
+        var script = prefix + IncompleteArithmeticBody + "\nDOC\n" + suffix + InspectDocumentStatus;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            Assert.Equal(status, await RunSubstitutionFixtureAsync(script, host, prepared));
+            Assert.Equal(output, host.StandardOutput.TextContent);
+            Assert.Equal($"line {line}: bad substitution: no closing `)' in {IncompleteArithmeticBody}\n\n",
+                host.StandardError.TextContent);
+            Assert.Equal(0, host.OpenFileCount);
+        }
+    }
+
     [Theory]
     [InlineData(UnclosedBacktickBody, "<1|1>")]
     [InlineData(UnclosedParameterBody, "<1|1>")]

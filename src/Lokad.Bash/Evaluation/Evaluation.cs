@@ -695,11 +695,8 @@ public sealed partial class Evaluation : IFileTester
         {
             if (_state.TryConsumeExpansionError(out var redirectionExitCode, out var errorKind))
             {
-                if (errorKind == ExpansionErrorKind.HereDocumentParameter)
-                    result = await CompleteHereDocumentParameterFailureAsync(redirectionExitCode, scope).ConfigureAwait(false);
-                else
-                    result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope, redirectionScope,
-                        isolated: false, fromSimpleCommand: false).ConfigureAwait(false);
+                result = await CompleteRedirectionFailureAsync(redirectionExitCode, errorKind, scope, redirectionScope,
+                    isolated: false, fromSimpleCommand: false).ConfigureAwait(false);
             }
             else
             {
@@ -755,7 +752,7 @@ public sealed partial class Evaluation : IFileTester
         int status, ExpansionErrorKind kind, ScopedEvaluation scope, RedirectionScope redirections,
         bool isolated, bool fromSimpleCommand)
     {
-        if (kind == ExpansionErrorKind.HereDocumentParameter && _state.FatalExpansion.HasValue)
+        if (kind == ExpansionErrorKind.HereDocumentParameter && (!isolated || _state.FatalExpansion.HasValue))
             return CompleteHereDocumentParameterFailureAsync(status, scope);
         if (IsHereDocumentSyntaxFailure(kind) && _state.FatalExpansion == null)
             return CompleteHereDocumentSyntaxFailureAsync(kind, scope, redirections, isolated, fromSimpleCommand);

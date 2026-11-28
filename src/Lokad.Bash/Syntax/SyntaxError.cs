@@ -102,6 +102,7 @@ internal enum ParserFailureKind
     Grammar,
     RedirectionOperand,
     Delimiter,
+    HereDocumentArithmeticDelimiter,
     Limit,
     IncompleteArithmeticCommand,
     ContinuedArithmeticCloser,

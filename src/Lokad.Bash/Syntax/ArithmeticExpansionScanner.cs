@@ -351,6 +351,9 @@ internal static class ArithmeticExpansionScanner
         var isCommand = form is ArithmeticForm.Command or ArithmeticForm.ForHeader;
         var reachedParentheses = form == ArithmeticForm.ReachedParentheses;
         var adjacentSubshell = form == ArithmeticForm.AdjacentSubshell;
+        var hereDocument = context.ReadHereDocumentArithmeticDelimiters
+            && form is ArithmeticForm.Expansion or ArithmeticForm.ReachedParentheses;
+        trackIncompleteDelimiter |= hereDocument;
         int expressionStart;
         var hasPrefix = isCommand ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "((", out expressionStart)
             : adjacentSubshell ? ShellSourceCursor.TryMatchLogicalText(span, startIndex, "$((", out expressionStart)
@@ -397,7 +400,7 @@ internal static class ArithmeticExpansionScanner
                     {
                         // The unquoted arithmetic reader matches its own pair before expanding parameter operands.
                         var failure = incomplete.Failure;
-                        error = !cursor.IsQuoted && failure?.UnclosedDelimiter?.Delimiter == '}'
+                        error = hereDocument || !cursor.IsQuoted && failure?.UnclosedDelimiter?.Delimiter == '}'
                             ? ReadIncomplete() : failure ?? ReadIncomplete();
                     }
                     return ShellScanStatus.Incomplete;
@@ -457,6 +460,8 @@ internal static class ArithmeticExpansionScanner
 
                     // This closes the subshell opener in a command substitution.
                     // A later pair belongs to another lexical boundary.
+                    if (hereDocument)
+                        return ReadHereDocumentAdjacentCloser(out error);
                     if (trackIncompleteDelimiter)
                         error = ReadIncomplete();
                     return ShellSourceCursor.SkipLineContinuations(span, cursor.Position + 1) == text.Length
@@ -500,11 +505,25 @@ internal static class ArithmeticExpansionScanner
 
             ParserFailure ReadIncomplete() => new(
                 new SyntaxError(isCommand ? "Unterminated arithmetic command." : "Unterminated arithmetic expansion.", startIndex),
-                isCommand ? ParserFailureKind.IncompleteArithmeticCommand : ParserFailureKind.Delimiter)
+                isCommand ? ParserFailureKind.IncompleteArithmeticCommand : hereDocument
+                    ? ParserFailureKind.HereDocumentArithmeticDelimiter : ParserFailureKind.Delimiter)
             {
-                UnclosedDelimiter = cursor.UnclosedQuote
+                UnclosedDelimiter = (hereDocument ? null : cursor.UnclosedQuote)
                     ?? new UnclosedDelimiter((char)closing, expressionStart - 1) { AtOpeningDelimiter = true }
             };
+
+            ShellScanStatus ReadHereDocumentAdjacentCloser(out ParserFailure? failure)
+            {
+                // The reached expansion reads the outer pair before attempting the subshell grammar.
+                var comments = context.ReadArithmeticExpansionComments;
+                try
+                {
+                    context.ReadArithmeticExpansionComments = true;
+                    var status = ScanReachedParentheses(context, text, startIndex, out _, out _, out _, out failure);
+                    return status == ShellScanStatus.Complete ? ShellScanStatus.NotFound : status;
+                }
+                finally { context.ReadArithmeticExpansionComments = comments; }
+            }
         }
         finally
         {

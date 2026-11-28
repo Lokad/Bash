@@ -685,7 +685,10 @@ internal sealed class ShellSourceCursor
 
         var start = Position;
         UnclosedDelimiter? arithmeticOpening = null;
-        if (ArithmeticExpansionScanner.HasPrefix(_text, start) && !_context.TryGetCommandSubstitution(_text, start, out _))
+        // The here-document brace reader leaves bracketed expressions to the selected operand.
+        if (ArithmeticExpansionScanner.HasPrefix(_text, start)
+            && !(_context.ReadHereDocumentArithmeticDelimiters && TryMatchLogicalText(_text.AsSpan(), start, "$[", out _))
+            && !_context.TryGetCommandSubstitution(_text, start, out _))
         {
             var status = _context.ReadArithmeticExpansionComments && TryMatchLogicalText(_text.AsSpan(), start, "$((", out _)
                 ? ArithmeticExpansionScanner.ScanReachedParentheses(_context, _text, start, out var endIndex,
@@ -772,7 +775,8 @@ internal sealed class ShellSourceCursor
             ShellScanStatus status,
             ShellNestedExpansionKind kind,
             ParserFailure? failure) =>
-            status == ShellScanStatus.Incomplete && (kind != ShellNestedExpansionKind.Command || failure?.UnclosedDelimiter == null)
+            status == ShellScanStatus.Incomplete && failure?.Kind != ParserFailureKind.HereDocumentArithmeticDelimiter
+                && (kind != ShellNestedExpansionKind.Command || failure?.UnclosedDelimiter == null)
                 ? new ShellNestedExpansionScan.Incomplete(kind)
                 {
                     Failure = failure ?? (_text[start] == (byte)'`'
@@ -824,6 +828,7 @@ internal sealed class ShellScanContext
     internal bool RetainCaptureLookahead { get; set; }
     internal bool RetainCaptureEofDelimiter { get; init; }
     internal bool ReadArithmeticExpansionComments { get; set; }
+    internal bool ReadHereDocumentArithmeticDelimiters { get; set; }
     internal bool MissingReachedArithmeticParenthesis { get; set; }
     internal SubstitutionSyntaxFailure SubstitutionFailure { get; set; }
     internal int RejectedCaptureReads { get; set; }

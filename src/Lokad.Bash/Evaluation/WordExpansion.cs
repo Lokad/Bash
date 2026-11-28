@@ -464,7 +464,7 @@ internal static partial class WordExpansion
         ScopedEvaluation scope, ShellScanContext? captures, bool quoteSegment) =>
         ReportWordSyntaxAsync(word, segment, ParameterSyntaxFailure(missingBrace), scope, captures, quoteSegment);
 
-    private enum WordSyntaxFailure { BadSubstitution, MissingBrace, MissingArithmeticParenthesis, MissingBacktick }
+    private enum WordSyntaxFailure { BadSubstitution, MissingBrace, MissingArithmeticParenthesis, MissingArithmeticBracket, MissingBacktick }
 
     private static WordSyntaxFailure ParameterSyntaxFailure(bool missingBrace) =>
         missingBrace ? WordSyntaxFailure.MissingBrace : WordSyntaxFailure.BadSubstitution;
@@ -504,12 +504,13 @@ internal static partial class WordExpansion
         {
             WordSyntaxFailure.MissingBrace => [ShellValue.FromText("no closing `}' in "), spelling],
             WordSyntaxFailure.MissingArithmeticParenthesis => [ShellValue.FromText("no closing `)' in "), spelling],
+            WordSyntaxFailure.MissingArithmeticBracket => [ShellValue.FromText("no closing `]' in "), spelling],
             WordSyntaxFailure.MissingBacktick => [ShellValue.FromText("no closing \"`\" in "), spelling],
             _ => [badSubstitution]
         };
         if (!hereDocument)
             return scope.Effects.ReportParameterExpansionFailureAsync(subject, message, scope, ExpansionFailureKind.WordSyntax);
-        return failure == WordSyntaxFailure.MissingArithmeticParenthesis
+        return failure is WordSyntaxFailure.MissingArithmeticParenthesis or WordSyntaxFailure.MissingArithmeticBracket
             ? scope.Effects.ReportHereDocumentParameterFailureAsync(subject, message, scope, fatalKind: null)
             : scope.Effects.ReportHereDocumentWordSyntaxAsync(subject, message, scope, missingBrace: failure == WordSyntaxFailure.MissingBrace);
     }
@@ -1035,7 +1036,9 @@ internal static partial class WordExpansion
             var bracketed = prepared?.Bracketed ?? false;
             if (!prepared.HasValue)
             {
-                var context = new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
+                var context = quoteContext == ExpansionQuoteContext.HereDocument
+                    ? CreateHereDocumentScanContext()
+                    : new ShellScanContext { SyntaxMemory = scope.Effects.Memory.Workspace };
                 arithmeticStatus = ArithmeticExpansionScanner.Scan(context, content, index, out arithmeticEnd,
                     out var spelling, out _, out bracketed, out _, out arithmeticError);
                 expression = spelling.Source;
@@ -1126,7 +1129,10 @@ internal static partial class WordExpansion
                 && (commandStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid
                     || arithmeticStatus is ShellScanStatus.Incomplete or ShellScanStatus.Invalid))
             {
-                await scope.Effects.RejectHereDocumentSubstitutionAsync(
+                if (arithmeticError is { Kind: ParserFailureKind.HereDocumentArithmeticDelimiter, UnclosedDelimiter: { } missing })
+                    await ReportHereDocumentArithmeticDelimiterAsync(missing).ConfigureAwait(false);
+                else
+                    await scope.Effects.RejectHereDocumentSubstitutionAsync(
                         commandStatus == ShellScanStatus.NotFound ? arithmeticStatus : commandStatus, commandError ?? arithmeticError,
                         content, scope, interruptedCapture: commandStatus != ShellScanStatus.NotFound)
                     .ConfigureAwait(false);
@@ -1204,7 +1210,8 @@ internal static partial class WordExpansion
             {
                 if (parameterScan == null)
                 {
-                    parameterScan = CreateExpansionScanContext(scope);
+                    parameterScan = quoteContext == ExpansionQuoteContext.HereDocument
+                        ? CreateHereDocumentScanContext() : CreateExpansionScanContext(scope);
                     checkArithmeticComments = ArithmeticExpansionScanner.HasPossibleExpansionComment(content.AsSpan());
                 }
                 parameterScan.ReadArithmeticExpansionComments = checkArithmeticComments;
@@ -1243,7 +1250,9 @@ internal static partial class WordExpansion
                     }
                     if (quoteContext == ExpansionQuoteContext.HereDocument)
                     {
-                        if (parameterStatus is BracedParameterScanStatus.Unterminated or BracedParameterScanStatus.UnterminatedOperand)
+                        if (parameterError is { Kind: ParserFailureKind.HereDocumentArithmeticDelimiter, UnclosedDelimiter: { } missing })
+                            await ReportHereDocumentArithmeticDelimiterAsync(missing).ConfigureAwait(false);
+                        else if (parameterStatus is BracedParameterScanStatus.Unterminated or BracedParameterScanStatus.UnterminatedOperand)
                             await ReportParameterSyntaxAsync(content.ToValue(),
                                 parameterStatus == BracedParameterScanStatus.UnterminatedOperand, scope, hereDocument: true).ConfigureAwait(false);
                         else
@@ -1315,6 +1324,17 @@ internal static partial class WordExpansion
             AppendLiteral(content.Slice(index, 1));
         }
         return null;
+
+        ShellScanContext CreateHereDocumentScanContext() => new()
+        {
+            SyntaxMemory = scope.Effects.Memory.Workspace,
+            LegacyOrigin = LegacySubstitutionOrigin.HereDocument,
+            ReadHereDocumentArithmeticDelimiters = true
+        };
+
+        Task ReportHereDocumentArithmeticDelimiterAsync(UnclosedDelimiter missing) => ReportWordSyntaxAsync(content.ToValue(),
+            missing.Delimiter == ']' ? WordSyntaxFailure.MissingArithmeticBracket : WordSyntaxFailure.MissingArithmeticParenthesis,
+            scope, hereDocument: true);
 
         Task ReportMissingReachedParenthesisAsync() => ReportWordSyntaxAsync(
             quoteContext == ExpansionQuoteContext.HereDocument ? null : scope.ExpansionWord,

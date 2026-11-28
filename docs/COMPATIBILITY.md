@@ -678,6 +678,13 @@ A failed required parameter reports its expanded message at that same
 line. These failures in compound redirections publish status 1 and a
 single pipeline status of 1. With errexit active, EXIT sees those
 statuses through the redirections already applied to the command.
+An unquoted here-document reads the closing parenthesis of a `$((`
+expansion before attempting adjacent-subshell syntax. A missing closer
+reports the full spelling supplied to that expansion. Legacy `$[`
+checks its closing bracket when expansion reaches it, including inside
+a selected parameter operand. A missing arithmetic delimiter discards
+the current command unit and publishes status 1. Isolated host
+redirections return the failure to their caller.
 Parameter transformations resolve the selected value before validating an
 unknown operator. An absent value yields the ordinary empty expansion.
 An assigned empty value reaches validation. A rejected transformation
