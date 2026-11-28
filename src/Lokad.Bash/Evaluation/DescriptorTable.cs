@@ -50,9 +50,12 @@ internal sealed partial class DescriptorTable
     public void Set(LogicalDescriptor descriptor, FileDescriptor handle) =>
         Set(descriptor, new DescriptorBinding(handle));
 
-    internal void Set(LogicalDescriptor descriptor, DescriptorBinding binding)
+    internal void Set(LogicalDescriptor descriptor, DescriptorBinding binding) =>
+        Set(descriptor, binding, memory: null);
+
+    internal void Set(LogicalDescriptor descriptor, DescriptorBinding binding, EvaluationMemory? memory)
     {
-        if (!_bindings.Set(descriptor, binding))
+        if (!_bindings.Set(descriptor, binding, memory?.Workspace))
             return;
         if (binding.Handle.IsClosed && descriptor.Number >= FirstAllocatedDescriptorNumber && descriptor.Number < _nextAllocationNumber)
             _nextAllocationNumber = descriptor.Number;
@@ -60,16 +63,10 @@ internal sealed partial class DescriptorTable
             TryFindAvailableDescriptor(out _);
     }
 
-    /// <summary>Prepares major backing storage before a mapping or persistent batch is published.</summary>
+    /// <summary>Prepares major backing storage before a persistent batch is published.</summary>
     internal void PrepareSet(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory)
     {
         _bindings.PrepareSet(descriptor, binding, memory);
-    }
-
-    internal void Set(LogicalDescriptor descriptor, DescriptorBinding binding, EvaluationMemory memory)
-    {
-        PrepareSet(descriptor, binding, memory.Workspace);
-        Set(descriptor, binding);
     }
 
     /// <summary>Finds the first free script descriptor from 10; host handle numbers do not participate.</summary>

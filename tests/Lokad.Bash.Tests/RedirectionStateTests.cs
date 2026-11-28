@@ -130,4 +130,35 @@ public sealed class RedirectionStateTests
         Assert.Same(root, state.CurrentTable);
         Assert.Equal(inherited, root.Resolve(number));
     }
+
+    [Fact]
+    public void InheritedExitRestoresOverlappingBindingsFromNearestToOldest()
+    {
+        var number = new LogicalDescriptor(10);
+        var outerBinding = new DescriptorBinding(new FileDescriptor(40), IsWriteOnly: true);
+        var innerBinding = new DescriptorBinding(new FileDescriptor(41));
+        var reachedBinding = new DescriptorBinding(new FileDescriptor(42));
+        var root = new DescriptorTable();
+        root.Set(number, outerBinding);
+        var outer = new RedirectionState(root);
+        var innerEntry = root.Clone();
+        innerEntry.Set(number, innerBinding);
+        var changed = new HashSet<LogicalDescriptor> { number };
+        outer.Push(innerEntry, new DescriptorHandleOwner(), changed, memory: null);
+        using var owner = new MemoryGovernor(64 * 1024).CreateScope();
+        var memory = new EvaluationMemory(owner);
+        var inner = outer.ForkForSubshell(outer.CaptureInheritedExitBindings(0, memory));
+        var reached = innerEntry.Clone();
+        reached.Set(number, reachedBinding);
+        inner.Push(reached, new DescriptorHandleOwner(), changed, memory: null);
+        var stage = inner.ForkForSubshell(inner.CaptureInheritedExitBindings(0, memory));
+        var restoration = Assert.IsType<RedirectionState.PipelineExitRedirections>(
+            stage.CaptureForPipelineExit(0, useInherited: true, memory));
+
+        stage.RestoreForPipelineExit(restoration, memory);
+
+        Assert.Equal(outerBinding, stage.CurrentTable?.ResolveBinding(number));
+        Assert.Equal(reachedBinding, reached.ResolveBinding(number));
+        Assert.Equal(innerBinding, innerEntry.ResolveBinding(number));
+    }
 }

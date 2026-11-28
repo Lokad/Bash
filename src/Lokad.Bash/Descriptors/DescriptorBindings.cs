@@ -49,7 +49,10 @@ public partial struct DescriptorBindings
     public bool Set(LogicalDescriptor descriptor, FileDescriptor handle) =>
         Set(descriptor, new DescriptorBinding(handle));
 
-    internal bool Set(LogicalDescriptor descriptor, DescriptorBinding binding)
+    internal bool Set(LogicalDescriptor descriptor, DescriptorBinding binding) =>
+        Set(descriptor, binding, memory: null);
+
+    internal bool Set(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory)
     {
         switch (descriptor.Number)
         {
@@ -67,7 +70,7 @@ public partial struct DescriptorBindings
                 return true;
         }
 
-        if (!PrepareSet(descriptor, binding, null))
+        if (!PrepareSet(descriptor, binding, memory))
             return false;
         var writer = _writer ?? new DescriptorMap.Builder(_additional ?? DescriptorMap.Empty);
         writer.Set(descriptor, binding);

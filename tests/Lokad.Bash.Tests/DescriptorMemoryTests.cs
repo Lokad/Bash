@@ -147,6 +147,47 @@ public sealed class DescriptorMemoryTests
     }
 
     [Fact]
+    public void BudgetedWritesPreserveAccessModeAndAllocationCursorAcrossRefusal()
+    {
+        var first = new LogicalDescriptor(10);
+        var next = new LogicalDescriptor(11);
+        var binding = new DescriptorBinding(new FileDescriptor(1000));
+        var writeOnly = binding with { IsWriteOnly = true };
+        var parent = new DescriptorTable();
+        parent.Set(first, binding);
+        var snapshot = parent.Capture();
+        var child = snapshot.Fork();
+        var governor = new MemoryGovernor(4096);
+        using var owner = governor.CreateScope();
+        var memory = new EvaluationMemory(owner);
+
+        using (owner.Reserve(governor.LimitBytes))
+        {
+            child.Set(first, binding, memory);
+            Assert.Throws<MemoryBudgetExceededException>(() => child.Set(first, writeOnly, memory));
+            Assert.Throws<MemoryBudgetExceededException>(() => child.Set(next, DescriptorBinding.Closed, memory));
+            Assert.Equal(0, child.OwnedMemoryBytes);
+            Assert.Equal(binding, child.ResolveBinding(first));
+            Assert.False(child.HasMapping(next));
+            Assert.True(child.TryFindAvailableDescriptor(out var available));
+            Assert.Equal(next, available);
+        }
+
+        child.Set(first, writeOnly, memory);
+        child.Set(first, binding, memory);
+        Assert.Equal(writeOnly, child.ResolveBinding(first));
+        child.Set(next, DescriptorBinding.Closed, memory);
+        Assert.True(child.HasMapping(next));
+        Assert.Equal(DescriptorBinding.Closed, child.ResolveBinding(next));
+        child.Set(first, DescriptorBinding.Closed, memory);
+        Assert.True(child.TryFindAvailableDescriptor(out var reused));
+        Assert.Equal(first, reused);
+        Assert.Equal(binding, snapshot.ResolveBinding(first));
+        Assert.False(snapshot.HasMapping(next));
+        Assert.True(governor.ReservedBytes >= child.OwnedMemoryBytes);
+    }
+
+    [Fact]
     public void RefusedCapacityGrowthLeavesThePublishedBindingsIntact()
     {
         var governor = new MemoryGovernor(4096);
