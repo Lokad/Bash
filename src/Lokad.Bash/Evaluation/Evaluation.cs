@@ -86,9 +86,11 @@ public sealed partial class Evaluation : IFileTester
     /// </summary>
     private readonly IReadOnlyList<FileDescriptor> _borrowedDescriptors;
     /// <summary>
-    /// Tracks descriptors borrowed temporarily by an in-process subshell.
+    /// Tracks the complete borrowed handle set at each in-process subshell entry.
     /// </summary>
     private readonly Stack<HashSet<FileDescriptor>> _subshellBorrowedDescriptorScopes = new();
+    private HashSet<FileDescriptor>? SubshellBorrowedDescriptors =>
+        _subshellBorrowedDescriptorScopes.TryPeek(out var borrowed) ? borrowed : null;
     /// <summary> Retains owned descriptors until their terminal close completes. </summary>
     private readonly OrderedDescriptorSet _pendingDescriptorCleanup = new();
     // One serialized cleanup batch; capacity is prepared alongside pending ownership before acquisition.
@@ -5085,8 +5087,7 @@ public sealed partial class Evaluation : IFileTester
         descriptors.Add(GetStdOutDescriptor());
         descriptors.Add(GetStdErrDescriptor());
         descriptors.AddRange(_borrowedDescriptors);
-        // Each entry captures the complete ancestor union. Older entries add no new handles.
-        if (_subshellBorrowedDescriptorScopes.TryPeek(out var borrowedScope))
+        if (SubshellBorrowedDescriptors is { } borrowedScope)
         {
             foreach (var descriptor in borrowedScope)
                 descriptors.Add(descriptor);
@@ -5611,13 +5612,8 @@ public sealed partial class Evaluation : IFileTester
     internal void BindPersistentDescriptor(LogicalDescriptor descriptor, DescriptorBinding binding) =>
         _state.SetPersistentDescriptor(descriptor, binding, Memory, OwnsPersistentHandle(binding.Handle));
 
-    private bool OwnsPersistentHandle(FileDescriptor descriptor)
-    {
-        if (!_pendingDescriptorCleanup.Contains(descriptor)) return false;
-        foreach (var borrowed in _subshellBorrowedDescriptorScopes)
-            if (borrowed.Contains(descriptor)) return false;
-        return true;
-    }
+    private bool OwnsPersistentHandle(FileDescriptor descriptor) =>
+        _pendingDescriptorCleanup.Contains(descriptor) && SubshellBorrowedDescriptors?.Contains(descriptor) != true;
 
     /// <summary>
     /// Tracks an evaluator-owned descriptor until close completes, across redirection ownership transfers.
@@ -7358,7 +7354,7 @@ public sealed partial class Evaluation : IFileTester
             _preservationStarted = true;
             var preservedTable = owner._state.CurrentRedirectionTable;
             var openedDescriptors = owner._state.PreserveRedirectionTable(
-                owner.Memory, owner._pendingDescriptorCleanup, owner._subshellBorrowedDescriptorScopes);
+                owner.Memory, owner._pendingDescriptorCleanup, owner.SubshellBorrowedDescriptors);
             _active = false;
             return FinishAsync(openedDescriptors, preservedTable, operationFailed);
         }
@@ -7390,7 +7386,7 @@ public sealed partial class Evaluation : IFileTester
             void RetireUnreferenced(FileDescriptor descriptor)
             {
                 if (!owner._borrowedDescriptors.Contains(descriptor)
-                    && !owner._subshellBorrowedDescriptorScopes.Any(scope => scope.Contains(descriptor))
+                    && owner.SubshellBorrowedDescriptors?.Contains(descriptor) != true
                     && !owner._state.ReferencesDescriptor(descriptor)
                     && owner._state.TryTakeRedirectionDescriptor(descriptor, owner.Memory))
                 {

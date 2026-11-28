@@ -270,7 +270,7 @@ internal struct RedirectionState
     /// the scope that temporarily owns it, then removes the committed scope.
     /// </summary>
     public IReadOnlyCollection<FileDescriptor> Preserve(
-        EvaluationMemory? memory, OrderedDescriptorSet? pending, Stack<HashSet<FileDescriptor>>? borrowed)
+        EvaluationMemory? memory, OrderedDescriptorSet? pending, IReadOnlySet<FileDescriptor>? borrowed)
     {
         var committedTable = CurrentTable
             ?? throw new InvalidOperationException("A redirection table is required for preservation.");
@@ -279,10 +279,7 @@ internal struct RedirectionState
         {
             var binding = committedTable.ResolveBinding(logicalDescriptor);
             var handle = binding.Handle;
-            var acquired = pending?.Contains(handle) ?? OwnsHandle(handle);
-            if (acquired && borrowed != null)
-                foreach (var scope in borrowed)
-                    if (scope.Contains(handle)) { acquired = false; break; }
+            var acquired = (pending?.Contains(handle) ?? OwnsHandle(handle)) && borrowed?.Contains(handle) != true;
             SetPersistentDescriptor(logicalDescriptor, binding, memory, includeCurrent: false,
                 acquired);
         }

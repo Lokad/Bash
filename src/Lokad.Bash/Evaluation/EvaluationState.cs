@@ -709,7 +709,7 @@ internal sealed class EvaluationState
 
     /// <summary>Commits the current scope's changed bindings through their temporary restoration boundaries.</summary>
     public IReadOnlyCollection<FileDescriptor> PreserveRedirectionTable(
-        EvaluationMemory? memory, OrderedDescriptorSet? pending, Stack<HashSet<FileDescriptor>>? borrowed) =>
+        EvaluationMemory? memory, OrderedDescriptorSet? pending, IReadOnlySet<FileDescriptor>? borrowed) =>
         _redirections.Preserve(memory, pending, borrowed);
 
     /// <summary>Persists a binding through enclosing scopes up to its temporary restoration boundary.</summary>

@@ -55,6 +55,47 @@ public sealed class DescriptorOwnershipLifetimeTests
         Assert.Equal(0, host.OpenFileCount);
     }
 
+    [Fact]
+    public async Task NestedPersistenceClosesOnlyHandlesOwnedByTheCurrentSubshell()
+    {
+        const string source = """
+            exec 3>root
+            (
+                exec 4>middle
+                (
+                    exec 6>&3
+                    : {alias}>&4
+                    exec 5>leaf
+                    exec 8>&5
+                    exec 8>replacement
+                    exec 5>&-
+                    printf leaf >&8
+                    printf root >&6
+                    printf middle >&"$alias"
+                    exec 6>&-
+                    exec {alias}>&-
+                )
+                printf outer >&4
+            )
+            printf parent >&3
+            """;
+        using var owner = new MemoryGovernor(1024 * 1024).CreateScope();
+        await using var host = new RecordingCloseHost { MemoryBudget = owner };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var result = await new Engine().RunAsync(new Eval(Parser.Parse(source)), host, owner, deadline.Token);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(host.StandardError.TextContent);
+        Assert.Equal("rootparent", host.ReadFile("/root"));
+        Assert.Equal("middleouter", host.ReadFile("/middle"));
+        Assert.Empty(host.ReadFile("/leaf"));
+        Assert.Equal("leaf", host.ReadFile("/replacement"));
+        Assert.Equal(4, host.Opened.Count);
+        Assert.Equal(new[] { host.Opened[2], host.Opened[3], host.Opened[1], host.Opened[0] }, host.Closed);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
     [Theory]
     [InlineData(": 3>replacement", 1, "body", "")]
     [InlineData("exec 3>replacement", 0, "", "body")]
