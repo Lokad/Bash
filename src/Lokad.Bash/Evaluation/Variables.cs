@@ -2384,13 +2384,11 @@ public sealed partial class Variables
 
     /// <summary>Projects a unique name sequence or selects the first assigned export from overlapping scopes.</summary>
     /// <remarks>Overlapping scopes supply an owner for the name selection backing.</remarks>
-    internal static IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
+    internal static List<EnvironmentVariable> BuildExportedEnvironment(
         IEnumerable<VariableBinding> bindings, (EvaluationMemory Memory, MemoryCapacity Capacity)? resultOwner,
         MemoryCapacity? selectionMemory,
         CancellationToken cancellationToken, EnvironmentVariable? replacement)
     {
-        const long EnvironmentEntryBytes = 40;
-        const long ArrayHeaderBytes = 32;
         var results = new List<EnvironmentVariable>();
         var selected = selectionMemory == null ? null : new HashSet<BindingName>();
         foreach (var binding in bindings)
@@ -2401,7 +2399,7 @@ public sealed partial class Variables
             if (replacement is { } entry && entry.Name == name)
             {
                 Select(name);
-                Add(entry);
+                AppendEnvironmentExport(results, entry, resultOwner);
                 replacement = null;
                 continue;
             }
@@ -2423,26 +2421,12 @@ public sealed partial class Variables
                     continue;
             }
             Select(name);
-            Add(new EnvironmentVariable(name, value));
+            AppendEnvironmentExport(results, new EnvironmentVariable(name, value), resultOwner);
         }
 
         if (replacement is { } extra)
-            Add(extra);
+            AppendEnvironmentExport(results, extra, resultOwner);
         return results;
-
-        void Add(EnvironmentVariable entry)
-        {
-            if (resultOwner is { } owner && results.Count == results.Capacity)
-            {
-                var previous = results.Capacity;
-                var capacity = previous == 0 ? 4 : checked(2 * previous);
-                owner.Memory.Charge(owner.Capacity, ArrayHeaderBytes + EnvironmentEntryBytes * capacity);
-                results.Capacity = capacity;
-                if (previous != 0)
-                    owner.Capacity.Resize(owner.Capacity.Bytes - (ArrayHeaderBytes + EnvironmentEntryBytes * previous));
-            }
-            results.Add(entry);
-        }
 
         void Select(BindingName name)
         {
@@ -2450,6 +2434,36 @@ public sealed partial class Variables
             selectionMemory?.Grow(BindingNameSelectionBytes);
             selected.Add(name);
         }
+    }
+
+    /// <summary>Replaces an export after the lookup has finished borrowing the unpublished snapshot.</summary>
+    internal static void SetEnvironmentExport(List<EnvironmentVariable> exports, EnvironmentVariable entry,
+        EvaluationMemory memory, MemoryCapacity capacity, CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < exports.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (exports[i].Name != entry.Name)
+                continue;
+            exports[i] = entry;
+            return;
+        }
+        AppendEnvironmentExport(exports, entry, (memory, capacity));
+    }
+
+    private static void AppendEnvironmentExport(List<EnvironmentVariable> exports, EnvironmentVariable entry,
+        (EvaluationMemory Memory, MemoryCapacity Capacity)? resultOwner)
+    {
+        if (resultOwner is { } owner && exports.Count == exports.Capacity)
+        {
+            var previous = exports.Capacity;
+            var capacity = previous == 0 ? 4 : checked(2 * previous);
+            owner.Memory.Charge(owner.Capacity, MemoryCapacity.ArrayBackingBytes<EnvironmentVariable>(capacity));
+            exports.Capacity = capacity;
+            if (previous != 0)
+                owner.Capacity.Resize(owner.Capacity.Bytes - MemoryCapacity.ArrayBackingBytes<EnvironmentVariable>(previous));
+        }
+        exports.Add(entry);
     }
 
     /// <summary>

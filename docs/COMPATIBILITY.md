@@ -1748,6 +1748,10 @@ launch. Explicit `exec` in parentheses keeps the outgoing level, and
 terminal simple commands in command strings, captures and parentheses.
 The reached command unit, timing, redirections and active traps affect
 eligibility. Ordinary file readers continue to increment nested launches.
+For a direct external command inside parentheses, argument expansion
+precedes the adjustment. The child environment captures the adjusted
+value before redirections expand. Adjustment diagnostics use the stderr
+descriptor reached before those redirections.
 
 The supported inherited `bash -c` launch initializes `BASH_EXECUTION_STRING`
 from the original command argument bytes. It is an ordinary writable scalar.

@@ -1460,6 +1460,38 @@ public sealed partial class Evaluation : IFileTester
         }
         using var diagnosticName = new EvaluationState.CommandDiagnosticScope(_state,
             preparation is PreparedCommand.Executable invocation ? invocation.CommandValue : commandValue);
+        IReadOnlyList<EnvironmentVariable>? preparedLaunchEnvironment = null;
+        (ShellLevelDiagnostic Diagnostic, FileDescriptor Descriptor)? deferredLevel = null;
+        if (externalRedirections && terminalLaunch && preparation is PreparedCommand.Executable launch)
+        {
+            var adjustment = PrepareReplacementShellLevel(commandVars, prefixNames, beforeRedirections: true);
+            var redirectionTarget = ReferenceEquals(scope.Variables, redirectionExpansionScope.Variables)
+                ? null : adjustment.RedirectionTarget;
+            var stderr = GetStdErrDescriptor();
+            var reportsLevel = !stderr.IsClosed && !adjustment.Diagnostic.IsEmpty;
+            // A plain redirection has no expression that can read the adjusted binding.
+            // Only a reached binding or diagnostic needs an early availability check.
+            if (redirectionTarget.HasValue || reportsLevel)
+            {
+                var environment = BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace, replacement: null);
+                if (await ReachesLaunchAttemptAsync(launch.CommandName, _state.CurrentDirectory, environment).ConfigureAwait(false))
+                {
+                    if (reportsLevel)
+                        await ReportReplacementShellLevelAsync(adjustment.Diagnostic, stderr, scope.Context).ConfigureAwait(false);
+                    if (redirectionTarget is { } target)
+                        await ApplyRedirectionLevelAsync(target, adjustment.Value, adjustment.Diagnostic.ReadonlyName.IsEmpty)
+                            .ConfigureAwait(false);
+                }
+                else if (reportsLevel)
+                    deferredLevel = (adjustment.Diagnostic, stderr);
+                if (adjustment.Export is { } export)
+                    global::Lokad.Bash.Evaluation.Variables.SetEnvironmentExport(
+                        environment, export, Memory, Memory.Workspace, _cancellationToken);
+                preparedLaunchEnvironment = environment;
+            }
+            else
+                preparedLaunchEnvironment = BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace, adjustment.Export);
+        }
         var commandRedirections = await OpenRedirectionScopeAsync(
                 simpleCommand.Redirections, redirectionExpansionScope,
                 externalRedirections ? RedirectionPersistence.None : RedirectionPersistence.AllocationsAndMoves,
@@ -1510,6 +1542,25 @@ public sealed partial class Evaluation : IFileTester
                         or RedirectionKind.CloseInput or RedirectionKind.CloseOutput
                     || redirection.Kind is RedirectionKind.DuplicateInput or RedirectionKind.DuplicateOutput
                         && !redirection.TryGetLiteralDescriptor(out _));
+
+        async ValueTask ApplyRedirectionLevelAsync(VariableReference target, ShellValue value, bool writable)
+        {
+            var variables = redirectionExpansionScope.Variables;
+            if (writable)
+            {
+                if (target.Kind == VariableReferenceKind.Name)
+                    variables.SetResolvedValuePreservingArray(target.Name, value, Memory);
+                else
+                {
+                    var element = await WordExpansion.ResolveBuiltinReferenceAsync(target, redirectionExpansionScope, variables, variables)
+                        .ConfigureAwait(false);
+                    if (element == null || await element.AssignValueAsync(
+                            redirectionExpansionScope, target.Name, value, AssignmentOperator.Replace).ConfigureAwait(false) == null)
+                        return;
+                }
+            }
+            variables.SetExported(target.Name, true);
+        }
 
         ScopedEvaluation IsolateRedirectionBindings()
         {
@@ -1836,13 +1887,13 @@ public sealed partial class Evaluation : IFileTester
                 return await FinalizeResultAsync(EvaluationResult.FromExitCode(1), false).ConfigureAwait(false);
             }
             var inheritedDescriptors = CollectDescriptorsAvailable();
-            (BindingName ReadonlyName, int ExcessiveLevel) levelDiagnostic = default;
-            EnvironmentVariable? launchLevel = executable.ExecutionOptions switch
+            var adjustment = executable.ExecutionOptions switch
             {
-                null when terminalLaunch => PrepareReplacementShellLevel(scope.Variables, prefixNames, out levelDiagnostic),
+                null when terminalLaunch && preparedLaunchEnvironment == null
+                    => PrepareReplacementShellLevel(scope.Variables, prefixNames, beforeRedirections: false),
                 { ClearEnvironment: false } when _state.CommandLaunchEnvironment != EvaluationState.LaunchEnvironment.Parenthesized
-                    => PrepareReplacementShellLevel(commandVars, prefixes: null, out levelDiagnostic),
-                _ => null
+                    => PrepareReplacementShellLevel(commandVars, prefixes: null, beforeRedirections: false),
+                _ => default
             };
             var commandInvocation = BashCommandInheritance.CreateInheritedCommand(
                 commandName,
@@ -1850,7 +1901,8 @@ public sealed partial class Evaluation : IFileTester
                 byteOperands,
                 _state.CurrentDirectory,
                 executable.ExecutionOptions is { ClearEnvironment: true }
-                    ? [] : BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace, launchLevel),
+                    ? [] : preparedLaunchEnvironment
+                        ?? BuildExportedEnvironment(commandVars, scope.Context, Memory.Workspace, adjustment.Export),
                 GetStdInDescriptor(),
                 GetStdOutDescriptor(),
                 GetStdErrDescriptor(),
@@ -1859,7 +1911,8 @@ public sealed partial class Evaluation : IFileTester
                 functions,
                 functionImports);
             var execution = await ExecuteRunCommandAsync(commandInvocation, invocationScope,
-                executable.Completion == CommandCompletion.ExitEvaluation, levelDiagnostic).ConfigureAwait(false);
+                executable.Completion == CommandCompletion.ExitEvaluation,
+                deferredLevel?.Diagnostic ?? adjustment.Diagnostic, deferredLevel?.Descriptor).ConfigureAwait(false);
             var commandResult = await FinalizeResultAsync(
                     EvaluationResult.FromExitCode(execution.ShellExitCode),
                     false)
@@ -5525,7 +5578,7 @@ public sealed partial class Evaluation : IFileTester
         }
     }
 
-    private IReadOnlyList<EnvironmentVariable> BuildExportedEnvironment(
+    private List<EnvironmentVariable> BuildExportedEnvironment(
         Variables variables, EvaluationContext context, MemoryCapacity resultMemory, EnvironmentVariable? replacement)
     {
         using var selectionMemory = context.FunctionContext == null && context.GlobalPrefixes == null
@@ -7052,36 +7105,24 @@ public sealed partial class Evaluation : IFileTester
     /// Emits a run-command operation and renders any negotiated launch diagnostic.
     /// </summary>
     private async Task<CommandExecutionResult> ExecuteRunCommandAsync(CommandInvocation command, ScopedEvaluation scope, bool exec,
-        (BindingName ReadonlyName, int ExcessiveLevel) levelDiagnostic)
+        ShellLevelDiagnostic levelDiagnostic, FileDescriptor? deferredLevelStderr)
     {
         CheckCancellation();
-        var reportLevel = !command.StdErr.IsClosed && (!levelDiagnostic.ReadonlyName.IsEmpty || levelDiagnostic.ExcessiveLevel != 0);
-        if (reportLevel)
+        var levelStderr = deferredLevelStderr ?? command.StdErr;
+        var reportLevel = !levelStderr.IsClosed && !levelDiagnostic.IsEmpty;
+        if (reportLevel && deferredLevelStderr == null
+            && await ReachesLaunchAttemptAsync(command.CommandName, command.CurrentDirectory, command.Environment)
+                .ConfigureAwait(false))
         {
-            // A direct path reaches a launch attempt even when it is absent. A bare name first needs a lookup.
-            var reachesLaunch = command.CommandName.Contains('/');
-            if (!reachesLaunch)
-            {
-                Memory.Charge(MemoryCapacity.ArrayBackingBytes<string>(1));
-                var lookup = await ResolveCommandsOperation.AsTask(PublishOperation, [command.CommandName],
-                    command.CurrentDirectory, command.Environment).ConfigureAwait(false);
-                CheckCancellation();
-                if (lookup.Count != 1)
-                    throw new InvalidOperationException("Host returned an unexpected number of command lookup results.");
-                reachesLaunch = lookup[0] is CommandLookupResult.Found;
-            }
-            if (reachesLaunch)
-            {
-                await ReportLevelAsync().ConfigureAwait(false);
-                reportLevel = false;
-            }
+            await ReportReplacementShellLevelAsync(levelDiagnostic, levelStderr, scope.Context).ConfigureAwait(false);
+            reportLevel = false;
         }
         // The current redirection frame retains stderr until the command and any launch diagnostic settle.
         var result = await RunCommand.AsTask(PublishOperation, command, canReportLaunchFailure: true, out var request)
             .ConfigureAwait(false);
         CheckCancellation();
         if (reportLevel && result is CommandExecutionResult.Completed)
-            await ReportLevelAsync().ConfigureAwait(false);
+            await ReportReplacementShellLevelAsync(levelDiagnostic, levelStderr, scope.Context).ConfigureAwait(false);
         if (!request.CallerReportsLaunchFailure || command.StdErr.IsClosed || result is CommandExecutionResult.Completed)
             return result;
 
@@ -7106,18 +7147,34 @@ public sealed partial class Evaluation : IFileTester
                 directory, cannotExecute).ConfigureAwait(false);
         }
         return result;
+    }
 
-        async Task ReportLevelAsync()
-        {
-            var prefix = GetBuiltinDiagnosticPrefix(scope.Context);
-            if (levelDiagnostic.ExcessiveLevel != 0)
-                await WriteDiagnosticUnlessStderrClosedAsync([WarningSubject],
-                    [ShellLevelWarningMessage, ShellValue.FromInteger(levelDiagnostic.ExcessiveLevel), ShellLevelReset],
-                    scope: null, prefix).ConfigureAwait(false);
-            if (!levelDiagnostic.ReadonlyName.IsEmpty)
-                await WriteDiagnosticUnlessStderrClosedAsync([levelDiagnostic.ReadonlyName.ToValue()],
-                    [ShellValue.FromText("readonly variable")], scope: null, prefix).ConfigureAwait(false);
-        }
+    private async ValueTask<bool> ReachesLaunchAttemptAsync(string name, ShellPath directory,
+        IReadOnlyList<EnvironmentVariable> environment)
+    {
+        CheckCancellation();
+        // A direct path reaches a launch attempt even when it is absent.
+        if (name.Contains('/'))
+            return true;
+        Memory.Charge(MemoryCapacity.ArrayBackingBytes<string>(1));
+        var lookup = await ResolveCommandsOperation.AsTask(PublishOperation, [name], directory, environment).ConfigureAwait(false);
+        CheckCancellation();
+        if (lookup.Count != 1)
+            throw new InvalidOperationException("Host returned an unexpected number of command lookup results.");
+        return lookup[0] is CommandLookupResult.Found;
+    }
+
+    private async Task ReportReplacementShellLevelAsync(ShellLevelDiagnostic diagnostic, FileDescriptor descriptor,
+        EvaluationContext context)
+    {
+        var prefix = GetBuiltinDiagnosticPrefix(context);
+        if (diagnostic.ExcessiveLevel != 0)
+            await WriteDiagnosticAsync(descriptor, [WarningSubject],
+                [ShellLevelWarningMessage, ShellValue.FromInteger(diagnostic.ExcessiveLevel), ShellLevelReset],
+                scope: null, prefix).ConfigureAwait(false);
+        if (!diagnostic.ReadonlyName.IsEmpty)
+            await WriteDiagnosticAsync(descriptor, [diagnostic.ReadonlyName.ToValue()],
+                [ShellValue.FromText("readonly variable")], scope: null, prefix).ConfigureAwait(false);
     }
 
     /// <summary>

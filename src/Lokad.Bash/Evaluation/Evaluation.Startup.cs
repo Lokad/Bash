@@ -75,30 +75,44 @@ public sealed partial class Evaluation
         _ => null
     };
 
-    private EnvironmentVariable? PrepareReplacementShellLevel(Variables variables, IReadOnlySet<BindingName>? prefixes,
-        out (BindingName ReadonlyName, int ExcessiveLevel) diagnostic)
+    private readonly record struct ShellLevelDiagnostic(BindingName ReadonlyName, int ExcessiveLevel)
     {
-        diagnostic = default;
+        internal bool IsEmpty => ReadonlyName.IsEmpty && ExcessiveLevel == 0;
+    }
+
+    private readonly record struct ShellLevelReplacement(EnvironmentVariable? Export, ShellLevelDiagnostic Diagnostic,
+        VariableReference? RedirectionTarget, ShellValue Value);
+
+    private ShellLevelReplacement PrepareReplacementShellLevel(Variables variables, IReadOnlySet<BindingName>? prefixes,
+        bool beforeRedirections)
+    {
         if (!variables.TryResolveBinding(ShellLevelName, selectOwner: null, out var binding))
-            return null;
+            return default;
 
         var (reference, owner) = binding;
         var name = reference.Name;
         var isReadonly = owner.IsReadonlyBinding(name);
-        var hasValue = owner.TryReadResolvedExpansionValue(name, out var previous);
+        var previous = ShellValue.Empty;
+        var whole = reference.Kind == VariableReferenceKind.Name;
+        var hasValue = whole && owner.TryReadResolvedExpansionValue(name, out previous);
         var level = AdjustShellLevel(previous, -1, _cancellationToken, out var excessiveLevel);
-        diagnostic = (isReadonly ? name : default, excessiveLevel);
+        var diagnostic = new ShellLevelDiagnostic(isReadonly ? name : default, excessiveLevel);
         var hasPrefix = prefixes?.Contains(name) == true;
-        // A terminal simple command adjusts the caller's level. A temporary assignment to
-        // a nameref's referent still takes precedence when the environment is projected.
-        if (reference.Kind != VariableReferenceKind.Name || owner.TryGetNameref(name, out _)
-            || (hasPrefix ? name != ShellLevelName : owner.GetArrayMetadata(name) != null))
-            return null;
+        var unresolvedReference = whole && owner.TryGetNameref(name, out _);
+        var exportsValue = whole && !unresolvedReference
+            && (hasPrefix ? beforeRedirections || name == ShellLevelName : owner.GetArrayMetadata(name) == null);
+        // A prefix on a nameref's referent changes the temporary export but leaves the
+        // binder seen by redirection expansion alone.
+        VariableReference? redirectionTarget = beforeRedirections && !unresolvedReference
+            && (!hasPrefix || name == ShellLevelName) ? reference : null;
         if (isReadonly)
-            return hasValue ? new EnvironmentVariable(name, previous) : null;
+            return new(exportsValue && hasValue ? new EnvironmentVariable(name, previous) : null, diagnostic, redirectionTarget, default);
+        if (!exportsValue && redirectionTarget == null)
+            return new(null, diagnostic, null, default);
         if (level > 9)
             Memory.Charge(MemoryCapacity.ArrayBackingBytes<byte>(level < 100 ? 2 : 3));
-        return new EnvironmentVariable(name, level == 0 ? ShellValue.FromByte((byte)'0') : ShellValue.FromInteger(level));
+        var value = level == 0 ? ShellValue.FromByte((byte)'0') : ShellValue.FromInteger(level);
+        return new(exportsValue ? new EnvironmentVariable(name, value) : null, diagnostic, redirectionTarget, value);
     }
 
     private Task ReportStartupShellLevelAsync()

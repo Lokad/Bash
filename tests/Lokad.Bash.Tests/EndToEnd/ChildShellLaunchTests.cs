@@ -69,6 +69,44 @@ public sealed class ChildShellLaunchTests
     }
 
     [Theory]
+    [InlineData("", "level-7", "7:7\n")]
+    [InlineData("SHLVL=12 ", "level-12", "7:12\n")]
+    public async Task DirectSubshellRedirectionCanChangeItsBindingAfterTheChildEnvironmentIsCaptured(
+        string prefix, string target, string content)
+    {
+        var source = "SHLVL=7; (" + prefix
+            + """bash -c 'printf "%s:%s\n" "$1" "$SHLVL"' fixture "$SHLVL" >"level-$((SHLVL+=1))"); printf '%s\n' "$SHLVL" """;
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("7\n", host.StandardOutput.TextContent);
+        Assert.Equal(content, host.ReadFile("/" + target));
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
+    [InlineData(">report 2>&1", "2\n", "")]
+    [InlineData("2>&-", "", "2\n")]
+    public async Task DirectSubshellWarningUsesStderrBeforeTheLeafRedirection(
+        string redirection, string report, string output)
+    {
+        var source = """SHLVL=1001; (bash -c 'printf "%s\n" "$SHLVL"' fixture """ + redirection + "); :";
+        await using var host = new TestHost();
+
+        var result = await host.RunAsync(source, CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("line 1: warning: shell level (1000) too high, resetting to 1\n", host.StandardError.TextContent);
+        Assert.Equal(output, host.StandardOutput.TextContent);
+        if (report.Length != 0)
+            Assert.Equal(report, host.ReadFile("/report"));
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("tail\\", "[tail]", "[tail\\]")]
     [InlineData("\"tail\"\\", "[tail]", "[tail\\]")]
     [InlineData("tail\\\\", "[tail\\]", "[tail\\]")]

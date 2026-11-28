@@ -567,6 +567,61 @@ public sealed class QueryWriteFailureTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TerminalLaunchKeepsTheOriginalEnvironmentUntilLookupSettles(bool cancel)
+    {
+        var state = new Eval(Parser.Parse("""SHLVL=7; (inspect >"level-$SHLVL")"""));
+        var governor = new MemoryGovernor(1024 * 1024);
+        using var owner = governor.CreateScope();
+        state.Memory.Budget = owner;
+        using var cancellation = new CancellationTokenSource();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var completion = state.EnsureRunning(cancellation.Token);
+        var lookup = Assert.IsType<ResolveCommandsOperation>(await state.GetNextStep(deadline.Token));
+        var lookupBytes = governor.ReservedBytes;
+        Assert.Equal("inspect", Assert.Single(lookup.CommandNames));
+        Assert.Equal("7", ReadLevel(lookup.Environment));
+
+        if (cancel)
+            cancellation.Cancel();
+        var next = state.GetNextStep(deadline.Token);
+        var advancedBeforeReply = await Task.WhenAny(next, Task.Delay(50, deadline.Token)) == next;
+        var levelBeforeReply = ReadLevel(lookup.Environment);
+        var bytesBeforeReply = governor.ReservedBytes;
+        lookup.SetResult([new CommandLookupResult.Found("/inspect")]);
+
+        Assert.False(advancedBeforeReply);
+        Assert.Equal("7", levelBeforeReply);
+        Assert.Equal(lookupBytes, bytesBeforeReply);
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+        else
+        {
+            var open = Assert.IsType<OpenFileOperation>(await next);
+            Assert.Equal("/level-6", open.Path.Path);
+            var descriptor = new FileDescriptor(10);
+            open.SetResult(FileOpenResult.Opened(descriptor, readSize: null));
+            var run = Assert.IsType<RunCommand>(await state.GetNextStep(deadline.Token));
+            Assert.Same(lookup.Environment, run.Command.Environment);
+            Assert.Equal("6", ReadLevel(run.Command.Environment));
+            run.SetResult(new CommandExecutionResult.Completed(0));
+            var close = Assert.IsType<CloseDescriptorOperation>(await state.GetNextStep(deadline.Token));
+            Assert.Equal(descriptor, close.Descriptor);
+            close.SetResult(null);
+            Assert.Null(await state.GetNextStep(deadline.Token));
+            Assert.Equal(0, state.LastExitCode);
+        }
+
+        Assert.Empty(state.GetDescriptorsForCleanup());
+        owner.Dispose();
+        Assert.Equal(0, governor.ReservedBytes);
+
+        static string ReadLevel(IReadOnlyList<EnvironmentVariable> environment) =>
+            Assert.Single(environment, entry => entry.Name == "SHLVL").Value.ToUtf8String();
+    }
+
     private sealed class QueryBudget(IMemoryBudget inner, long resolutionBytes) : IMemoryBudget
     {
         public IMemoryReservation? Resolution { get; private set; }
