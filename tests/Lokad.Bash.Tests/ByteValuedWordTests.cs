@@ -9,6 +9,25 @@ namespace Lokad.Bash.Tests;
 
 public sealed class ByteValuedWordTests
 {
+    [Theory]
+    [InlineData("{left,right}", "# literal", "$((1))", true)]
+    [InlineData("$((1))", "{left,right}", "# literal", true)]
+    [InlineData("{left,right}", "# literal", "$\\\n((1))", true)]
+    [InlineData("{left,right}", "plain", "$((1))", false)]
+    [InlineData("plain", "# literal", "$((1))", false)]
+    [InlineData("{left,right}$", "# literal\\\n", "((1))", false)]
+    public void BraceDelimiterCandidateKeepsMarkersAcrossPartsButAnArithmeticMarkerWithinOnePart(
+        string first, string middle, string last, bool expected)
+    {
+        var word = new Word([
+            WordPart.FromText(WordPartKind.Unquoted, first),
+            WordPart.FromText(WordPartKind.SingleQuoted, middle),
+            WordPart.FromText(WordPartKind.DoubleQuoted, last)
+        ]);
+
+        Assert.Equal(expected, word.HasBraceDelimiterCandidate);
+    }
+
     [Fact]
     public async Task QuotedParameterRetainsItsBytesAcrossBindingReplacement()
     {

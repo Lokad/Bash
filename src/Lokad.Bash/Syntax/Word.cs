@@ -22,18 +22,21 @@ public sealed class Word
         LiteralFields = PrepareLiteral(parts);
         if (LiteralFields != null)
             return;
-        HasBraceDelimiterCandidate = BraceExpansion.HasCommentedDelimiterCandidate(parts);
+        var hasHash = false;
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
-            if (part is SourceWordPart { ParameterSubscriptFailure: not ParameterSubscriptFailure.None })
-                HasIncompleteQuotedParameterSubscript = true;
-            if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { HasDecodedNulWord: true } })
-                HasDecodedNulCapture = true;
-            if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed { HasRejectedDisplaySpelling: true } })
-                HasRejectedCaptureSpelling = true;
-            else if (part is SourceWordPart { SpellingCaptures: { } captures } source)
+            hasHash = hasHash || part.GetUnexpandedValue().Bytes.Span.Contains((byte)'#');
+            if (part is CommandSubstitutionWordPart { Substitution: CommandSubstitutionSyntax.Parsed direct })
             {
+                HasDecodedNulCapture |= direct.HasDecodedNulWord;
+                HasRejectedCaptureSpelling |= direct.HasRejectedDisplaySpelling;
+            }
+            else if (part is SourceWordPart source)
+            {
+                HasIncompleteQuotedParameterSubscript |= source.ParameterSubscriptFailure != ParameterSubscriptFailure.None;
+                if (source.SpellingCaptures is not { } captures)
+                    continue;
                 foreach (var capture in captures)
                 {
                     var offset = capture.Offset - source.SourceOffset;
@@ -46,6 +49,23 @@ public sealed class Word
                         break;
                 }
             }
+        }
+        HasBraceDelimiterCandidate = hasHash && HasArithmeticAndOpeningBrace(parts);
+
+        static bool HasArithmeticAndOpeningBrace(IReadOnlyList<WordPart> parts)
+        {
+            var hasBrace = false;
+            var hasArithmetic = false;
+            for (var index = 0; index < parts.Count; index++)
+            {
+                var bytes = parts[index].GetUnexpandedValue().Bytes.Span;
+                hasBrace = hasBrace || bytes.Contains((byte)'{');
+                hasArithmetic = hasArithmetic || bytes.IndexOf("$(("u8) >= 0
+                    || bytes.IndexOf("\\\n"u8) >= 0 && bytes.Contains((byte)'$') && bytes.Contains((byte)'(');
+                if (hasBrace && hasArithmetic)
+                    return true;
+            }
+            return false;
         }
 
         static IReadOnlyList<ExpandedWord>? PrepareLiteral(IReadOnlyList<WordPart> parts)

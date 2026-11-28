@@ -65,24 +65,6 @@ internal static class BraceExpansion
     public static IReadOnlyList<Word> Expand(Word word, EvaluationMemory memory, CancellationToken cancellationToken) =>
         ExpandAlternatives(word, memory, cancellationToken) ?? [word];
 
-    internal static bool HasCommentedDelimiterCandidate(IReadOnlyList<WordPart> parts)
-    {
-        var hasBrace = false;
-        var hasComment = false;
-        var hasArithmetic = false;
-        for (var index = 0; index < parts.Count; index++)
-        {
-            var bytes = parts[index].GetUnexpandedValue().Bytes.Span;
-            hasBrace = hasBrace || bytes.Contains((byte)'{');
-            hasComment = hasComment || bytes.Contains((byte)'#');
-            hasArithmetic = hasArithmetic || bytes.IndexOf("$(("u8) >= 0
-                || bytes.IndexOf("\\\n"u8) >= 0 && bytes.Contains((byte)'$') && bytes.Contains((byte)'(');
-            if (hasBrace && hasComment && hasArithmetic)
-                return true;
-        }
-        return false;
-    }
-
     /// <summary>Uses the legacy reader's continuation rules before scanning brace syntax.</summary>
     internal static ShellSource RemoveLegacyContinuations(ShellSource spelling, MemoryCapacity scratch,
         ByteMemoryBuilder output, CancellationToken cancellationToken)
