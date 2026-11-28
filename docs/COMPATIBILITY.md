@@ -363,6 +363,10 @@ aggregate with an empty join also keeps an empty field. These empty fields
 and those from direct `*` joins persist through nested operands.
 
 Function display/export preserves legacy backticks and their original escapes.
+An explicit double-quoted shell word removes the backslash in an escaped double
+quote inside a backtick body before its ordinary escape pass. Bare backticks
+and captures in default operands that already inherit double quotes retain
+that backslash for the command reader.
 Invalid child syntax in an unreached legacy substitution remains deferred when
 the definition is replayed or imported; validation occurs when execution reaches
 that substitution. Earlier complete units in a backtick capture can emit output

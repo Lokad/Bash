@@ -20,8 +20,8 @@ internal sealed class SourceMemory
     // invocations retain this coarse owner, not individual syntax nodes or value objects.
     private int _references = 1;
     private readonly SourceMemory? _parent;
-    private ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript> _legacySyntax =
-        ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
+    private readonly record struct LegacyKey(ReadOnlyMemory<byte> Spelling, LegacyQuoteMode QuoteMode);
+    private ImmutableDictionary<LegacyKey, ParsedScript> _legacySyntax = ImmutableDictionary<LegacyKey, ParsedScript>.Empty;
     public IMemoryScope Budget { get; }
     public MemoryCapacity SyntaxMemory { get; }
     private ShellValue? _diagnosticName;
@@ -89,7 +89,7 @@ internal sealed class SourceMemory
     {
         if (Interlocked.Decrement(ref _references) == 0)
         {
-            _legacySyntax = ImmutableDictionary<ReadOnlyMemory<byte>, ParsedScript>.Empty;
+            _legacySyntax = ImmutableDictionary<LegacyKey, ParsedScript>.Empty;
             SyntaxMemory.Dispose();
             Budget.Dispose();
             _parent?.Release();
@@ -102,8 +102,8 @@ internal sealed class SourceMemory
         [NotNullWhen(true)] out ParsedScript? script, [NotNullWhen(false)] out ParserFailure? failure)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        // ReadOnlyMemory equality identifies a physical source slice.
-        var key = legacy.Spelling.Bytes;
+        // Share only parses of the same physical slice and decoded quoting role.
+        var key = new LegacyKey(legacy.Spelling.Bytes, legacy.QuoteMode);
         var snapshot = Volatile.Read(ref _legacySyntax);
         failure = null;
         if (snapshot.TryGetValue(key, out script))

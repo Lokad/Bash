@@ -76,7 +76,7 @@ internal static class CommandSubstitutionScanner
             return ShellScanStatus.NotFound;
         }
 
-        var status = ScanParsedForLaterReuse(context, text, startIndex, out endIndex, out var substitution, out _);
+        var status = ScanParsedForLaterReuse(context, text, startIndex, doubleQuoted: false, out endIndex, out var substitution, out _);
         payload = substitution?.Source ?? ShellSource.Empty;
         return status;
     }
@@ -86,10 +86,11 @@ internal static class CommandSubstitutionScanner
         ShellScanContext context,
         ShellSource text,
         int startIndex,
+        bool doubleQuoted,
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
         out ParserFailure? error) =>
-        ScanParsed(context, text, startIndex, context.PreserveDelimiterLookahead || context.RetainCaptureLookahead,
+        ScanParsed(context, text, startIndex, doubleQuoted, context.PreserveDelimiterLookahead || context.RetainCaptureLookahead,
             out endIndex, out substitution, out error);
 
     /// <summary>Keeps a structural lookahead result until tokenization reaches the same source position.</summary>
@@ -97,10 +98,11 @@ internal static class CommandSubstitutionScanner
         ShellScanContext context,
         ShellSource text,
         int startIndex,
+        bool doubleQuoted,
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
         out ParserFailure? error) =>
-        ScanParsed(context, text, startIndex, keepLookahead: true, out endIndex, out substitution, out error);
+        ScanParsed(context, text, startIndex, doubleQuoted, keepLookahead: true, out endIndex, out substitution, out error);
 
     /// <summary>Uses the arithmetic opener only when its adjacent-subshell fallback runs out of input.</summary>
     internal static ParserFailure? KeepArithmeticOpeningAtEof(
@@ -110,11 +112,14 @@ internal static class CommandSubstitutionScanner
             ? failure with { UnclosedDelimiter = arithmeticOpening } : failure;
 
     private static ShellScanStatus ScanParsed(ShellScanContext context, ShellSource text, int startIndex,
-        bool keepLookahead, out int endIndex, out CommandSubstitutionSyntax? substitution, out ParserFailure? error)
+        bool doubleQuoted, bool keepLookahead, out int endIndex, out CommandSubstitutionSyntax? substitution, out ParserFailure? error)
     {
         error = null;
-        if (keepLookahead ? context.TryGetCommandSubstitution(text, startIndex, out var cached)
-            : context.TryTakeCommandSubstitution(text, startIndex, out cached))
+        var quoteMode = doubleQuoted ? LegacyQuoteMode.DoubleQuoted : LegacyQuoteMode.Unquoted;
+        var found = keepLookahead ? context.TryGetCommandSubstitution(text, startIndex, out var cached)
+            : context.TryTakeCommandSubstitution(text, startIndex, out cached);
+        if (found && (cached.Substitution is not CommandSubstitutionSyntax.Legacy legacy
+                      || legacy.QuoteMode == LegacyQuoteMode.NoEscapedQuote || legacy.QuoteMode == quoteMode))
         {
             endIndex = startIndex + cached.Length - 1;
             substitution = cached.Substitution;
@@ -129,7 +134,7 @@ internal static class CommandSubstitutionScanner
             // A nested command reader locates its syntax before the command's words expand.
             context.ReadArithmeticExpansionComments = false;
             context.ReadHereDocumentArithmeticDelimiters = false;
-            var status = ScanParsedCore(context, text, startIndex, out endIndex, out substitution, out error);
+            var status = ScanParsedCore(context, text, startIndex, quoteMode, out endIndex, out substitution, out error);
             // Reading the same capture again must reuse the bodies already taken from its source.
             if (substitution != null
                 && (keepLookahead || substitution is CommandSubstitutionSyntax.Parsed { Script.HasReadAheadHereDocuments: true }))
@@ -162,6 +167,7 @@ internal static class CommandSubstitutionScanner
         ShellScanContext context,
         ShellSource text,
         int startIndex,
+        LegacyQuoteMode quoteMode,
         out int endIndex,
         out CommandSubstitutionSyntax? substitution,
         out ParserFailure? error)
@@ -173,7 +179,7 @@ internal static class CommandSubstitutionScanner
             return ShellScanStatus.NotFound;
 
         if (text[startIndex] == (byte)'`')
-            return ScanLegacyBackticks(context, text, startIndex, out endIndex, out substitution);
+            return ScanLegacyBackticks(context, text, startIndex, quoteMode, out endIndex, out substitution);
         if (!context.TryEnter())
             return ShellScanStatus.Invalid;
 
@@ -232,6 +238,7 @@ internal static class CommandSubstitutionScanner
             ShellScanContext context,
             ShellSource source,
             int substitutionStart,
+            LegacyQuoteMode quoteMode,
             out int closingIndex,
             out CommandSubstitutionSyntax? legacyPayload)
         {
@@ -240,6 +247,7 @@ internal static class CommandSubstitutionScanner
             var builder = context.CreateByteBuilder(0);
             var position = substitutionStart + 1;
             var removedLineContinuations = 0;
+            var decodedQuoteMode = LegacyQuoteMode.NoEscapedQuote;
             while (position < source.Length)
             {
                 var nextPosition = context.HereDocumentReadAhead?.SkipBodies(source, position) ?? position;
@@ -256,24 +264,27 @@ internal static class CommandSubstitutionScanner
                     legacyPayload = new CommandSubstitutionSyntax.Legacy(ShellSource.FromBytes(builder.ToMemory()), spelling,
                         context.LegacyOrigin)
                     {
-                        RemovedLineContinuations = removedLineContinuations
+                        RemovedLineContinuations = removedLineContinuations,
+                        QuoteMode = decodedQuoteMode
                     };
                     closingIndex = position;
                     return ShellScanStatus.Complete;
                 }
 
-                if (current == (byte)'\\' && position + 1 < source.Length && IsLegacyEscape(source[position + 1]))
+                if (current == (byte)'\\' && position + 1 < source.Length)
                 {
                     var next = source[position + 1];
-                    if (next == (byte)'\n')
+                    if (next == (byte)'"')
+                        decodedQuoteMode = quoteMode;
+                    if (IsLegacyEscape(next) || next == (byte)'"' && quoteMode == LegacyQuoteMode.DoubleQuoted)
                     {
-                        removedLineContinuations++;
+                        if (next == (byte)'\n')
+                            removedLineContinuations++;
+                        else
+                            builder.Append(next);
                         position += 2;
                         continue;
                     }
-                    builder.Append(next);
-                    position += 2;
-                    continue;
                 }
 
                 builder.Append(current);

@@ -48,7 +48,7 @@ public sealed class FunctionDefinitionOutputTests
         var context = new ShellScanContext();
         if (cached)
             Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsedForLaterReuse(
-                context, source, captureStart, out _, out _, out _));
+                context, source, captureStart, doubleQuoted: false, out _, out _, out _));
 
         using var output = ByteMemoryBuilder.CreateUnaccounted(0);
         Assert.True(FunctionDefinitionFormatter.TryAppendSourceWithCaptures(source.Slice(1), context,

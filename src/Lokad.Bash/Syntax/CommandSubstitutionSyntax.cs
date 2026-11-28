@@ -24,6 +24,7 @@ internal abstract record CommandSubstitutionSyntax(ShellSource Source)
         : CommandSubstitutionSyntax(SourceText)
     {
         internal int RemovedLineContinuations { get; init; }
+        internal LegacyQuoteMode QuoteMode { get; init; }
     }
 
     /// <summary>Bytes still requiring execution-time parsing, including unfinished here-documents.</summary>
@@ -54,3 +55,6 @@ internal enum SubstitutionSyntaxFailure
 
 /// <summary>Identifies which legacy bytes can be owned with the surrounding syntax.</summary>
 internal enum LegacySubstitutionOrigin { Temporary, Script, HereDocument }
+
+/// <summary>Distinguishes decoded backtick bodies when enclosing double quotes affect their escapes.</summary>
+internal enum LegacyQuoteMode { NoEscapedQuote, Unquoted, DoubleQuoted }

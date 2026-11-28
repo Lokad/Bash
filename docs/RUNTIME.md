@@ -289,6 +289,8 @@ offset. Missing closing delimiters keep their own diagnostics. A diagnosed
 substitution in expanded here-document data is reported during redirection
 setup, before the captured body runs.
 Reached backticks reuse successful prepared syntax through the source owner.
+The cache distinguishes decoding under explicit double quotes when the same
+physical spelling can produce different executable bytes.
 If preparation finds malformed syntax, its speculative storage is refunded
 before the capture reads complete command units. That path can retain earlier
 output and effects while discarding the failed unit. Structural limit failures

@@ -1692,9 +1692,10 @@ internal sealed class Tokenizer
                 || current == (byte)'`' && (!braceExpanded || Position + 1 < span.Length))
             {
                 FlushUnquoted();
+                // An inherited quote protects the capture's result. Its body keeps the operand's escapes.
                 if (ReadCommandSubstitutionPart(
                         quotedOperand ? WordPartKind.CommandSubstitutionQuoted : WordPartKind.CommandSubstitution,
-                        syntax, spelling, arithmeticOpening) is not { } substitution)
+                        syntax, spelling, arithmeticOpening, doubleQuoted: false) is not { } substitution)
                     return new Word([]);
                 AddPart(substitution);
                 continue;
@@ -1759,7 +1760,7 @@ internal sealed class Tokenizer
                 if (current == (byte)'$')
                     spelling.RecordLocalePrefix(Position, quoteContentStart - 1);
                 Position = quoteContentStart;
-                var quotedParts = ReadDoubleQuotedParts(span, syntax, spelling);
+                var quotedParts = ReadDoubleQuotedParts(span, syntax, spelling, inheritsQuotes: quotedOperand);
                 if (!endsAtDecodedNul)
                 {
                     parts.AddRange(quotedParts);
@@ -1906,7 +1907,7 @@ internal sealed class Tokenizer
     /// Reads a substitution, retaining the tree built by parenthesized delimiter parsing.
     /// </summary>
     private WordPart? ReadCommandSubstitutionPart(WordPartKind kind, ExpansionWordSyntax syntax,
-        ConditionalParser.OperandSpelling spelling, UnclosedDelimiter? arithmeticOpening)
+        ConditionalParser.OperandSpelling spelling, UnclosedDelimiter? arithmeticOpening, bool doubleQuoted)
     {
         if (!TryReserveSyntax())
             return null;
@@ -1915,6 +1916,7 @@ internal sealed class Tokenizer
                 _scanContext,
                 _input,
                 start,
+                doubleQuoted,
                 out var endIndex,
                 out var payload,
                 out var error);
@@ -2040,7 +2042,7 @@ internal sealed class Tokenizer
     /// Reads double-quoted text, preserving escaped-character provenance.
     /// </summary>
     private List<WordPart> ReadDoubleQuotedParts(ReadOnlySpan<byte> span, ExpansionWordSyntax syntax,
-        ConditionalParser.OperandSpelling spelling)
+        ConditionalParser.OperandSpelling spelling, bool inheritsQuotes)
     {
         var quoteStart = Position - 1;
         var quoteBounds = new QuotedWordBounds(Position, 0);
@@ -2160,7 +2162,9 @@ internal sealed class Tokenizer
                 || current == (byte)'`' && (!braceExpanded || Position + 1 < span.Length))
             {
                 Flush(allowEmpty: false);
-                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax, spelling, arithmeticOpening) is not { } substitution)
+                // Bash strips embedded quote delimiters from an already quoted parameter operand.
+                if (ReadCommandSubstitutionPart(WordPartKind.CommandSubstitutionQuoted, syntax, spelling, arithmeticOpening,
+                        doubleQuoted: !inheritsQuotes) is not { } substitution)
                     return parts;
                 AddPart(substitution);
                 continue;

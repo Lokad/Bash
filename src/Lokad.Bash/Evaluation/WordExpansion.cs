@@ -1463,7 +1463,7 @@ internal static partial class WordExpansion
         out ParserFailure? error)
     {
         var context = new ShellScanContext { SyntaxMemory = memory, LegacyOrigin = legacyOrigin };
-        return CommandSubstitutionScanner.ScanParsed(context, content, startIndex, out endIndex, out script, out error);
+        return CommandSubstitutionScanner.ScanParsed(context, content, startIndex, doubleQuoted: false, out endIndex, out script, out error);
     }
 
     internal static async Task<ExpandedWord> ExpandExpressionAsync(

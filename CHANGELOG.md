@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Decode escaped double quotes inside explicitly double-quoted backtick substitutions.
 - Echo modern capture here-documents during verbose word expansion.
 - Preserve authored verbose input in modern substitutions expanded from here-documents.
 - Echo normalized input when a modern command substitution enables verbose mode.

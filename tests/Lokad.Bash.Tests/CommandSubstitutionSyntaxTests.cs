@@ -48,12 +48,12 @@ public sealed class CommandSubstitutionSyntaxTests
     {
         var context = new ShellScanContext();
         Assert.Equal((ShellScanStatus)expected, CommandSubstitutionScanner.ScanParsedForLaterReuse(
-            context, ShellSource.FromText(source), 0, out _, out var rejected, out var error));
+            context, ShellSource.FromText(source), 0, doubleQuoted: false, out _, out var rejected, out var error));
         Assert.Null(rejected);
         Assert.Equal(message, error?.Error.Message);
 
         Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsed(
-            context, ShellSource.FromText("$(printf valid)"), 0, out _, out var accepted, out var laterError));
+            context, ShellSource.FromText("$(printf valid)"), 0, doubleQuoted: false, out _, out var accepted, out var laterError));
         Assert.IsType<CommandSubstitutionSyntax.Parsed>(accepted);
         Assert.Null(laterError);
     }
@@ -307,9 +307,9 @@ public sealed class CommandSubstitutionSyntaxTests
         var context = new ShellScanContext();
         var nestedStart = input.IndexOf("$(printf nested)", StringComparison.Ordinal);
         Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsedForLaterReuse(
-            context, source, nestedStart, out _, out var cachedSubstitution, out _));
+            context, source, nestedStart, doubleQuoted: false, out _, out var cachedSubstitution, out _));
         Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsed(
-            context, source, 0, out _, out var capture, out var error));
+            context, source, 0, doubleQuoted: false, out _, out var capture, out var error));
         Assert.Null(error);
         var script = Assert.IsType<CommandSubstitutionSyntax.Parsed>(capture);
         var pipeline = Assert.IsType<PipelineCommand>(Assert.Single(script.Script.Commands));
@@ -420,6 +420,34 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Empty(result.StdErr);
     }
 
+    [Theory]
+    [InlineData(1, "<\"left><right\">", "<left right>")]
+    [InlineData(2, "<\"left><right\">", "<\"left><right\">")]
+    [InlineData(3, "<\\left right\\>", "<\"left><right\">")]
+    [InlineData(4, "<\\left right\\>", "<\\left right\\>")]
+    [InlineData(5, "<\\\"left><right\\\">", "<\\left right\\>")]
+    public async Task BacktickPayloadEscapesFollowExplicitDoubleQuotes(int slashes, string bare, string quoted)
+    {
+        var escape = new string('\\', slashes);
+        var capture = $"""`printf '<%s>' {escape}"left right{escape}"`""";
+        var source = $$"""
+            bare={{capture}}
+            quoted="{{capture}}"
+            inherited="${missing:-{{capture}}}"
+            explicit=${missing:-"{{capture}}"}
+            embedded="${missing:-"{{capture}}"}"
+            printf '%s\n' "$bare" "$quoted" "$inherited" "$explicit" "$embedded"
+            """;
+
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new EndToEnd.TestHost();
+            Assert.Equal(0, await RunAsync(source, host, prepared));
+            Assert.Equal($"{bare}\n{quoted}\n{bare}\n{quoted}\n{bare}\n", host.StandardOutput.TextContent);
+            Assert.Empty(host.StandardError.TextContent);
+        }
+    }
+
     [Fact]
     public async Task FailedBacktickInHereDocumentKeepsCapturedBytes()
     {
@@ -496,11 +524,50 @@ public sealed class CommandSubstitutionSyntaxTests
         Assert.Equal(0, governor.ReservedBytes);
     }
 
+    [Fact]
+    public void BacktickCachesDistinguishExplicitDoubleQuotesOnTheSameSource()
+    {
+        var source = ShellSource.FromText("""`printf '%s' \"left right\"`""");
+        var context = new ShellScanContext { LegacyOrigin = LegacySubstitutionOrigin.Script };
+        var bare = Scan(doubleQuoted: false);
+        var quoted = Scan(doubleQuoted: true);
+        Assert.Same(quoted, Scan(doubleQuoted: true));
+        Assert.Equal(bare.Spelling.Bytes, quoted.Spelling.Bytes);
+        Assert.Equal("printf '%s' \\\"left right\\\"", bare.Source.ToUtf8String());
+        Assert.Equal("printf '%s' \"left right\"", quoted.Source.ToUtf8String());
+
+        var governor = new MemoryGovernor(64 * 1024);
+        var owner = new SourceMemory(governor.CreateScope());
+        try
+        {
+            Assert.True(owner.TryPrepareLegacy(bare, CancellationToken.None, out var bareTree, out _));
+            Assert.True(owner.TryPrepareLegacy(quoted, CancellationToken.None, out var quotedTree, out _));
+            Assert.NotSame(bareTree, quotedTree);
+            Assert.True(owner.TryPrepareLegacy(bare, CancellationToken.None, out var bareReplay, out _));
+            Assert.Same(bareTree, bareReplay);
+            Assert.True(owner.TryPrepareLegacy(quoted, CancellationToken.None, out var quotedReplay, out _));
+            Assert.Same(quotedTree, quotedReplay);
+        }
+        finally
+        {
+            owner.Release();
+        }
+        Assert.Equal(0, governor.ReservedBytes);
+
+        CommandSubstitutionSyntax.Legacy Scan(bool doubleQuoted)
+        {
+            Assert.Equal(ShellScanStatus.Complete, CommandSubstitutionScanner.ScanParsedForLaterReuse(
+                context, source, 0, doubleQuoted, out var end, out var substitution, out _));
+            Assert.Equal(source.Length - 1, end);
+            return Assert.IsType<CommandSubstitutionSyntax.Legacy>(substitution);
+        }
+    }
+
     private static CommandSubstitutionSyntax.Legacy ReadBackticks(ShellSource source)
     {
         var context = new ShellScanContext { LegacyOrigin = LegacySubstitutionOrigin.Script };
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var syntax, out _));
+            CommandSubstitutionScanner.ScanParsed(context, source, 0, doubleQuoted: false, out _, out var syntax, out _));
         return Assert.IsType<CommandSubstitutionSyntax.Legacy>(syntax);
     }
 
@@ -510,12 +577,12 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf retained)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out var end, out var first, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, doubleQuoted: false, out var end, out var first, out _));
         var retained = Assert.IsType<CommandSubstitutionSyntax.Parsed>(first);
         Assert.Equal("printf retained", retained.Source.ToUtf8String());
         Assert.NotEmpty(retained.Script.Commands);
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out var lookedAgain, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, doubleQuoted: false, out _, out var lookedAgain, out _));
         Assert.Same(first, lookedAgain);
 
         var tokenizer = new Tokenizer(source, 0, context);
@@ -532,7 +599,7 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf one)$(printf two)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out var end, out var first, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, doubleQuoted: false, out var end, out var first, out _));
         Assert.False(context.TryGetCommandSubstitution(ShellSource.FromText(source.ToUtf8String()), 0, out _));
         Assert.False(context.TryGetCommandSubstitution(source, end + 1, out _));
         Assert.True(context.TryTakeCommandSubstitution(source, 0, out var cached));
@@ -569,7 +636,7 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$( (printf retained) )");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, doubleQuoted: false, out _, out _, out _));
         var depth = ShellScanContext.MaximumCommandDepth - 1;
         for (var level = 0; level < depth; level++)
             Assert.True(context.TryEnterCommand());
@@ -577,7 +644,7 @@ public sealed class CommandSubstitutionSyntaxTests
         {
             Assert.False(context.TryGetCommandSubstitution(source, 0, out _));
             Assert.Equal(ShellScanStatus.Invalid,
-                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out _, out _));
+                CommandSubstitutionScanner.ScanParsed(context, source, 0, doubleQuoted: false, out _, out _, out _));
             Assert.Contains("Command nesting", Assert.IsType<SyntaxError>(context.LimitError).Message);
         }
         finally
@@ -616,13 +683,13 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf retained)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out var first, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, doubleQuoted: false, out _, out var first, out _));
         var depth = 0;
         while (context.TryEnter()) depth++;
         try
         {
             Assert.Equal(ShellScanStatus.Invalid,
-                CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var rejected, out _));
+                CommandSubstitutionScanner.ScanParsed(context, source, 0, doubleQuoted: false, out _, out var rejected, out _));
             Assert.Null(rejected);
         }
         finally
@@ -639,13 +706,13 @@ public sealed class CommandSubstitutionSyntaxTests
         var source = ShellSource.FromText("$(printf retained)");
         var context = new ShellScanContext();
         Assert.Equal(ShellScanStatus.Complete,
-            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, out _, out _, out _));
+            CommandSubstitutionScanner.ScanParsedForLaterReuse(context, source, 0, doubleQuoted: false, out _, out _, out _));
         for (var depth = 0; depth < ShellScanContext.MaximumCommandDepth; depth++)
             Assert.True(context.TryEnterCommand());
 
         Assert.False(context.TryGetCommandSubstitution(source, 0, out _));
         Assert.Equal(ShellScanStatus.Invalid,
-            CommandSubstitutionScanner.ScanParsed(context, source, 0, out _, out var rejected, out _));
+            CommandSubstitutionScanner.ScanParsed(context, source, 0, doubleQuoted: false, out _, out var rejected, out _));
         Assert.Null(rejected);
         var error = Assert.IsType<SyntaxError>(context.LimitError);
         Assert.Contains("Command nesting", error.Message);

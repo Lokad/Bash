@@ -748,6 +748,7 @@ internal sealed class ShellSourceCursor
                 _context,
                 _text,
                 start,
+                IsDoubleQuoted,
                 out var endIndex,
                 out var substitution,
                 out var error);
