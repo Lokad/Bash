@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Clear verbose mode when starting a command substitution child.
 - Echo joined here-document lines and the string reader's escaped EOF byte in verbose mode.
 - Interleave verbose here-document warnings with the source reads that produced them.
 - Support verbose source echoing with `set -v` and hosted `bash -v`.

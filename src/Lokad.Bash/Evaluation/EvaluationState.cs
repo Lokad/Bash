@@ -941,6 +941,13 @@ internal sealed class EvaluationState
 
     private EvaluationState CloneShellState(ParsedScript script, RedirectionState redirections, ShellForkKind kind)
     {
+        var options = EnabledOptions;
+        if (kind == ShellForkKind.CommandSubstitution)
+        {
+            options &= ~ShellOption.Verbose;
+            if (!InheritErrexit)
+                options &= ~ShellOption.Errexit;
+        }
         // The parent outlives the child, so its path text remains admitted to the parent.
         var childStack = new List<DirectoryStackEntry>(_directoryStack.Count);
         foreach (var entry in _directoryStack)
@@ -951,8 +958,7 @@ internal sealed class EvaluationState
             // The parent command remains alive through the child's execution and cleanup.
             PreparationDiagnosticName = PreparationDiagnosticName,
             FunctionBraceLine = FunctionBraceLine,
-            EnabledOptions = kind == ShellForkKind.CommandSubstitution && !InheritErrexit
-                ? EnabledOptions & ~ShellOption.Errexit : EnabledOptions,
+            EnabledOptions = options,
             // The enclosing evaluation retains the immutable value through this fork.
             _bashOptionProjection = _bashOptionProjection with { OwnedBytes = 0 },
             _captureOptionDotglob = _captureOptionDotglob,

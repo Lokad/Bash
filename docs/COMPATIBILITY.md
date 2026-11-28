@@ -954,6 +954,8 @@ units to the reader's current stderr. The echo retains authored whitespace,
 comments, continuations and here-document lines. It appends LF to a reached
 unterminated line. A bare `set -` clears verbose. The option also works with
 `noexec` and through hosted `bash -v`, source, eval and EXIT readers.
+Command substitution children start with verbose cleared. A reached `set -v`
+in a child enables echo for its subsequent source and eval readers.
 Continuation lines of modern command substitutions are quiet except for
 here-document collection. A compact capture's pending-document warning
 precedes its body's echoed lines, and an EOF warning follows the available

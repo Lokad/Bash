@@ -125,6 +125,50 @@ public sealed class ScriptCommandUnitTests
         }
     }
 
+    [Theory]
+    [InlineData("$(test -o verbose && printf on || printf off)")]
+    [InlineData("`test -o verbose && printf on || printf off`")]
+    public async Task VerboseIsClearedInCapturesAndInheritedByParentheses(string capture)
+    {
+        var captureLine = $"printf '%s\\n' \"{capture}\"\n";
+        const string parenthesized = "(test -o verbose && printf 'subshell\\n')\n";
+        const string caller = "test -o verbose && printf 'caller\\n'\n";
+        var script = "set -v\n" + captureLine + parenthesized + caller;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("off\nsubshell\ncaller\n", host.StandardOutput.TextContent);
+            Assert.Equal(captureLine + parenthesized + caller, host.StandardError.TextContent);
+        }
+    }
+
+    [Theory]
+    [InlineData("$(. ./child)", "")]
+    [InlineData("`eval 'printf loaded'`", "")]
+    [InlineData("$(set -v; . ./child)", "printf loaded\n")]
+    [InlineData("`set -v; eval 'printf loaded'`", "printf loaded\n")]
+    public async Task CaptureVerboseControlAppliesToLoadedReaders(string capture, string loadedEcho)
+    {
+        var captureLine = $"value=\"{capture}\"\n";
+        const string caller = "printf '%s' \"$value\"\n";
+        var script = "set -v\n" + captureLine + caller;
+        foreach (var prepared in new[] { false, true })
+        {
+            await using var host = new TestHost();
+            host.AddFile("/child", "printf loaded\n");
+            var status = prepared ? (await EndToEndHarness.RunScriptAsync(script, host)).ExitCode
+                : (await host.RunAsync(script, CancellationToken.None)).ExitCode;
+
+            Assert.Equal(0, status);
+            Assert.Equal("loaded", host.StandardOutput.TextContent);
+            Assert.Equal(captureLine + loadedEcho + caller, host.StandardError.TextContent);
+        }
+    }
+
     [Fact]
     public async Task VerboseReadsTheFullOffendingLineBeforeReportingSyntax()
     {
