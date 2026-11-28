@@ -161,11 +161,13 @@ internal static partial class WordExpansion
                 return !scope.Variables.IsReadonly(Name);
             if (SelectBuiltinElementOutput(scope, sourceName, declarationWrite) is { } output)
             {
+                RefreshIndexedDestination(output, Name);
                 if (!TryForwardTo(output, Name))
                     return false;
                 scope.SelectorBindings?.CompleteOutput(Name, output);
                 return true;
             }
+            RefreshIndexedDestination(scope.Variables, Name);
             if (!TryAssignTo(scope.Variables, Name))
                 return false;
 
@@ -190,7 +192,14 @@ internal static partial class WordExpansion
             // Forward the selected location without replaying effects or imposing the temporary binding's kind.
             var forwardedName = scope.Variables.TryResolveBinding(sourceName, selectOwner: null, out var binding)
                 && binding.Reference.Kind != VariableReferenceKind.Name ? Name : sourceName;
+            RefreshIndexedDestination(target, forwardedName);
             return TryForwardTo(target, forwardedName);
+
+            void RefreshIndexedDestination(Variables variables, BindingName name)
+            {
+                if (this is Indexed && !IsWholeBindingRead)
+                    variables.RefreshDirectoryStackListing(name);
+            }
 
             // Keep the receiver's array kind, even when a temporary scalar was indexed.
             bool TryForwardTo(Variables variables, BindingName name) => this switch
@@ -287,9 +296,8 @@ internal static partial class WordExpansion
         switch (target)
         {
             case ResolvedVariableReference.Indexed indexed:
-                if (variables.IndexedArrays.TryGetValue(indexed.Name, out var array))
+                if (variables.TryRemoveIndexedElement(indexed.Name, indexed.Index))
                 {
-                    array.Remove(indexed.Index);
                     if (indexed.Name == FieldSeparators.Name && reference.Name == indexed.Name)
                         variables.RefreshIndexedFieldSeparators();
                 }

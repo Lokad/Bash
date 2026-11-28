@@ -68,6 +68,11 @@ public sealed partial class Variables
                     new IndexedSlot(stack),
                 _ => CloneValue()
             };
+            if (this is IndexedSlot previous && copy is IndexedSlot indexed)
+            {
+                indexed.DirectoryListing = previous.DirectoryListing;
+                indexed.RemovedDirectoryListingIndex = previous.RemovedDirectoryListingIndex;
+            }
             copy.Attributes = Attributes;
             return copy;
         }
@@ -163,6 +168,8 @@ public sealed partial class Variables
     private sealed class IndexedSlot(IndexedArray value) : VariableSlot
     {
         public IndexedArray Value { get; } = value;
+        public EvaluationState.DirectoryStackListing? DirectoryListing { get; set; }
+        public long? RemovedDirectoryListingIndex { get; set; }
         protected override VariableSlot CloneValue() => new IndexedSlot(Value.Clone());
     }
 
@@ -309,8 +316,6 @@ public sealed partial class Variables
         {
             if (slot is not AttributeSlot
                 && (slot is not ShellStateSlot || attributes != BindingAttributes.None)
-                && (slot is not IndexedSlot { Value.DirectoryStack: not null }
-                    || filters.HasFlag(DeclarationListingAttributes.Indexed) || attributes != BindingAttributes.None)
                 && (!filters.HasFlag(DeclarationListingAttributes.Indexed) || slot is IndexedSlot)
                 && (!filters.HasFlag(DeclarationListingAttributes.Associative) || slot is AssociativeSlot)
                 && (attributes == BindingAttributes.None || (slot.Attributes & attributes) != 0
@@ -322,29 +327,83 @@ public sealed partial class Variables
     internal readonly record struct ArrayMetadata(ArrayKind Kind, int Count, bool IsInitialized, long? MaxIndex);
 
     /// <summary>Reads array metadata through the visible slot without retaining its mutable backing.</summary>
-    internal ArrayMetadata? GetArrayMetadata(BindingName name) =>
-        TryGetBinding(name, detachBorrowed: false, out var slot) ? slot switch
+    internal ArrayMetadata? GetArrayMetadata(BindingName name)
+    {
+        RefreshDirectoryStackListing(name);
+        return TryGetBinding(name, detachBorrowed: false, out var slot) ? slot switch
         {
             IndexedSlot indexed => new(ArrayKind.Indexed, indexed.Value.Count, indexed.Value.IsInitialized, indexed.Value.MaxIndex),
             AssociativeSlot map => new(ArrayKind.Associative, map.Value.Count, map.Value.IsInitialized, null),
             _ => null
         } : null;
+    }
 
     /// <summary>Selects an array for expansion under the active command scope.</summary>
     /// <remarks>Immediate consumers can enumerate the borrowed source before running another operand.</remarks>
-    internal (IndexedArray? Indexed, AssociativeArray? Associative) SelectExpansionArray(BindingName name, bool detachBorrowed) =>
-        TryGetBinding(name, detachBorrowed, out var slot) ? slot switch
+    internal (IndexedArray? Indexed, AssociativeArray? Associative) SelectExpansionArray(BindingName name, bool detachBorrowed)
+    {
+        RefreshDirectoryStackListing(name);
+        return TryGetBinding(name, detachBorrowed, out var slot) ? slot switch
         {
             IndexedSlot indexed => (indexed.Value, null),
             AssociativeSlot map => (null, map.Value),
             _ => default
         } : default;
+    }
 
     internal bool TryReadArrayElement(BindingName name, IndexedArrayIndex index, out ShellValue value)
     {
+        RefreshDirectoryStackListing(name);
         if (TryGetBinding(name, detachBorrowed: false, out var slot) && slot is IndexedSlot indexed)
             return indexed.Value.TryGet(index, out value);
         value = ShellValue.Empty;
+        return false;
+    }
+
+    internal void RefreshDirectoryStackListing(BindingName name)
+    {
+        if (name != DirectoryStackName)
+            return;
+        if (!_bindings.TryGetValue(name, out var slot))
+        {
+            if (!_isolatedRedirections)
+                _commandSource?.Variables.RefreshDirectoryStackListing(name);
+            return;
+        }
+        if (slot is not IndexedSlot { Value.DirectoryStack: { } stack } indexed)
+            return;
+        var listing = stack.ReadDirectoryStackListing(indexed.DirectoryListing);
+        if (ReferenceEquals(indexed.DirectoryListing, listing))
+        {
+            indexed.RemovedDirectoryListingIndex = null;
+            return;
+        }
+        using var change = TrackBindingMemory(name);
+        indexed.DirectoryListing = listing;
+        indexed.RemovedDirectoryListingIndex = null;
+    }
+
+    internal void ClearDirectoryStackListing(BindingName name)
+    {
+        if (name == DirectoryStackName && TryGetBinding(name, out var slot)
+            && slot is IndexedSlot { Value.DirectoryStack: not null } indexed)
+        {
+            using var change = TrackBindingMemory(name);
+            indexed.DirectoryListing = null;
+            indexed.RemovedDirectoryListingIndex = null;
+        }
+    }
+
+    internal bool TryRemoveIndexedElement(BindingName name, IndexedArrayIndex index)
+    {
+        if (TryGetBinding(name, out var slot) && slot is IndexedSlot indexed)
+        {
+            if (indexed.Value.DirectoryStack != null)
+                indexed.RemovedDirectoryListingIndex = index.Value;
+            else
+                indexed.Value.Remove(index);
+            return true;
+        }
         return false;
     }
 

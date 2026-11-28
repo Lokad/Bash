@@ -90,6 +90,12 @@ state. Isolated input redirections detach the reached binding.
 Array-reader writes copy their record bytes before replacing saved entries.
 Callback input retains displaced entries until the reader commits. Rollback
 restores the reader's writes while preserving independent callback edits.
+An operand-free listing reads the binding's last observed directory snapshot.
+The live stack tracks changed positions and shape edits only after the first
+lookup. A later lookup reuses untouched nodes in the immutable listing order.
+Each scope retains its own observed version while live reads still index the
+directory stack directly. Admission estimates the active projection and saved
+versions separately, including their retained path bytes.
 
 Nameref target validation uses the reference parser without evaluating
 selectors. A nonempty replacement is validated before creating a local.

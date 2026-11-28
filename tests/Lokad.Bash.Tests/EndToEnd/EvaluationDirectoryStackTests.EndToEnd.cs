@@ -98,6 +98,77 @@ public sealed class EvaluationDirectoryStackTestsEndToEnd
             "/ beta alpha\n/ 2 alpha\n<1:2>\n<2:first>\n/ first second\n/ next last\n");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackListingsKeepTheLastReachedBindingSnapshot(bool prepared)
+    {
+        const string script = """
+            rows() {
+                while IFS= read -r line; do
+                    case "$line" in DIRSTACK=*|'declare -a DIRSTACK='*) printf '%s\n' "$line";; esac
+                done <<< "$1"
+            }
+            show() { rows "$(declare -a)"; }
+            rows "$(set)"
+            : "$DIRSTACK"
+            pushd -n alpha >/dev/null
+            show
+            f() {
+                local -I DIRSTACK
+                pushd -n beta >/dev/null
+                : "${DIRSTACK[1]}"
+                show
+            }
+            f
+            show
+            declare -p DIRSTACK
+            show
+            """;
+        await AssertDirectoryStackAsync(script, prepared, """
+            DIRSTACK=()
+            declare -a DIRSTACK=([0]="/")
+            declare -a DIRSTACK=([0]="/" [1]="beta" [2]="alpha")
+            declare -a DIRSTACK=([0]="/" [1]="alpha")
+            declare -a DIRSTACK=([0]="/" [1]="beta" [2]="alpha")
+            declare -a DIRSTACK=([0]="/" [1]="beta" [2]="alpha")
+
+            """);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectoryStackListingDistinguishesScalarElementAndWholeArrayWrites(bool prepared)
+    {
+        const string script = """
+            show() {
+                listing=$(declare -a)
+                while IFS= read -r line; do
+                    case "$line" in 'declare -a DIRSTACK='*) printf '%s\n' "$line";; esac
+                done <<< "$listing"
+            }
+            pushd -n alpha >/dev/null
+            DIRSTACK=ignored
+            show
+            DIRSTACK[1]=beta
+            show
+            unset 'DIRSTACK[0]'
+            show
+            DIRSTACK=(ignored gamma)
+            show
+            declare -p DIRSTACK
+            """;
+        await AssertDirectoryStackAsync(script, prepared, """
+            declare -a DIRSTACK=()
+            declare -a DIRSTACK=([0]="/" [1]="alpha")
+            declare -a DIRSTACK=([1]="beta")
+            declare -a DIRSTACK=()
+            declare -a DIRSTACK=([0]="/" [1]="gamma")
+
+            """);
+    }
+
     private static async Task AssertDirectoryStackAsync(string script, bool prepared, string expected)
     {
         var governor = new MemoryGovernor(TestMemoryBudget.DefaultBytes);

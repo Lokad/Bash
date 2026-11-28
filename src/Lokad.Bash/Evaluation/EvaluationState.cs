@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Text;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Threading;
@@ -275,8 +276,29 @@ internal sealed class EvaluationState
     private readonly List<DirectoryStackEntry> _directoryStack;
     private long _ownedDirectoryPathBytes;
     private const int ResolvedPathValueOverheadBytes = 64;
+    private EvaluationMemory? _directoryListingMemory;
+    private DirectoryStackListing? _directoryListing;
+    private int _directoryListingChangedFrom = int.MaxValue;
+    private HashSet<int>? _directoryListingChangedSlots;
 
     private sealed record ResolvedDirectoryPath(ShellPath Path, ShellValue Value);
+
+    /// <summary>Retained listing order with immutable path bytes and shared versioned nodes.</summary>
+    internal sealed record DirectoryStackListing(ImmutableList<ShellValue> Values, long PathBytes)
+    {
+        internal long EstimatedMemoryBytes => EstimateNodes(Values.Count) + PathBytes;
+        internal static long EstimateNodes(int count) => 64L + 64L * count;
+
+        internal IEnumerable<KeyValuePair<long, ShellValue?>> Entries
+        {
+            get
+            {
+                var position = 0L;
+                foreach (var value in Values)
+                    yield return KeyValuePair.Create(position++, (ShellValue?)value);
+            }
+        }
+    }
 
     internal readonly struct DirectoryStackEntry
     {
@@ -385,10 +407,107 @@ internal sealed class EvaluationState
     internal int DirectoryStackCount => _directoryStack.Count;
     internal DirectoryStackEntry GetDirectoryStackEntry(int index) => _directoryStack[DirectoryStackSlot(index)];
     internal long RetainedDirectoryStackBytes => checked(EstimateDirectoryStackBytes(_directoryStack.Capacity)
-        + _ownedDirectoryPathBytes);
+        + _ownedDirectoryPathBytes + (_directoryListing?.EstimatedMemoryBytes ?? 0)
+        + 24L * (_directoryListingChangedSlots?.EnsureCapacity(0) ?? 0));
 
     private static long EstimateDirectoryStackBytes(int capacity) => 32L + 16L * capacity;
     private int DirectoryStackSlot(int index) => _directoryStack.Count - 1 - index;
+
+    internal void SetDirectoryListingMemory(EvaluationMemory memory) => _directoryListingMemory = memory;
+
+    /// <summary>Refreshes only the changed slots of the listing projection.</summary>
+    internal DirectoryStackListing ReadDirectoryStackListing(DirectoryStackListing? previousRead)
+    {
+        if (_directoryListing is { } previous && _directoryListingChangedFrom == int.MaxValue
+            && _directoryListingChangedSlots is not { Count: > 0 })
+        {
+            Admit(previous, stateIncrease: 0);
+            return previous;
+        }
+
+        var count = _directoryStack.Count;
+        var shared = _directoryListing == null ? 0
+            : Math.Min(_directoryListingChangedFrom, Math.Min(count, _directoryListing.Values.Count));
+        ImmutableList<ShellValue> values;
+        if (shared == 0 || _directoryListing == null)
+        {
+            _directoryListingMemory?.Charge(128L + 96L * count);
+            values = ImmutableList.CreateRange(ValuesFromTop(0));
+        }
+        else
+        {
+            var old = _directoryListing.Values;
+            var dirty = _directoryListingChangedSlots?.Count ?? 0;
+            var tailChanged = shared < count || shared < old.Count;
+            var depth = BitOperations.Log2((uint)Math.Max(count, old.Count)) + 1;
+            var paths = (long)depth * (dirty + (tailChanged ? 2L : 0L)) * 3;
+            _directoryListingMemory?.Charge(128L + 96L * (count - shared)
+                + 64L * Math.Min(paths, (long)count + old.Count));
+            var builder = old.ToBuilder();
+            if (_directoryListingChangedSlots is { Count: > 0 } slots)
+                foreach (var slot in slots)
+                {
+                    _directoryListingMemory?.CancellationToken.ThrowIfCancellationRequested();
+                    if (slot < shared)
+                        builder[old.Count - 1 - slot] = _directoryStack[slot].Value;
+                }
+            if (tailChanged)
+            {
+                if (shared < old.Count)
+                    builder.RemoveRange(0, old.Count - shared);
+                builder.InsertRange(0, ValuesFromTop(shared));
+            }
+            values = builder.ToImmutable();
+        }
+        var listing = new DirectoryStackListing(values, _ownedDirectoryPathBytes);
+        Admit(listing, listing.EstimatedMemoryBytes - (_directoryListing?.EstimatedMemoryBytes ?? 0));
+        _directoryListing = listing;
+        _directoryListingChangedFrom = int.MaxValue;
+        if (_directoryListingChangedSlots is { } changed && changed.EnsureCapacity(0) <= 4L * count)
+            changed.Clear();
+        else
+            _directoryListingChangedSlots = null;
+        return listing;
+
+        void Admit(DirectoryStackListing next, long stateIncrease)
+        {
+            var bindingIncrease = next.EstimatedMemoryBytes - (previousRead?.EstimatedMemoryBytes ?? 0);
+            var additional = Math.Max(0, stateIncrease) + Math.Max(0, bindingIncrease);
+            if (additional != 0)
+                _directoryListingMemory?.PrepareRetainedStorage(additional);
+        }
+
+        IEnumerable<ShellValue> ValuesFromTop(int firstSharedSlot)
+        {
+            for (var slot = _directoryStack.Count - 1; slot >= firstSharedSlot; slot--)
+            {
+                _directoryListingMemory?.CancellationToken.ThrowIfCancellationRequested();
+                yield return _directoryStack[slot].Value;
+            }
+        }
+    }
+
+    internal void ClearDirectoryListingTracking()
+    {
+        _directoryListing = null;
+        _directoryListingChangedFrom = int.MaxValue;
+        _directoryListingChangedSlots = null;
+    }
+
+    private void MarkDirectoryListingRange(int slot)
+    {
+        if (_directoryListing != null)
+            _directoryListingChangedFrom = Math.Min(_directoryListingChangedFrom, slot);
+    }
+
+    private void MarkDirectoryListingSlot(int slot)
+    {
+        if (_directoryListing == null || slot >= _directoryListingChangedFrom)
+            return;
+        _directoryListingChangedSlots ??= [];
+        _directoryListingMemory?.Workspace.PrepareSetCapacity(_directoryListingChangedSlots, slot, bytesPerEntry: 24);
+        _directoryListingChangedSlots.Add(slot);
+    }
 
     internal int FunctionCount => _functions.Count;
     internal bool HasExportedFunctions => _exportedFunctionCount != 0;
@@ -951,6 +1070,8 @@ internal sealed class EvaluationState
 
     public void ResetDirectoryStack()
     {
+        if (_directoryStack.Count > 1)
+            MarkDirectoryListingRange(0);
         _directoryStack.RemoveRange(0, _directoryStack.Count - 1);
         _ownedDirectoryPathBytes = _directoryStack[0].OwnedBytes;
     }
@@ -983,8 +1104,12 @@ internal sealed class EvaluationState
         for (var offset = 0; offset < values.Count; offset++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (ContainsSavedDirectory(unchecked(origin + (uint)offset)))
+            var position = unchecked(origin + (uint)offset);
+            if (ContainsSavedDirectory(position))
+            {
                 bytes = checked(bytes + 48L + values[offset].Bytes.Length);
+                MarkDirectoryListingSlot(DirectoryStackSlot((int)position));
+            }
         }
         memory?.Charge(bytes);
         cancellationToken.ThrowIfCancellationRequested();
@@ -999,6 +1124,7 @@ internal sealed class EvaluationState
     /// <summary>Restores unpublished input writes while preserving stack edits made by callbacks.</summary>
     internal void RestoreSavedDirectoryWrites(Dictionary<object, DirectoryStackEntry> writes)
     {
+        MarkDirectoryListingRange(0);
         for (var index = 1; index < DirectoryStackCount; index++)
         {
             var entry = GetDirectoryStackEntry(index);
@@ -1020,6 +1146,7 @@ internal sealed class EvaluationState
     private void ReplaceDirectoryStackEntry(int index, DirectoryStackEntry entry)
     {
         var slot = DirectoryStackSlot(index);
+        MarkDirectoryListingSlot(slot);
         _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes - _directoryStack[slot].OwnedBytes);
         _directoryStack[slot] = entry;
     }
@@ -1027,6 +1154,7 @@ internal sealed class EvaluationState
     public void RemoveSavedDirectory(int index)
     {
         var slot = DirectoryStackSlot(index);
+        MarkDirectoryListingRange(slot);
         _ownedDirectoryPathBytes -= _directoryStack[slot].OwnedBytes;
         _directoryStack.RemoveAt(slot);
     }
@@ -1040,6 +1168,7 @@ internal sealed class EvaluationState
 
         var selected = GetDirectoryStackEntry(index);
         memory.Charge(Math.Max(0, current.OwnedBytes - selected.OwnedBytes));
+        MarkDirectoryListingRange(0);
         // Logical left rotation is right rotation in the backing list.
         var split = _directoryStack.Count - index;
         _directoryStack.Reverse(0, split);
@@ -1062,6 +1191,8 @@ internal sealed class EvaluationState
             memory.Charge(ResolvedPathValueOverheadBytes + 3L * target.Path.Length);
             destination = DirectoryStackEntry.Resolved(target);
         }
+        if (succeeded)
+            MarkDirectoryListingSlot(DirectoryStackSlot(0));
         if (kind == DirectoryChangeKind.SwapDirectories)
         {
             if (!succeeded)
@@ -1110,6 +1241,7 @@ internal sealed class EvaluationState
             memory.Charge(EstimateDirectoryStackBytes(capacity));
             _directoryStack.Capacity = capacity;
         }
+        MarkDirectoryListingRange(_directoryStack.Count - 1);
         _directoryStack.Insert(_directoryStack.Count - 1, entry);
         _ownedDirectoryPathBytes = checked(_ownedDirectoryPathBytes + entry.OwnedBytes);
     }

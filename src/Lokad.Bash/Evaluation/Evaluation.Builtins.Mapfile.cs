@@ -587,6 +587,7 @@ public sealed partial class Evaluation
         if (!BuiltinDiagnosticsOpen)
             return (null, 0);
 
+        variables.RefreshDirectoryStackListing(resolved);
         // A cycle recreates the binding; otherwise readonly belongs to the selected array.
         if (!recreatesCycle && variables.IsReadonlyBinding(resolved))
         {

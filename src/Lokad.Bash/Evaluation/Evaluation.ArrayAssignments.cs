@@ -407,6 +407,8 @@ public sealed partial class Evaluation
         }
         if (name == FieldSeparators.Name && sourceName == name)
             targetVariables.RefreshIndexedFieldSeparators();
+        if (!append)
+            targetVariables.ClearDirectoryStackListing(name);
         return true;
 
         async Task<bool> VisitPreparedItemsAsync(Func<ExpandedArrayItem, ValueTask<bool>> accept)

@@ -236,6 +236,7 @@ public sealed partial class Evaluation : IFileTester
         _rootFlowHandling = rootFlowHandling;
         _borrowedDescriptors = descriptorSetup.BorrowedDescriptors;
         Memory = new EvaluationMemory(memoryBudget);
+        _state.SetDirectoryListingMemory(Memory);
     }
 
     /// <summary> Gets evaluation options. </summary>
@@ -876,6 +877,7 @@ public sealed partial class Evaluation : IFileTester
         var inheritedExitBindings = exitBoundary.KeepsReachedBindings ? null
             : parentState.CaptureInheritedExitBindings(scope.PipelineExitReader.RedirectionDepth, Memory);
         var childState = parentState.CloneForSubshell(Memory, inheritedExitBindings);
+        childState.SetDirectoryListingMemory(Memory);
         childVars.RebindDirectoryStack(childState);
         var result = EvaluationResult.FromExitCode(0);
         OperationError? closeError = null;
@@ -2231,6 +2233,8 @@ public sealed partial class Evaluation : IFileTester
                     }
                     if (outputClosed)
                         continue;
+                    if (!listing)
+                        variables.RefreshDirectoryStackListing(name);
                     using var output = new ByteMemoryBuilder(0, Memory.Budget);
                     if (optionSnapshot)
                         output.Append(listing && localBuiltinFrame != null ? "local -\n"u8 : "declare -- -\n"u8);
@@ -4836,6 +4840,7 @@ public sealed partial class Evaluation : IFileTester
             void SetAttributes(BindingName name, Variables variables, DeclarationAttributeChange exportChange)
             {
                 var (set, clear) = GetAttributeChanges(exportChange);
+                variables.RefreshDirectoryStackListing(name);
                 variables.UpdateBindingAttributes(name, set, clear);
             }
 

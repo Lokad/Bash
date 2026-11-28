@@ -113,7 +113,7 @@ public sealed partial class Variables
             LineNumberSlot or SubshellLevelSlot => EstimateValueBytes(11),
             ArgumentZeroSlot => 0, // The shell retains the name independently of its binding.
             ScalarSlot scalar => EstimateValueBytes(scalar.Value),
-            IndexedSlot indexed => indexed.Value.EstimatedMemoryBytes,
+            IndexedSlot indexed => indexed.Value.EstimatedMemoryBytes + (indexed.DirectoryListing?.EstimatedMemoryBytes ?? 0),
             AssociativeSlot associative => associative.Value.EstimatedMemoryBytes,
             NamerefSlot reference => EstimateValueBytes(reference.Value.Value),
             _ => 0
@@ -393,6 +393,7 @@ public sealed partial class Variables
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 // The saved store receives owned slots. Detach before any prefix is installed.
+                owner.RefreshDirectoryStackListing(name);
                 if (owner.TryGetBinding(name, out var slot))
                     bytes = checked(bytes + EstimateSlotBytes(name, slot));
             }
@@ -932,6 +933,7 @@ public sealed partial class Variables
                 var inherited = temporary ? command : inherit ? savedBinding : null;
                 if (inherited != null)
                 {
+                    inherited.RefreshDirectoryStackListing(name);
                     memory.Charge(inherited.EstimateBindingBytes(name));
                     local.CopyBindingFrom(inherited, name, borrowedCopyAdmitted: true, shellOwner: null);
                     if (inherit)
@@ -1160,6 +1162,7 @@ public sealed partial class Variables
 
     internal bool TryReadResolvedExpansionValue(BindingName name, out ShellValue value)
     {
+        RefreshDirectoryStackListing(name);
         if (!name.IsEmpty && TryGetBinding(name, detachBorrowed: false, out var slot) && !slot.IsArrayNameref)
         {
             switch (slot)
@@ -1415,7 +1418,7 @@ public sealed partial class Variables
         }
 
         if (flags == UnsetFlags.None)
-            ClearBinding(name);
+            RemoveVariable();
         else
         {
             SetAttribute(name, BindingAttributes.Exported, false);
@@ -1426,10 +1429,18 @@ public sealed partial class Variables
                     NamerefSlot => flags.HasFlag(UnsetFlags.NamerefOnly),
                     _ => false
                 }))
-                ClearBinding(name);
+                RemoveVariable();
         }
 
         return true;
+
+        void RemoveVariable()
+        {
+            if (name == DirectoryStackName && TryGetBinding(name, detachBorrowed: false, out var entry)
+                && entry is IndexedSlot { Value.DirectoryStack: { } stack } && !IsBorrowedBinding(name))
+                stack.ClearDirectoryListingTracking();
+            ClearBinding(name);
+        }
     }
 
     /// <summary>
@@ -1534,7 +1545,9 @@ public sealed partial class Variables
 
         if (kind == ArrayKind.Indexed)
         {
-            if (!IsDirectoryStackBinding(resolved))
+            if (IsDirectoryStackBinding(resolved))
+                ClearDirectoryStackListing(resolved);
+            else
                 ReplaceValue(resolved, new IndexedSlot(IndexedArray.FromSequential(values)), retainArrayNameref);
             return true;
         }
@@ -1912,6 +1925,7 @@ public sealed partial class Variables
 
     internal bool TryAppendArrayAssignment(BindingName name, ByteMemoryBuilder output, CancellationToken cancellationToken)
     {
+        RefreshDirectoryStackListing(name);
         TryGetBinding(name, detachBorrowed: false, out var slot);
         return TryAppendArrayAssignment(slot, output, cancellationToken);
     }
@@ -1921,20 +1935,24 @@ public sealed partial class Variables
     {
         return slot switch
         {
-            IndexedSlot { Value.IsInitialized: true } indexed => AppendIndexed(indexed.Value),
+            IndexedSlot { Value.DirectoryStack: not null } stack =>
+                AppendIndexed(stack.DirectoryListing?.Entries ?? [], stack.RemovedDirectoryListingIndex),
+            IndexedSlot { Value.IsInitialized: true } indexed => AppendIndexed(indexed.Value.EntriesByPosition, removed: null),
             AssociativeSlot { Value.IsInitialized: true } associative => AppendAssociative(associative.Value),
             _ => true
         };
 
-        bool AppendIndexed(IndexedArray array)
+        bool AppendIndexed(IEnumerable<KeyValuePair<long, ShellValue?>> entries, long? removed)
         {
             if (!output.TryAppend("=("u8))
                 return false;
             Span<byte> digits = stackalloc byte[NumberFormatting.MaximumNumberLength];
             var first = true;
-            foreach (var (position, value) in array.EntriesByPosition)
+            foreach (var (position, value) in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (position == removed)
+                    continue;
                 if ((!first && !output.TryAppend((byte)' '))
                     || !output.TryAppend((byte)'[')
                     || !output.TryAppend(NumberFormatting.FormatNumber(position, digits))

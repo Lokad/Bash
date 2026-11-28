@@ -432,6 +432,36 @@ public sealed class CollectionOwnershipTests
     }
 
     [Fact]
+    public void DirectoryListingSharesUntouchedEntriesAfterADistantWrite()
+    {
+        const int savedCount = 4096;
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var budget = new MemoryGovernor(8 * 1024 * 1024);
+        var memory = new EvaluationMemory(budget);
+        state.SetDirectoryListingMemory(memory);
+        var originalPath = ShellValue.FromText("original");
+        try
+        {
+            for (var position = 0; position < savedCount; position++)
+                state.PushDeferredDirectory(originalPath, memory);
+            var original = state.ReadDirectoryStackListing(previousRead: null);
+            state.SetSavedDirectory(IndexedArrayIndex.FromUnsigned(savedCount), ShellValue.FromText("changed"), memory);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var updated = state.ReadDirectoryStackListing(original);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.InRange(allocated, 1, 16 * 1024);
+            Assert.Equal(savedCount + 1, updated.Values.Count);
+            Assert.Equal(originalPath, original.Values[^1]);
+            Assert.Equal(ShellValue.FromText("changed"), updated.Values[^1]);
+            Assert.Same(updated, state.ReadDirectoryStackListing(updated));
+        }
+        finally { memory.Finish(retainVariables: false); }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
     public void SelectedDeferredDirectoryFormatsLongHomeAsBytesWithoutDecoding()
     {
         var home = "/" + new string('é', 512);

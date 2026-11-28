@@ -406,7 +406,10 @@ Unsetting the whole variable removes the live binding. An inherited environment
 value remains an ordinary scalar in a fresh launch. Local and temporary
 bindings can shadow the array, and `local -I` retains the live binding.
 Children start with their own stack. A named declaration listing shows the
-current array.
+current array and refreshes the binding's listing snapshot. Operand-free
+listings start with an empty array and then show the snapshot from the last
+reached lookup. Directory edits leave that snapshot available until a lookup
+refreshes it. An inherited local keeps its own snapshot.
 Successful stack edits retain success if the
 listing write fails, and the write cause is reported through active stderr.
 `pwd`, `dirs`, and declaration and option listings report write failures.
