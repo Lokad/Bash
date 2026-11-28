@@ -296,8 +296,10 @@ internal sealed class IndexedArray
         else if (memory != null && capacity != 0 && count > capacity - _elements.Count)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // The source index wraps at UInt32.MaxValue. Count existing entries in
-            // each contiguous part only through the array's current maximum.
+            // Count occupied positions in each half of a batch that wraps at UInt32.MaxValue.
+            var minimum = _positions.Min;
+            var maximum = _maximumIndex.GetValueOrDefault(-1);
+            var contiguous = maximum - minimum == _elements.Count - 1L;
             var beforeWrap = (int)Math.Min(count, (long)uint.MaxValue + 1 - origin);
             var added = count - CountExisting(origin, beforeWrap) - CountExisting(0, count - beforeWrap);
 
@@ -319,24 +321,32 @@ internal sealed class IndexedArray
                         memory.Workspace.Resize(memory.Workspace.Bytes - overlap);
                 }
             }
+
+            int CountExisting(uint first, int length)
+            {
+                var start = Math.Max(minimum, first);
+                var last = Math.Min(maximum, (long)first + length - 1);
+                if (start > last)
+                    return 0;
+                if (contiguous)
+                    return (int)(last - start + 1);
+                if (start == last)
+                    return _elements.ContainsKey(start) ? 1 : 0;
+
+                var positions = start == minimum && last == maximum ? _positions : _positions.GetViewBetween(start, last);
+                var existing = 0;
+                foreach (var _ in positions)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    existing++;
+                }
+                return existing;
+            }
         }
 
         for (var index = 0; index < count; index++)
             Set(IndexedArrayIndex.FromUnsigned(unchecked(origin + (uint)index)), values[index]);
         MarkInitialized();
-
-        int CountExisting(uint first, int length)
-        {
-            var last = Math.Min(_maximumIndex.GetValueOrDefault(-1), (long)first + length - 1);
-            var existing = 0;
-            for (long position = first; position <= last; position++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (_elements.ContainsKey(position))
-                    existing++;
-            }
-            return existing;
-        }
     }
 
     private (int Capacity, long Overlap) EstimateDictionaryGrowth(int capacity, int required, long prepaidBytes)

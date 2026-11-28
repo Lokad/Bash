@@ -24,6 +24,69 @@ public sealed class IndexedArrayRangeTests
         memory.Finish(retainVariables: false);
     }
 
+    [Theory]
+    [InlineData(1U, 2L, 3L, 5000L, long.MaxValue, 6)]
+    [InlineData(3U, 4L, 5L, 6L, 7L, 5)]
+    [InlineData(uint.MaxValue - 1, (long)uint.MaxValue, 0L, 5L, long.MaxValue, 6)]
+    public void OverlappingSequentialBatchUsesExistingTableCapacity(
+        uint origin, long first, long second, long third, long fourth, int expectedCount)
+    {
+        var array = new IndexedArray(isInitialized: true, capacity: 4);
+        var saved = ShellValue.FromText("saved");
+        var priorPositions = new[] { first, second, third, fourth };
+        foreach (var position in priorPositions)
+        {
+            Assert.True(IndexedArrayIndex.TryCreate(position, out var index));
+            array.Set(index, position == first ? null : saved);
+        }
+        ShellValue[] values = [ShellValue.FromText("a"), ShellValue.FromText("b"), ShellValue.Empty, ShellValue.FromBytes(new byte[] { 0xff })];
+        var budget = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(budget);
+
+        array.SetSequential(origin, values, memory, CancellationToken.None);
+
+        Assert.Equal(expectedCount, array.Count);
+        var written = new HashSet<long>();
+        for (var i = 0; i < values.Length; i++)
+        {
+            var position = unchecked(origin + (uint)i);
+            written.Add(position);
+            Assert.True(array.TryGet(IndexedArrayIndex.FromUnsigned(position), out var result));
+            Assert.Equal(values[i], result);
+        }
+        foreach (var position in priorPositions)
+        {
+            if (written.Contains(position))
+                continue;
+            Assert.True(IndexedArrayIndex.TryCreate(position, out var index));
+            Assert.True(array.TryGet(index, out var result));
+            Assert.Equal(saved, result);
+        }
+        Assert.Equal(0, budget.PeakBytes);
+        memory.Finish(retainVariables: false);
+    }
+
+    [Fact]
+    public void SequentialBatchRefusalLeavesOverlappingEntriesUnchanged()
+    {
+        var array = new IndexedArray(isInitialized: true, capacity: 7);
+        var value = ShellValue.FromText("original");
+        for (uint index = 1; index <= 13; index += 2)
+            array.Set(IndexedArrayIndex.FromUnsigned(index), value);
+        var budget = new MemoryGovernor(0);
+        var memory = new EvaluationMemory(budget);
+        ShellValue[] values = [ShellValue.FromText("replacement"), ShellValue.FromText("new")];
+
+        Assert.Throws<MemoryBudgetExceededException>(() => array.SetSequential(1, values, memory, CancellationToken.None));
+
+        Assert.Equal(7, array.Count);
+        Assert.Equal(13, array.MaxIndex);
+        Assert.Equal(Enumerable.Repeat(value, 7), array.PresentValues);
+        Assert.False(array.TryGet(IndexedArrayIndex.FromUnsigned(2), out _));
+        Assert.Equal(0, budget.ReservedBytes);
+        memory.Finish(retainVariables: false);
+    }
+
     [Fact]
     public void ClonesKeepTheirOwnCapacityEstimate()
     {
