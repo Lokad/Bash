@@ -109,7 +109,7 @@ public sealed class DescriptorMemoryTests
         var number = new LogicalDescriptor(10);
 
         var replacement = new DescriptorBinding(FileDescriptor.DevNull);
-        table.PrepareSet(number, replacement, memory.Workspace);
+        Assert.Equal(FileDescriptor.StdOut, table.PrepareSet(number, replacement, memory.Workspace));
         Assert.True(governor.ReservedBytes > 0);
         Assert.Equal(0, table.OwnedMemoryBytes);
         Assert.Equal(FileDescriptor.StdOut, table.Resolve(number));
@@ -124,6 +124,54 @@ public sealed class DescriptorMemoryTests
             table.PrepareSet(number, replacement, memory.Workspace));
         Assert.Equal(0, table.OwnedMemoryBytes);
         Assert.Equal(FileDescriptor.StdOut, table.Resolve(number));
+    }
+
+    [Fact]
+    public void PersistentMapRefusalAtTheSecondTableKeepsBothBindingsUntilRetry()
+    {
+        var descriptor = new LogicalDescriptor(14);
+        var outerBinding = new DescriptorBinding(new FileDescriptor(40), IsWriteOnly: true);
+        var innerBinding = new DescriptorBinding(new FileDescriptor(41));
+        var replacement = new DescriptorBinding(new FileDescriptor(42), IsWriteOnly: true);
+        var rootSnapshot = Snapshot(outerBinding);
+        var reachedSnapshot = Snapshot(innerBinding);
+        var root = rootSnapshot.Fork();
+        var reached = reachedSnapshot.Fork();
+        var state = new RedirectionState(root);
+        state.Push(reached, new DescriptorHandleOwner(), new HashSet<LogicalDescriptor>(), memory: null);
+        var singleReceiver = DescriptorMap.EstimateMemoryBytes(1);
+        var governor = new MemoryGovernor(2 * singleReceiver);
+        var memory = new EvaluationMemory(governor);
+
+        using (governor.Reserve(1))
+        {
+            Assert.Throws<MemoryBudgetExceededException>(() =>
+                state.SetPersistentDescriptor(descriptor, replacement, memory, acquired: false));
+            Assert.Equal(singleReceiver, memory.Workspace.Bytes);
+            Assert.Equal(outerBinding, root.ResolveBinding(descriptor));
+            Assert.Equal(innerBinding, reached.ResolveBinding(descriptor));
+            Assert.Equal(0, root.OwnedMemoryBytes);
+            Assert.Equal(0, reached.OwnedMemoryBytes);
+        }
+
+        memory.Workspace.Resize(0);
+        memory.ReleaseUnusedCapacity();
+        state.SetPersistentDescriptor(descriptor, replacement, memory, acquired: false);
+
+        Assert.Equal(2 * singleReceiver, memory.Workspace.Bytes);
+        Assert.Equal(replacement, root.ResolveBinding(descriptor));
+        Assert.Equal(replacement, reached.ResolveBinding(descriptor));
+        Assert.Equal(outerBinding, rootSnapshot.ResolveBinding(descriptor));
+        Assert.Equal(innerBinding, reachedSnapshot.ResolveBinding(descriptor));
+        memory.Finish(retainVariables: false);
+        Assert.Equal(0, governor.ReservedBytes);
+
+        DescriptorTable.Snapshot Snapshot(DescriptorBinding binding)
+        {
+            var table = new DescriptorTable();
+            table.Set(descriptor, binding);
+            return table.Capture();
+        }
     }
 
     [Fact]

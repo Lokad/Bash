@@ -63,10 +63,11 @@ internal sealed partial class DescriptorTable
             TryFindAvailableDescriptor(out _);
     }
 
-    /// <summary>Prepares major backing storage before a persistent batch is published.</summary>
-    internal void PrepareSet(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory)
+    /// <summary>Admits backing before publication and returns the handle currently mapped to the descriptor.</summary>
+    internal FileDescriptor PrepareSet(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory)
     {
-        _bindings.PrepareSet(descriptor, binding, memory);
+        _bindings.PrepareSet(descriptor, binding, memory, out var previous);
+        return previous.Handle;
     }
 
     /// <summary>Finds the first free script descriptor from 10; host handle numbers do not participate.</summary>

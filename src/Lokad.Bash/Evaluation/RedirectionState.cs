@@ -344,14 +344,7 @@ internal struct RedirectionState
 
         void PrepareTarget(ref RedirectionState state, DescriptorTable table, DescriptorHandleOwner opened)
         {
-            var before = table.OwnedMemoryBytes;
-            try { table.PrepareSet(descriptor, binding, memory?.Workspace); }
-            finally
-            {
-                if (!ReferenceEquals(table, current))
-                    state._savedAdditionalBytes = checked(state._savedAdditionalBytes + table.OwnedMemoryBytes - before);
-            }
-            var old = table.Resolve(descriptor);
+            var old = table.PrepareSet(descriptor, binding, memory?.Workspace);
             if (old != handle && opened.Contains(old))
                 state.PrepareHandles(opened, 0, memory, publication: false);
         }

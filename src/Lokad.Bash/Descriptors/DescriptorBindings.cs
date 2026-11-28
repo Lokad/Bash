@@ -70,7 +70,7 @@ public partial struct DescriptorBindings
                 return true;
         }
 
-        if (!PrepareSet(descriptor, binding, memory))
+        if (!PrepareSet(descriptor, binding, memory, out _))
             return false;
         var writer = _writer ?? new DescriptorMap.Builder(_additional ?? DescriptorMap.Empty);
         writer.Set(descriptor, binding);
@@ -79,21 +79,27 @@ public partial struct DescriptorBindings
         return true;
     }
 
-    /// <summary>Admits and prepares writable capacity without publishing a changed binding.</summary>
-    internal bool PrepareSet(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory)
+    /// <summary>Reads the previous binding and admits backing for a change without publishing it.</summary>
+    internal readonly bool PrepareSet(LogicalDescriptor descriptor, DescriptorBinding binding, MemoryCapacity? memory,
+        out DescriptorBinding previous)
     {
         if (descriptor.Number <= 2)
-            return !IsUnchanged(ResolveBinding(descriptor), binding);
-        var present = TryGetAdditionalValue(descriptor, out var previous);
+        {
+            previous = ResolveBinding(descriptor);
+            return !IsUnchanged(previous, binding);
+        }
+        var present = TryGetAdditionalValue(descriptor, out previous);
         if (present && IsUnchanged(previous, binding))
             return false;
-        var requiredSlots = _writer?.RequiredSlots(present) ?? _additional?.RequiredSlots(present) ?? 1;
-        var required = DescriptorMap.EstimateMemoryBytes(requiredSlots);
-        var owned = OwnedMemoryBytes;
-        if (required > owned)
-            memory?.Grow(required - owned);
-        // No tree is changed here. Every receiving owner admits its complete
-        // transitive backing and replacement headroom before any binding is set.
+        if (memory != null)
+        {
+            // Admit transitive backing and replacement headroom before the tree is changed.
+            var requiredSlots = _writer?.RequiredSlots(present) ?? _additional?.RequiredSlots(present) ?? 1;
+            var required = DescriptorMap.EstimateMemoryBytes(requiredSlots);
+            var owned = OwnedMemoryBytes;
+            if (required > owned)
+                memory.Grow(required - owned);
+        }
         return true;
     }
 
