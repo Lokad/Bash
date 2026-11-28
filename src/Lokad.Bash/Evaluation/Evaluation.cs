@@ -7117,7 +7117,8 @@ public sealed partial class Evaluation : IFileTester
     private async Task<EvaluationResult> ExecuteSourceAsync(string commandName, string path, ScopedEvaluation scope,
         Variables.PositionalParametersScope? callerPositionals)
     {
-        var searchPath = !path.Contains('/') && scope.Variables.TryGetScalar("PATH", out var value)
+        var searchPath = _state.HasOption(ShellOption.SourcePath) && !path.Contains('/')
+            && scope.Variables.TryGetScalar("PATH", out var value)
             ? value.Bytes : ReadOnlyMemory<byte>.Empty;
         using var lookupMemory = searchPath.IsEmpty ? null : new MemoryCapacity(Memory.Budget, 0);
         var (open, openedPath, currentSearchEntry) = lookupMemory != null && RawShellPath.TryParse(path, out var fileName)

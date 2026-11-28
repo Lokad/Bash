@@ -3,6 +3,28 @@ namespace Lokad.Bash.Tests.EndToEnd;
 public sealed class ChildShellLaunchTests
 {
     [Fact]
+    public async Task SourcePathStartsEnabledAndCanBeClearedBeforeImport()
+    {
+        await using var host = EndToEndHarness.BuildTree([
+            ("/item", "printf 'direct:%s\\n' \"${BASH_SOURCE[0]}\""),
+            ("/lib/item", "printf 'search:%s\\n' \"${BASH_SOURCE[0]}\"")
+        ]);
+        var result = await host.RunAsync("""
+            shopt -u sourcepath
+            bash -c 'PATH=lib; source item'
+            bash +O sourcepath -c 'PATH=lib; source item'
+            shopt -s sourcepath
+            export BASHOPTS
+            bash +O sourcepath -c 'PATH=lib; . item'
+            """, CancellationToken.None);
+
+        Assert.Equal("search:lib/item\ndirect:item\nsearch:lib/item\n", host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
     public async Task XpgEchoLaunchUsesExplicitAndExportedSettings()
     {
         await using var host = new TestHost();
@@ -125,8 +147,8 @@ public sealed class ChildShellLaunchTests
             """, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("child:globskipdots:localvar_inherit/braceexpand:errexit:pipefail\ncleared:globskipdots/braceexpand:pipefail\n",
-            host.StandardOutput.TextContent);
+        Assert.Equal("child:globskipdots:localvar_inherit:sourcepath/braceexpand:errexit:pipefail\n"
+            + "cleared:globskipdots:sourcepath/braceexpand:pipefail\n", host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
     }

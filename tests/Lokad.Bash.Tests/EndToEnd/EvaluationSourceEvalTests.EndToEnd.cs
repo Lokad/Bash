@@ -26,6 +26,24 @@ public sealed class EvaluationSourceEvalTestsEndToEnd
     }
 
     [Theory]
+    [InlineData("", "item:item\nitem:item\n")]
+    [InlineData("local -; ", "item:item\nlib:lib/item\n")]
+    public async Task SourcePathIsRestoredOnlyWhenTheFunctionSavesItsOptions(string snapshot, string expected)
+    {
+        await using var host = EndToEndHarness.BuildTree([
+            ("/item", "printf 'item:%s\\n' \"${BASH_SOURCE[0]}\""),
+            ("/lib/item", "printf 'lib:%s\\n' \"${BASH_SOURCE[0]}\"")
+        ]);
+        var result = await host.RunAsync("PATH=lib; f() { " + snapshot
+            + "shopt -u sourcepath; command . item; }; f; source item", CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expected, host.StandardOutput.TextContent);
+        Assert.Empty(host.StandardError.Content.ToArray());
+        Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Theory]
     [InlineData("source -- ./missing", "line 1: ./missing: No such file or directory\n")]
     [InlineData(". ''", "line 1: : No such file or directory\n")]
     [InlineData("source ./folder", "line 1: source: ./folder: is a directory\n")]

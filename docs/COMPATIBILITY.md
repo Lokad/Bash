@@ -920,7 +920,7 @@ during application, preserving any changes already applied. After `-`,
 
 `shopt` inspects and changes `dotglob`, `failglob`, `globskipdots`,
 `inherit_errexit`, `localvar_inherit`, `nocaseglob`, `nocasematch`, `nullglob`,
-and `xpg_echo`.
+`sourcepath`, and `xpg_echo`.
 `-p` prints reusable settings and `-q` suppresses listing output.
 Named queries return status 1 if a selected option is off or unrecognized.
 `-s` and `-u` with names set and unset the reached options. Without names
@@ -931,6 +931,13 @@ they list enabled and disabled options respectively. `-o` selects the
 `braceexpand` is enabled by default. `set +B` preserves authored braces
 as fields proceed through the remaining expansion stages. The setting
 also controls the brace pass over damaged capture spelling.
+
+`sourcepath` is enabled by default. Both `source` and `.` search `PATH`
+for a filename without a slash, then fall back to the current directory.
+An explicit slash, an empty or unset `PATH`, or `shopt -u sourcepath`
+selects the supplied filename directly. `local -` saves and restores the
+option in functions. Hosted Bash launches accept `+O sourcepath` and
+`-O sourcepath`. Exported `BASHOPTS` can reenable it after launch options.
 
 `xpg_echo` is off at default startup. When enabled, `echo` decodes
 backslash escapes unless a leading `-E` takes precedence. The last `e`
@@ -1089,10 +1096,10 @@ preparation and can then report the stored element spelling as an
 invalid identifier. A source integer or case flag prepares the reached
 array and its attribute without selecting the stored index or key.
 
-Inside a function, `local -` saves `braceexpand`, `errexit`, `noglob`, and
-`inherit_errexit` and restores them on return. A second `local -` keeps the first snapshot,
-as in the pinned Bash 5.2.37 build. `local -p -` inspects the current function's
-snapshot.
+Inside a function, `local -` saves `braceexpand`, `errexit`, `noglob`,
+`inherit_errexit`, and `sourcepath` and restores them on return. A second
+`local -` keeps the first snapshot, as in the pinned Bash 5.2.37 build.
+`local -p -` inspects the current function's snapshot.
 `localvar_inherit` persists across a function return. While enabled, new
 function-local declarations inherit the outer binding's value and applicable
 attributes through the same path as `local -I`.

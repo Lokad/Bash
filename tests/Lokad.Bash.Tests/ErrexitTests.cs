@@ -119,11 +119,29 @@ public sealed class ErrexitTests
             """, CancellationToken.None);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("capture:globskipdots:localvar_inherit/braceexpand:pipefail\n"
-            + "capture:globskipdots:inherit_errexit/braceexpand:errexit:pipefail\n"
-            + "parent:globskipdots:inherit_errexit:localvar_inherit/braceexpand:errexit:pipefail\n", host.StandardOutput.TextContent);
+        Assert.Equal("capture:globskipdots:localvar_inherit:sourcepath/braceexpand:pipefail\n"
+            + "capture:globskipdots:inherit_errexit:sourcepath/braceexpand:errexit:pipefail\n"
+            + "parent:globskipdots:inherit_errexit:localvar_inherit:sourcepath/braceexpand:errexit:pipefail\n",
+            host.StandardOutput.TextContent);
         Assert.Empty(host.StandardError.Content.ToArray());
         Assert.Equal(0, host.OpenFileCount);
+    }
+
+    [Fact]
+    public void DefaultBashOptionsReuseSharedBytesWhenRestored()
+    {
+        var state = new EvaluationState(Parser.Parse(":"), ShellPath.Root, inheritedDescriptorTable: null);
+        var baseline = state.RetainedShellStorageBytes;
+        var initial = state.ReadBashOptions();
+        Assert.True(ShellOptions.DefaultBashBinding.Bytes.Equals(initial.Bytes));
+        Assert.Equal("globskipdots:sourcepath"u8.ToArray(), initial.Bytes.ToArray());
+        Assert.Equal(baseline, state.RetainedShellStorageBytes);
+
+        state.SetOption(ShellOption.SourcePath, false);
+        Assert.Equal("globskipdots"u8.ToArray(), state.ReadBashOptions().Bytes.ToArray());
+        state.SetOption(ShellOption.SourcePath, true);
+        Assert.True(initial.Bytes.Equals(state.ReadBashOptions().Bytes));
+        Assert.Equal(baseline, state.RetainedShellStorageBytes);
     }
 
     [Theory]
@@ -140,7 +158,7 @@ public sealed class ErrexitTests
         Assert.Equal(parentBaseline, parent.RetainedShellStorageBytes);
         var initial = parent.ReadBashOptions();
         var owned = MemoryCapacity.ArrayBackingBytes<byte>(initial.Bytes.Length);
-        Assert.Equal("dotglob:globskipdots"u8.ToArray(), initial.Bytes.ToArray());
+        Assert.Equal("dotglob:globskipdots:sourcepath"u8.ToArray(), initial.Bytes.ToArray());
         Assert.Equal(owned, parent.RetainedShellStorageBytes - parentBaseline);
 
         var child = inlineSubshell ? parent.CloneForSubshell(memory, inheritedExitBindings: null)
@@ -154,7 +172,7 @@ public sealed class ErrexitTests
         var changed = child.ReadBashOptions();
         child.SetOption(ShellOption.Errexit, true);
         Assert.True(changed.Bytes.Equals(child.ReadBashOptions().Bytes));
-        Assert.Equal("dotglob:globskipdots:nullglob"u8.ToArray(), changed.Bytes.ToArray());
+        Assert.Equal("dotglob:globskipdots:nullglob:sourcepath"u8.ToArray(), changed.Bytes.ToArray());
         Assert.Equal(MemoryCapacity.ArrayBackingBytes<byte>(changed.Bytes.Length), child.RetainedShellStorageBytes - childBaseline);
         Assert.True(initial.Bytes.Equals(parent.ReadBashOptions().Bytes));
         Assert.Equal(owned, parent.RetainedShellStorageBytes - parentBaseline);
@@ -184,15 +202,15 @@ public sealed class ErrexitTests
 
         Assert.Null(await evaluation.GetNextStep());
         var lastOptions = evaluation.Variables["BASHOPTS"];
-        Assert.Equal("dotglob:globskipdots", firstOptions.ToUtf8String());
-        Assert.Equal("failglob:globskipdots", secondOptions.ToUtf8String());
-        Assert.Equal("failglob:globskipdots:nullglob", lastOptions.ToUtf8String());
+        Assert.Equal("dotglob:globskipdots:sourcepath", firstOptions.ToUtf8String());
+        Assert.Equal("failglob:globskipdots:sourcepath", secondOptions.ToUtf8String());
+        Assert.Equal("failglob:globskipdots:nullglob:sourcepath", lastOptions.ToUtf8String());
         Assert.True(lastOptions.Bytes.Equals(evaluation.Variables["BASHOPTS"].Bytes));
     }
 
     [Theory]
-    [InlineData("set", "BASHOPTS=dotglob:globskipdots", "SHELLOPTS=braceexpand:pipefail")]
-    [InlineData("declare -p", "declare -r BASHOPTS=\"dotglob:globskipdots\"", "declare -r SHELLOPTS=\"braceexpand:pipefail\"")]
+    [InlineData("set", "BASHOPTS=dotglob:globskipdots:sourcepath", "SHELLOPTS=braceexpand:pipefail")]
+    [InlineData("declare -p", "declare -r BASHOPTS=\"dotglob:globskipdots:sourcepath\"", "declare -r SHELLOPTS=\"braceexpand:pipefail\"")]
     public async Task OperandFreeVariableListingsIncludeTheLiveOptions(string command, string bashOptions, string setOptions)
     {
         var result = await EvaluationTestHelper.RunAsync("shopt -s dotglob\n" + command);

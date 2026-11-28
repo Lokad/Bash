@@ -21,15 +21,17 @@ internal enum ShellOption
     BraceExpand = 512,
     Pipefail = 1024,
     Noglob = 2048,
-    XpgEcho = 4096
+    XpgEcho = 4096,
+    SourcePath = 8192
 }
 
 internal static class ShellOptions
 {
     internal const ShellOption Fixed = ShellOption.Pipefail;
-    internal const ShellOption Default = Fixed | ShellOption.BraceExpand | ShellOption.GlobSkipDots;
+    private const ShellOption DefaultBashFlags = ShellOption.GlobSkipDots | ShellOption.SourcePath;
+    internal const ShellOption Default = Fixed | ShellOption.BraceExpand | DefaultBashFlags;
     internal const ShellOption MutableSet = ShellOption.Errexit | ShellOption.Noglob | ShellOption.BraceExpand;
-    internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit;
+    internal const ShellOption LocalSnapshot = MutableSet | ShellOption.InheritErrexit | ShellOption.SourcePath;
     internal const byte ErrexitFlag = (byte)'e';
     internal const byte NoglobFlag = (byte)'f';
     internal const byte BraceExpandFlag = (byte)'B';
@@ -56,6 +58,7 @@ internal static class ShellOptions
         new(ShellValue.FromText("nocaseglob"), ShellOption.NoCaseGlob),
         new(ShellValue.FromText("nocasematch"), ShellOption.NoCaseMatch),
         new(ShellValue.FromText("nullglob"), ShellOption.Nullglob),
+        new(ShellValue.FromText("sourcepath"), ShellOption.SourcePath),
         new(ShellValue.FromText("xpg_echo"), ShellOption.XpgEcho)
     ];
 
@@ -67,7 +70,7 @@ internal static class ShellOptions
         ShellOption.BraceExpand | ShellOption.Noglob, MutableSet
     ];
 
-    internal static ShellValue DefaultBashBinding { get; } = FormatBashBinding(SelectBashFlags(Default), memory: null, out _);
+    internal static ShellValue DefaultBashBinding { get; } = Format(BashOptions, DefaultBashFlags, memory: null, out _);
 
     internal static IReadOnlyList<Entry> Names(bool setOptions) => setOptions ? SetOptions : BashOptions;
 
@@ -103,8 +106,14 @@ internal static class ShellOptions
 
     internal static ShellOption SelectBashFlags(ShellOption enabled) => enabled & BashMask;
 
-    internal static ShellValue FormatBashBinding(ShellOption enabled, EvaluationMemory? memory, out long ownedBytes) =>
-        Format(BashOptions, enabled, memory, out ownedBytes);
+    internal static ShellValue FormatBashBinding(ShellOption enabled, EvaluationMemory? memory, out long ownedBytes)
+    {
+        if (enabled != DefaultBashFlags)
+            return Format(BashOptions, enabled, memory, out ownedBytes);
+
+        ownedBytes = 0;
+        return DefaultBashBinding;
+    }
 
     internal static ShellOption ParseImported(ReadOnlySpan<byte> value, bool setOptions)
     {
