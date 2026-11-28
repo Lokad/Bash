@@ -1097,8 +1097,9 @@ invalid identifier. A source integer or case flag prepares the reached
 array and its attribute without selecting the stored index or key.
 
 Inside a function, `local -` saves `braceexpand`, `errexit`, `noglob`,
-`inherit_errexit`, and `sourcepath` and restores them on return. A second
-`local -` keeps the first snapshot, as in the pinned Bash 5.2.37 build.
+`inherit_errexit`, `shift_verbose`, and `sourcepath` and restores them on
+return. A second `local -` keeps the first snapshot, as in the pinned
+Bash 5.2.37 build.
 `local -p -` inspects the current function's snapshot.
 `localvar_inherit` persists across a function return. While enabled, new
 function-local declarations inherit the outer binding's value and applicable
